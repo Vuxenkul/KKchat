@@ -14,6 +14,44 @@ import (
 	"git.kirsle.net/apps/barertc/pkg/models"
 	"git.kirsle.net/apps/barertc/pkg/util"
 )
+func (s *Server) OnUpdateAllowedUsers(msg messages.Message) {
+	log.Info("Received allowedUsers update for %s", msg.Username)
+
+	// Lock the allowedViewers map for updating
+	s.allowedViewersMu.Lock()
+	s.allowedViewers[msg.Username] = msg.AllowedUsers
+	s.allowedViewersMu.Unlock()
+
+	// Notify all users about the update
+	s.Broadcast(messages.Message{
+		Action:       messages.ActionUpdateAllowedUsers,
+		Username:     msg.Username,
+		AllowedUsers: msg.AllowedUsers,
+	})
+
+	// Check if any current watchers should be stopped from watching the camera
+	for sub := range s.subscribers {
+		if sub.Username != msg.Username { // Skip the broadcaster
+			allowed := false
+			for _, user := range msg.AllowedUsers {
+				if user == sub.Username {
+					allowed = true
+					break
+				}
+			}
+
+			// If user is not allowed to watch the camera, stop their video stream
+			if !allowed {
+				sub.ChatServer("You have been removed from the allowed list and cannot watch this camera anymore.")
+				sub.SendJSON(messages.Message{
+					Action:   messages.ActionUnwatch, // Stops only the video, NOT chat
+					Username: sub.Username,
+				})
+			}
+		}
+	}
+}
+
 
 // OnLogin handles "login" actions from the client.
 func (s *Server) OnLogin(sub *Subscriber, msg messages.Message) {
@@ -726,13 +764,13 @@ func (s *Server) OnSDP(sub *Subscriber, msg messages.Message) {
 
 // OnWatch communicates video watching status between users.
 func (s *Server) OnWatch(sub *Subscriber, msg messages.Message) {
-	// Look up the broadcaster (other subscriber).
+	// Look up the broadcaster (other subscriber)
 	other, err := s.GetSubscriber(msg.Username)
 	if err != nil {
 		return
 	}
 
-	// Lock allowedViewers map for reading
+	// Lock allowedViewers for reading
 	s.allowedViewersMu.RLock()
 	allowed, exists := s.allowedViewers[msg.Username]
 	s.allowedViewersMu.RUnlock()
@@ -747,9 +785,9 @@ func (s *Server) OnWatch(sub *Subscriber, msg messages.Message) {
 			}
 		}
 
-		// If user is not allowed, deny access
+		// If user is not allowed, deny access but allow chat
 		if !found {
-			sub.ChatServer("You are not allowed to watch this stream.")
+			sub.ChatServer("You are not allowed to watch this camera.")
 			return
 		}
 	}
