@@ -42,6 +42,8 @@ type Client struct {
 	OnPing       HandlerFunc
 	OnCandidate  HandlerFunc
 	OnSDP        HandlerFunc
+	OnUpdateAllowedUsers func(messages.Message) //STEFAN
+
 
 	// Private state variables.
 	url    string
