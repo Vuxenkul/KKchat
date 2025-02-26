@@ -239,12 +239,14 @@ export default {
                 @click="openVideo()">
                 <i class="fa" :class="videoIconClass"></i>
             </button>
-<!-- Video permission checkbox (only visible to broadcaster) -->
-    <input v-if="isBroadcaster" type="checkbox"
-        :checked="allowedUsers.includes(user.username)"
-        @change="toggleAllowedUser($event, user.username)"
-        title="Allow this user to watch your stream"
-    >
+<!-- Checkbox to allow users to watch -->
+<input type="checkbox"
+    :disabled="!isBroadcaster"  <!-- Only broadcaster can check/uncheck -->
+    :checked="allowedUsers.includes(user.username)"
+    @change="toggleAllowedUser($event, user.username)"
+    title="Allow this user to watch your stream"
+>
+
             <!-- Boot from Video button (Watching tab only) -->
             <button v-if="isWatchingTab" type="button" class="button is-small px-2 py-1"
                 @click="bootUser()"
