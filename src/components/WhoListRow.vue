@@ -25,7 +25,8 @@ export default {
     },
    computed: {
      isBroadcaster() {
-        return this.user.username === this.username; // Ensure this refers to the broadcaster
+                // The broadcaster is the user who is currently streaming
+        return this.user.video & this.VideoFlag.Active; 
     },
         profileURL() {
             if (this.user.profileURL) {
@@ -128,11 +129,13 @@ export default {
         } else {
             this.allowedUsers = this.allowedUsers.filter(user => user !== username);
         }
+
         console.log("Updated allowedUsers:", this.allowedUsers); // ✅ Debugging output
         this.updateAllowedUsers();
     },
 
     updateAllowedUsers() {
+        console.log("Emitting updated allowedUsers:", this.allowedUsers); // ✅ Debugging output
         this.$emit("update-allowed-users", this.allowedUsers);
     },
         openProfile() {
@@ -239,9 +242,9 @@ export default {
                 @click="openVideo()">
                 <i class="fa" :class="videoIconClass"></i>
             </button>
-<!-- Checkboxes should be enabled for all users (except self), but only interactable by broadcaster -->
+<!-- Checkbox to allow users to watch -->
 <input type="checkbox"
-    :disabled="!isBroadcaster"
+    :disabled="!isBroadcaster || user.username === username"  
     :checked="allowedUsers.includes(user.username)"
     @change="toggleAllowedUser($event, user.username)"
     title="Allow this user to watch your stream"
