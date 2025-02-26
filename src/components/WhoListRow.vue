@@ -241,11 +241,12 @@ export default {
             </button>
 <!-- Checkbox to allow users to watch -->
 <input type="checkbox"
-    :disabled="!isBroadcaster" 
+    :disabled="!isBroadcaster || user.username === username"  <!-- Disable only for yourself -->
     :checked="allowedUsers.includes(user.username)"
     @change="toggleAllowedUser($event, user.username)"
     title="Allow this user to watch your stream"
 >
+
 
             <!-- Boot from Video button (Watching tab only) -->
             <button v-if="isWatchingTab" type="button" class="button is-small px-2 py-1"
