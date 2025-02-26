@@ -2662,3 +2662,10 @@ const app = Vue.createApp({
 });
 
 app.mount("#BareRTC-App");
+
+// Listen for allowed user updates from the UI and update the allowedUsers list
+app.$on("update-allowed-users", (userList) => {
+    app.webcam.allowedUsers = userList; // Update the webcam state
+    sendMe(); // Send the new allowedUsers list to the server
+});
+
