@@ -424,3 +424,26 @@ func (h *BotHandlers) OnPing(msg messages.Message) {
 		Message: "/unmute-all",
 	})
 }
+func (h *BotHandlers) OnUpdateAllowedUsers(msg messages.Message) {
+	log.Info("Bot received allowedUsers update for %s", msg.Username)
+
+	// The bot should not block messages, only watching the stream
+	if h.client.Username() != msg.Username {
+		found := false
+		for _, user := range msg.AllowedUsers {
+			if user == h.client.Username() {
+				found = true
+				break
+			}
+		}
+
+		// If bot is not allowed, stop watching the camera but continue chatting
+		if !found {
+			log.Info("Bot is not allowed to watch %s anymore. Disconnecting video.", msg.Username)
+			h.client.Send(messages.Message{
+				Action:   messages.ActionUnwatch, // Only stops video, not chat
+				Username: msg.Username,
+			})
+		}
+	}
+}
