@@ -24,8 +24,8 @@ export default {
         };
     },
    computed: {
-    isBroadcaster() {
-        return this.user.username === this.username; // Check if the logged-in user is the broadcaster
+ isBroadcaster() {
+        return this.username === this.user.username; // Ensure it checks against logged-in user
     },
         profileURL() {
             if (this.user.profileURL) {
