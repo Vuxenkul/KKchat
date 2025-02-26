@@ -128,6 +128,7 @@ export default {
         } else {
             this.allowedUsers = this.allowedUsers.filter(user => user !== username);
         }
+        console.log("Updated allowedUsers:", this.allowedUsers); // ✅ Debugging output
         this.updateAllowedUsers();
     },
 
