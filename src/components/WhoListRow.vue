@@ -20,9 +20,13 @@ export default {
     data() {
         return {
             VideoFlag: VideoFlag,
+            allowedUsers: [], // Stores selected users
         };
     },
     computed: {
+            isBroadcaster() {
+        return this.user.username === this.username; // Check if the logged-in user is the broadcaster
+    },
         profileURL() {
             if (this.user.profileURL) {
                 return this.urlFor(this.user.profileURL);
@@ -118,6 +122,18 @@ export default {
         },
     },
     methods: {
+        toggleAllowedUser(event, username) {
+        if (event.target.checked) {
+            this.allowedUsers.push(username);
+        } else {
+            this.allowedUsers = this.allowedUsers.filter(user => user !== username);
+        }
+        this.updateAllowedUsers();
+    },
+
+    updateAllowedUsers() {
+        this.$emit("update-allowed-users", this.allowedUsers);
+    },
         openProfile() {
             this.$emit('open-profile', this.user.username);
         },
@@ -222,7 +238,12 @@ export default {
                 @click="openVideo()">
                 <i class="fa" :class="videoIconClass"></i>
             </button>
-
+<!-- Video permission checkbox (only visible to broadcaster) -->
+    <input v-if="isBroadcaster" type="checkbox"
+        :checked="allowedUsers.includes(user.username)"
+        @change="toggleAllowedUser($event, user.username)"
+        title="Allow this user to watch your stream"
+    >
             <!-- Boot from Video button (Watching tab only) -->
             <button v-if="isWatchingTab" type="button" class="button is-small px-2 py-1"
                 @click="bootUser()"
