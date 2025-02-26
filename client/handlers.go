@@ -84,7 +84,7 @@ func (c *Client) SetupChatbot() error {
 		messageBuf: []messages.Message{},
 		reactions:  map[int64]map[string]interface{}{},
 	}
-
+	
 	// Add JavaScript support.
 	handler.rs.SetHandler("javascript", javascript.New(handler.rs))
 
@@ -100,6 +100,7 @@ func (c *Client) SetupChatbot() error {
 	}
 
 	// Set all the handler funcs.
+	c.OnUpdateAllowedUsers = handler.OnUpdateAllowedUsers
 	c.OnWho = handler.OnWho
 	c.OnMe = handler.OnMe
 	c.OnMessage = handler.OnMessage
@@ -129,19 +130,29 @@ func (h *BotHandlers) OnWho(msg messages.Message) {
 }
 
 // OnMe handles user status updates pushed by the server (renamed username, nsfw flag added)
-func (h *BotHandlers) OnMe(msg messages.Message) {
-	// Has the server changed our name?
-	if h.client.Username() != msg.Username {
-		log.Error("OnMe: the server has renamed us to '%s'", msg.Username)
-		h.client.claims.Subject = msg.Username
-	}
+func (h *BotHandlers) OnUpdateAllowedUsers(msg messages.Message) {
+    log.Info("Received allowedUsers update for %s", msg.Username)
 
-	// Send the /unmute-all command to lift any mutes imposed by users blocking the chatbot.
-	h.client.Send(messages.Message{
-		Action:  messages.ActionMessage,
-		Message: "/unmute-all",
-	})
+    // If we are watching this stream, check if we are still allowed
+    if h.client.Username() != msg.Username {
+        found := false
+        for _, user := range msg.AllowedUsers {
+            if user == h.client.Username() {
+                found = true
+                break
+            }
+        }
+
+        if !found {
+            log.Info("We are no longer allowed to watch %s. Disconnecting.", msg.Username)
+            h.client.Send(messages.Message{
+                Action:   messages.ActionUnwatch,
+                Username: msg.Username,
+            })
+        }
+    }
 }
+
 
 // Buffer a message seen on chat for a while.
 func (h *BotHandlers) cacheMessage(msg messages.Message) {
