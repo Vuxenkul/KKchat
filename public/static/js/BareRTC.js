@@ -800,8 +800,7 @@ const app = Vue.createApp({
         dnd: app.prefs.closeDMs,
         allowedUsers: allowedUsers, // Send updated allowed users list
     }));
-}
-,
+},
         onMe(msg) {
             // We have had settings pushed to us by the server, such as a change
             // in our choice of username.
@@ -969,27 +968,47 @@ const app = Vue.createApp({
 
         // Handle messages sent in chat.
         onMessage(msg) {
-            // Play sound effects if this is not the active channel or the window is not focused.
-            if (msg.channel.indexOf("@") === 0) {
-                if (msg.channel !== this.channel || !this.windowFocused) {
-                    // If we are ignoring unsolicited DMs, don't play the sound effect here.
-                    if (this.prefs.closeDMs && this.channels[msg.channel] == undefined) {
-                        console.log("Unsolicited DM received");
-                    } else {
-                        this.playSound("DM");
-                    }
-                }
-            } else if (msg.channel !== this.channel || !this.windowFocused) {
-                this.playSound("Chat");
-            }
+    // Handle Allowed Users Update
+    if (msg.action === "updateAllowedUsers") {
+        console.log(`Received updateAllowedUsers for ${msg.username}`);
 
-            this.pushHistory({
-                channel: msg.channel,
-                username: msg.username,
-                message: msg.message,
-                messageID: msg.msgID,
-            });
-        },
+        // If we are the broadcaster, update our allowedUsers list
+        if (msg.username === this.username) {
+            this.webcam.allowedUsers = msg.allowedUsers;
+        }
+
+        // If we are a viewer, check if we are still allowed
+        if (this.webcam.active && this.username !== msg.username) {
+            if (!msg.allowedUsers.includes(this.username)) {
+                this.stopVideo(); // Stop video if removed
+                this.ChatClient("You have been removed from the allowed list.");
+            }
+        }
+        return; // Exit to avoid processing as a regular chat message
+    }
+
+    // Play sound effects if this is not the active channel or the window is not focused.
+    if (msg.channel.indexOf("@") === 0) {
+        if (msg.channel !== this.channel || !this.windowFocused) {
+            // If we are ignoring unsolicited DMs, don't play the sound effect here.
+            if (this.prefs.closeDMs && this.channels[msg.channel] == undefined) {
+                console.log("Unsolicited DM received");
+            } else {
+                this.playSound("DM");
+            }
+        }
+    } else if (msg.channel !== this.channel || !this.windowFocused) {
+        this.playSound("Chat");
+    }
+
+    // Push chat message to history
+    this.pushHistory({
+        channel: msg.channel,
+        username: msg.username,
+        message: msg.message,
+        messageID: msg.msgID,
+    });
+},
 
         // A user deletes their message for everybody
         onTakeback(msg) {
