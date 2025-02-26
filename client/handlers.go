@@ -129,29 +129,6 @@ func (h *BotHandlers) OnWho(msg messages.Message) {
 	h.whoList = msg.WhoList
 }
 
-// OnMe handles user status updates pushed by the server (renamed username, nsfw flag added)
-func (h *BotHandlers) OnUpdateAllowedUsers(msg messages.Message) {
-    log.Info("Received allowedUsers update for %s", msg.Username)
-
-    // If we are watching this stream, check if we are still allowed
-    if h.client.Username() != msg.Username {
-        found := false
-        for _, user := range msg.AllowedUsers {
-            if user == h.client.Username() {
-                found = true
-                break
-            }
-        }
-
-        if !found {
-            log.Info("We are no longer allowed to watch %s. Disconnecting.", msg.Username)
-            h.client.Send(messages.Message{
-                Action:   messages.ActionUnwatch,
-                Username: msg.Username,
-            })
-        }
-    }
-}
 
 
 // Buffer a message seen on chat for a while.
