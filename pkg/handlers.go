@@ -411,7 +411,6 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 
 		// Moderation rules?
 		if rule := sub.GetModerationRule(); rule != nil {
-
 			// Are they barred from sharing their camera on chat?
 			if rule.NoBroadcast || rule.NoVideo {
 				sub.SendCut()
@@ -425,7 +424,6 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 				reflect = true // send them a 'me' echo afterward to inform the front-end page properly of this
 				sub.ChatServer(config.Current.Strings.ModRuleErrorCameraAlwaysNSFW)
 			}
-
 		}
 	}
 
@@ -447,13 +445,29 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 			})
 		}
 	} else if msg.ChatStatus == "hidden" {
-		// normal users can not set this status
+		// normal users cannot set this status
 		msg.ChatStatus = "away"
 	}
 
 	sub.VideoStatus = msg.VideoStatus
 	sub.ChatStatus = msg.ChatStatus
 	sub.DND = msg.DND
+
+	// ✅ NEW CODE: Handle allowedUsers[] updates
+	if len(msg.AllowedUsers) > 0 {
+		s.allowedViewers[sub.Username] = msg.AllowedUsers
+		log.Debug("Updated allowed users for %s: %v", sub.Username, msg.AllowedUsers)
+	} else {
+		delete(s.allowedViewers, sub.Username) // 🔹 Remove restriction (stream becomes public)
+		log.Debug("Allowed users cleared for %s, stream is now public", sub.Username)
+	}
+
+	// ✅ NEW CODE: Broadcast updated allowedUsers list
+	s.Broadcast(messages.Message{
+		Action:       messages.ActionUpdateAllowedUsers,
+		Username:     sub.Username,
+		AllowedUsers: msg.AllowedUsers,
+	})
 
 	// Sync the WhoList to everybody.
 	s.SendWhoList()
