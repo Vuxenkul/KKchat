@@ -24,8 +24,8 @@ export default {
         };
     },
    computed: {
- isBroadcaster() {
-        return this.username === this.user.username; // Ensure it checks against logged-in user
+     isBroadcaster() {
+        return this.user.username === this.username; // Ensure this refers to the broadcaster
     },
         profileURL() {
             if (this.user.profileURL) {
@@ -239,13 +239,14 @@ export default {
                 @click="openVideo()">
                 <i class="fa" :class="videoIconClass"></i>
             </button>
-<!-- Checkbox to allow users to watch -->
+<!-- Checkboxes should be enabled for all users (except self), but only interactable by broadcaster -->
 <input type="checkbox"
-    :disabled="!isBroadcaster || user.username === username"  
+    :disabled="!isBroadcaster"
     :checked="allowedUsers.includes(user.username)"
     @change="toggleAllowedUser($event, user.username)"
     title="Allow this user to watch your stream"
 >
+
 
 
             <!-- Boot from Video button (Watching tab only) -->
