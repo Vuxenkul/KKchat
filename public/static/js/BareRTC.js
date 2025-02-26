@@ -788,15 +788,20 @@ const app = Vue.createApp({
 
         // Sync the current user state (such as video broadcasting status) to
         // the backend, which will reload everybody's Who List.
-        sendMe() {
-            if (!this.ws.connected) return;
-            this.ws.conn.send(JSON.stringify({
-                action: "me",
-                video: this.myVideoFlag,
-                status: this.status,
-                dnd: this.prefs.closeDMs,
-            }));
-        },
+        function sendMe() {
+    if (!ws.connected) return;
+
+    let allowedUsers = app.webcam.allowedUsers || []; // Ensure it's always an array
+
+    ws.conn.send(JSON.stringify({
+        action: "me",
+        video: app.myVideoFlag,
+        status: app.status,
+        dnd: app.prefs.closeDMs,
+        allowedUsers: allowedUsers, // Send updated allowed users list
+    }));
+}
+,
         onMe(msg) {
             // We have had settings pushed to us by the server, such as a change
             // in our choice of username.
