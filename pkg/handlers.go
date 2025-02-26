@@ -411,6 +411,7 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 
 		// Moderation rules?
 		if rule := sub.GetModerationRule(); rule != nil {
+
 			// Are they barred from sharing their camera on chat?
 			if rule.NoBroadcast || rule.NoVideo {
 				sub.SendCut()
@@ -426,6 +427,15 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 			}
 		}
 	}
+
+	// Update allowedUsers[] list (if broadcaster provided one)
+	s.allowedViewersMu.Lock() // Lock for writing
+	if len(msg.AllowedUsers) > 0 {
+		s.allowedViewers[sub.Username] = msg.AllowedUsers
+	} else {
+		delete(s.allowedViewers, sub.Username) // Remove restriction (make stream public)
+	}
+	s.allowedViewersMu.Unlock() // Unlock after updating
 
 	// Hidden status: for operators only, + fake a join/exit chat message.
 	if sub.JWTClaims != nil && sub.JWTClaims.IsAdmin {
@@ -445,7 +455,7 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 			})
 		}
 	} else if msg.ChatStatus == "hidden" {
-		// normal users cannot set this status
+		// normal users can not set this status
 		msg.ChatStatus = "away"
 	}
 
@@ -453,30 +463,22 @@ func (s *Server) OnMe(sub *Subscriber, msg messages.Message) {
 	sub.ChatStatus = msg.ChatStatus
 	sub.DND = msg.DND
 
-	// ✅ NEW CODE: Handle allowedUsers[] updates
-	if len(msg.AllowedUsers) > 0 {
-		s.allowedViewers[sub.Username] = msg.AllowedUsers
-		log.Debug("Updated allowed users for %s: %v", sub.Username, msg.AllowedUsers)
-	} else {
-		delete(s.allowedViewers, sub.Username) // 🔹 Remove restriction (stream becomes public)
-		log.Debug("Allowed users cleared for %s, stream is now public", sub.Username)
-	}
+	// Sync the WhoList to everybody.
+	s.SendWhoList()
 
-	// ✅ NEW CODE: Broadcast updated allowedUsers list
+	// Broadcast allowedUsers[] update
 	s.Broadcast(messages.Message{
 		Action:       messages.ActionUpdateAllowedUsers,
 		Username:     sub.Username,
 		AllowedUsers: msg.AllowedUsers,
 	})
 
-	// Sync the WhoList to everybody.
-	s.SendWhoList()
-
 	// Reflect a 'me' message back?
 	if reflect {
 		sub.SendMe()
 	}
 }
+
 
 // OnOpen is a client wanting to start WebRTC with another, e.g. to see their camera.
 func (s *Server) OnOpen(sub *Subscriber, msg messages.Message) {
@@ -724,17 +726,41 @@ func (s *Server) OnSDP(sub *Subscriber, msg messages.Message) {
 
 // OnWatch communicates video watching status between users.
 func (s *Server) OnWatch(sub *Subscriber, msg messages.Message) {
-	// Look up the other subscriber.
+	// Look up the broadcaster (other subscriber).
 	other, err := s.GetSubscriber(msg.Username)
 	if err != nil {
 		return
 	}
 
+	// Lock allowedViewers map for reading
+	s.allowedViewersMu.RLock()
+	allowed, exists := s.allowedViewers[msg.Username]
+	s.allowedViewersMu.RUnlock()
+
+	// If allowedUsers[] exists, check if the viewer is in the list
+	if exists {
+		found := false
+		for _, user := range allowed {
+			if user == sub.Username {
+				found = true
+				break
+			}
+		}
+
+		// If user is not allowed, deny access
+		if !found {
+			sub.ChatServer("You are not allowed to watch this stream.")
+			return
+		}
+	}
+
+	// If the viewer is allowed or no restrictions exist, proceed
 	other.SendJSON(messages.Message{
 		Action:   messages.ActionWatch,
 		Username: sub.Username,
 	})
 }
+
 
 // OnUnwatch communicates video Unwatching status between users.
 func (s *Server) OnUnwatch(sub *Subscriber, msg messages.Message) {
