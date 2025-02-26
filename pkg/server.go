@@ -28,13 +28,20 @@ type Server struct {
 
 	// Cached filehandles for channel logging.
 	logfh map[string]io.WriteCloser
+	
+	// **NEW: Map to store allowed viewers per broadcaster**
+	// **NEW: Mutex for allowedViewers to ensure thread safety**
+	allowedViewersMu sync.RWMutex
+	allowedViewers   map[string][]string
 }
 
 // NewServer initializes the Server.
 func NewServer() *Server {
-	return &Server{
+		return &Server{
 		subscriberMessageBuffer: 32,
 		subscribers:             make(map[*Subscriber]struct{}),
+		logfh:                   make(map[string]io.WriteCloser),
+		allowedViewers:           make(map[string][]string), // **Initialize allowedViewers map**
 	}
 }
 
