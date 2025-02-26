@@ -23,8 +23,8 @@ export default {
             allowedUsers: [], // Stores selected users
         };
     },
-    computed: {
-            isBroadcaster() {
+   computed: {
+    isBroadcaster() {
         return this.user.username === this.username; // Check if the logged-in user is the broadcaster
     },
         profileURL() {
