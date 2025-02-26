@@ -424,3 +424,18 @@ func (h *BotHandlers) OnUpdateAllowedUsers(msg messages.Message) {
 		}
 	}
 }
+func (h *BotHandlers) OnMe(msg messages.Message) {
+	log.Info("Bot received OnMe update for %s", msg.Username)
+
+	// If bot's username was changed by the server
+	if h.client.Username() != msg.Username {
+		log.Error("OnMe: the server renamed us to '%s'", msg.Username)
+		h.client.claims.Subject = msg.Username
+	}
+
+	// Ensure bot does not mute itself
+	h.client.Send(messages.Message{
+		Action:  messages.ActionMessage,
+		Message: "/unmute-all",
+	})
+}
