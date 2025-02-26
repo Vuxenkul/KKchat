@@ -241,7 +241,7 @@ export default {
             </button>
 <!-- Checkbox to allow users to watch -->
 <input type="checkbox"
-    :disabled="!isBroadcaster || user.username === username"  <!-- Disable only for yourself -->
+    :disabled="!isBroadcaster || user.username === username"  
     :checked="allowedUsers.includes(user.username)"
     @change="toggleAllowedUser($event, user.username)"
     title="Allow this user to watch your stream"
