@@ -31,6 +31,7 @@ type Message struct {
 	Action   string `json:"action,omitempty"`
 	Channel  string `json:"channel,omitempty"`
 	Username string `json:"username,omitempty"`
+	AllowedUsers []string `json:"allowedUsers,omitempty"` // Add allowed users list
 	Message  string `json:"message,omitempty"`
 
 	// JWT token for `login` actions.
@@ -124,7 +125,9 @@ type WhoList struct {
 	Emoji      string `json:"emoji,omitempty"`
 	Gender     string `json:"gender,omitempty"`
 }
-
+const (
+    ActionUpdateAllowedUsers = "updateAllowedUsers" // New action for updating viewers dynamically
+)
 // VideoFlags to convey the state and setting of users' cameras concisely.
 // Also see the VideoFlag object in BareRTC.js for front-end sync.
 const (
