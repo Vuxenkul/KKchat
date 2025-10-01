@@ -367,6 +367,7 @@ register_rest_route($ns, '/sync', [
     $room    = kkchat_sanitize_room_slug((string)$req->get_param('room'));
     if ($room === '') $room = 'general';
     $peer    = $req->get_param('to') !== null ? (int)$req->get_param('to') : null;
+    $dmKey   = ($peer !== null) ? kkchat_dm_key($me, $peer) : null;
     $onlyPub = $req->get_param('public') !== null;
     $limit   = (int)$req->get_param('limit');
     if ($limit <= 0) $limit = 250;
@@ -379,7 +380,7 @@ register_rest_route($ns, '/sync', [
 
     /* ----------------- lightweight long-poll wait ----------------- */
     if ($do_lp) {
-      $checkNew = function() use ($wpdb, $t, $since, $onlyPub, $room, $me, $peer) {
+      $checkNew = function() use ($wpdb, $t, $since, $onlyPub, $room, $me, $peer, $dmKey) {
         if ($onlyPub) {
           return (int)$wpdb->get_var($wpdb->prepare(
             "SELECT COALESCE(MAX(id),0)
@@ -391,15 +392,14 @@ register_rest_route($ns, '/sync', [
             $room, $since
           ));
         }
-        if ($peer) {
+        if ($peer && $dmKey !== null) {
           return (int)$wpdb->get_var($wpdb->prepare(
             "SELECT COALESCE(MAX(id),0)
                FROM {$t['messages']}
               WHERE id > %d
                 AND hidden_at IS NULL
-                AND ((sender_id = %d AND recipient_id = %d) OR
-                     (sender_id = %d AND recipient_id = %d))",
-            $since, $me, $peer, $peer, $me
+                AND dm_key = %s",
+            $since, $dmKey
           ));
         }
         // Fallback: any new DM involving me
@@ -412,6 +412,7 @@ register_rest_route($ns, '/sync', [
           $since, $me, $me
         ));
       };
+
 
       if ($checkNew() === 0) {
         while (time() < $deadline) {
@@ -1074,6 +1075,7 @@ register_rest_route($ns, '/fetch', [
     $roomParam  = kkchat_sanitize_room_slug((string)$req->get_param('room'));
     if ($roomParam === '') $roomParam = 'general';
     $peer = $req->get_param('to') !== null ? (int)$req->get_param('to') : null;
+    $dmKey = ($peer !== null) ? kkchat_dm_key($me, $peer) : null;
 
     // Soft cap to keep payloads small on first load
     $limit = (int)$req->get_param('limit');
@@ -1121,53 +1123,31 @@ register_rest_route($ns, '/fetch', [
       }
     } else {
       // DMs
-      if ($peer) {
+      if ($peer && $dmKey !== null) {
         if ($since < 0) {
           // Last N in thread with specific peer
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "(SELECT * FROM {$t['messages']}
-                 WHERE sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id DESC LIMIT %d)
-               UNION ALL
-               (SELECT * FROM {$t['messages']}
-                 WHERE sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id DESC LIMIT %d)
-               ORDER BY id ASC
-               LIMIT %d",
-              $me, $peer, $limit,
-              $peer, $me, $limit,
-              $limit
+              "SELECT * FROM {$t['messages']}"
+              . " WHERE dm_key = %s"
+              . "   AND hidden_at IS NULL"
+              . " ORDER BY id DESC"
+              . " LIMIT %d",
+              $dmKey, $limit
             ),
             ARRAY_A
           ) ?: [];
+          $rows = array_reverse($rows);
         } else {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "(SELECT * FROM {$t['messages']}
-                 WHERE id > %d
-                   AND sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id ASC
-                 LIMIT %d)
-               UNION ALL
-               (SELECT * FROM {$t['messages']}
-                 WHERE id > %d
-                   AND sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id ASC
-                 LIMIT %d)
-               ORDER BY id ASC
-               LIMIT %d",
-              $since, $me, $peer, $limit,
-              $since, $peer, $me, $limit,
-              $limit
+              "SELECT * FROM {$t['messages']}"
+              . " WHERE id > %d"
+              . "   AND dm_key = %s"
+              . "   AND hidden_at IS NULL"
+              . " ORDER BY id ASC"
+              . " LIMIT %d",
+              $since, $dmKey, $limit
             ),
             ARRAY_A
           ) ?: [];
@@ -1453,10 +1433,12 @@ register_rest_route($ns, '/fetch', [
       $format = ['%d','%d','%s','%s','%s','%s','%s'];
 
       if ($recipient !== null) {
+        $dm_key = kkchat_dm_key($me_id, $recipient);
         $data['recipient_id']   = $recipient;
         $data['recipient_name'] = $recipient_name;
         $data['recipient_ip']   = $recipient_ip;
-        $format[] = '%d'; $format[] = '%s'; $format[] = '%s';
+        $data['dm_key']         = $dm_key;
+        $format[] = '%d'; $format[] = '%s'; $format[] = '%s'; $format[] = '%s';
       } else {
         $data['room'] = $room;
         $format[] = '%s';
@@ -1914,6 +1896,7 @@ register_rest_route($ns, '/moderate/hide-message', [
         'sender_name'    => '',
         'recipient_id'   => (int)$msg['recipient_id'],
         'recipient_name' => null,
+        'dm_key'         => kkchat_dm_key((int)$msg['sender_id'], (int)$msg['recipient_id']),
         'content'        => wp_json_encode(['id' => (int)$mid, 'action' => 'hide']),
       ]);
     }
