@@ -8,6 +8,65 @@ function kkchat_watch_reset_after(): int {
   return (int) apply_filters('kkchat_watch_reset_after', 60);
 }
 
+function kkchat_sync_cleanup_interval(): int {
+  $default = (int) get_option('kkchat_sync_cleanup_interval', 5);
+  return (int) apply_filters('kkchat_sync_cleanup_interval', $default);
+}
+
+function kkchat_sync_cleanup_should_run(
+  int $now,
+  ?int $interval = null,
+  ?callable $get_last = null,
+  ?callable $set_last = null
+): bool {
+  if ($interval === null) {
+    $interval = kkchat_sync_cleanup_interval();
+  }
+
+  if ($interval <= 0) {
+    return true;
+  }
+
+  $get_last = $get_last ?: function () {
+    return (int) get_option('kkchat_sync_cleanup_last', 0);
+  };
+  $set_last = $set_last ?: function (int $timestamp): void {
+    update_option('kkchat_sync_cleanup_last', $timestamp, false);
+  };
+
+  $last = (int) $get_last();
+  if ($last <= 0 || ($now - $last) >= $interval) {
+    $set_last($now);
+    return true;
+  }
+
+  return false;
+}
+
+function kkchat_filter_presence_rows_by_ttl(array $rows, int $now, int $active_window): array {
+  if ($active_window <= 0) {
+    return [];
+  }
+
+  return array_values(array_filter($rows, function ($row) use ($now, $active_window) {
+    $last_seen = isset($row['last_seen']) ? (int) $row['last_seen'] : 0;
+    return ($now - $last_seen) <= $active_window;
+  }));
+}
+
+function kkchat_presence_flagged_status(array $row, int $now): int {
+  if (empty($row['watch_flag'])) {
+    return 0;
+  }
+
+  $watch_at = isset($row['watch_flag_at']) ? (int) $row['watch_flag_at'] : 0;
+  if ($watch_at > 0 && ($now - $watch_at) > kkchat_watch_reset_after()) {
+    return 0;
+  }
+
+  return 1;
+}
+
 function kkchat_tables(){
   global $wpdb;
   $p = $wpdb->prefix.'kkchat_';
