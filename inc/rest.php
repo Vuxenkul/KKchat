@@ -426,12 +426,35 @@ register_rest_route($ns, '/sync', [
     $now = time();
 
     /* ------------ presence (active users) ------------ */
-    // Cleanup (presence purge can be heavy; keep it but feel free to make it probabilistic if needed)
-    $wpdb->query($wpdb->prepare(
-      "DELETE FROM {$t['users']}
-        WHERE %d - last_seen > %d",
-      $now, kkchat_user_ttl()
-    ));
+    // Cleanup (presence purge can be heavy). Throttle the DELETE so it only
+    // runs periodically — wp_cache stores the last run; otherwise a random
+    // sample will eventually fire it. The lighter UPDATEs below still run
+    // every sync so flags/typing state stay fresh.
+    $purge_interval = (int)apply_filters('kkchat_sync_presence_purge_interval', 45);
+    if ($purge_interval < 1) { $purge_interval = 45; }
+    $purge_key   = 'kkchat_sync_presence_purge_at';
+    $purge_group = 'kkchat';
+    $should_purge_presence = false;
+
+    if (function_exists("wp_cache_get") && function_exists("wp_cache_set")) {
+      $last_purge = wp_cache_get($purge_key, $purge_group);
+      if ($last_purge === false || ($now - (int)$last_purge) >= $purge_interval) {
+        $should_purge_presence = true;
+        wp_cache_set($purge_key, $now, $purge_group, $purge_interval);
+      }
+    }
+
+    if (!$should_purge_presence && mt_rand(1, 50) === 1) {
+      $should_purge_presence = true;
+    }
+
+    if ($should_purge_presence) {
+      $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$t['users']}",
+          WHERE %d - last_seen > %d",
+        $now, kkchat_user_ttl()
+      ));
+    }
     $wpdb->query($wpdb->prepare(
       "UPDATE {$t['users']}
           SET watch_flag = 0, watch_flag_at = NULL
