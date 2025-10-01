@@ -181,6 +181,7 @@ function kkchat_touch_active_user(): int {
     "INSERT INTO {$t['users']} (name, name_lc, gender, last_seen, ip, wp_username)
      VALUES (%s, %s, %s, %d, %s, %s)
      ON DUPLICATE KEY UPDATE
+     id = LAST_INSERT_ID(id),
        gender = VALUES(gender),
        last_seen = VALUES(last_seen),
        ip = VALUES(ip),
@@ -189,10 +190,13 @@ function kkchat_touch_active_user(): int {
   ));
 
   // Read the id and bind it to the session
-  $id = (int) $wpdb->get_var($wpdb->prepare(
-    "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
-    $name_lc
-  ));
+  $id = (int) $wpdb->insert_id;
+  if ($id <= 0) {
+    $id = (int) $wpdb->get_var($wpdb->prepare(
+      "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
+      $name_lc
+    ));
+  }
   if ($id > 0) $_SESSION['kkchat_user_id'] = $id;
 
   return $id;
