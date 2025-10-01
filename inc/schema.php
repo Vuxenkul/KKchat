@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '6');
+  define('KKCHAT_DB_VERSION', '7');
 }
 
 /**
@@ -36,6 +36,7 @@ function kkchat_activate() {
     `recipient_id` INT UNSIGNED NULL,
     `recipient_name` VARCHAR(64) NULL,
     `recipient_ip` VARCHAR(45) NULL,
+    `dm_key` VARCHAR(64) NULL,
     `room` VARCHAR(64) NULL,
     `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
     `content_hash` CHAR(40) NULL,
@@ -44,17 +45,19 @@ function kkchat_activate() {
     `hidden_by` INT UNSIGNED NULL,
     `hidden_cause` VARCHAR(255) NULL,
     PRIMARY KEY (`id`),
-    KEY `idx_created` (`created_at`),
+    KEY `idx_created_at` (`created_at`),
     KEY `idx_recipient` (`recipient_id`),
     KEY `idx_sender` (`sender_id`),
     KEY `idx_room` (`room`),
     KEY `idx_sender_hash` (`sender_id`,`content_hash`,`created_at`),
     KEY `idx_room_id` (`room`,`id`),
+    KEY `idx_dmkey_id` (`dm_key`,`id`),
     KEY `idx_sender_recipient_id` (`sender_id`,`recipient_id`,`id`),
     KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`),
     KEY `idx_hidden_at` (`hidden_at`),
     KEY `idx_room_hidden_id` (`room`,`hidden_at`,`id`),
-    KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`)
+    KEY `idx_recipient_unread` (`recipient_id`,`hidden_at`,`id`),
+    KEY `idx_sender_created_at` (`sender_id`,`created_at`)
   ) $charset;";
 
 $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
@@ -62,8 +65,9 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
   `user_id` INT UNSIGNED NOT NULL,
   `created_at` INT UNSIGNED NOT NULL,
   PRIMARY KEY (`message_id`,`user_id`),
-  KEY `idx_user` (`user_id`),
-  KEY `idx_created` (`created_at`)
+  UNIQUE KEY `idx_reads_unique` (`message_id`,`user_id`),
+  KEY `idx_reads_recipient` (`user_id`,`message_id`),
+  KEY `idx_reads_created_at` (`created_at`)
 ) $charset;";
 
 
@@ -83,7 +87,7 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `watch_flag_at` INT UNSIGNED NULL,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uniq_name_lc` (`name_lc`),
-    KEY `idx_last_seen` (`last_seen`),
+    KEY `idx_users_last_seen` (`last_seen`),
     KEY `idx_wpuser` (`wp_username`)
   ) $charset;";
 
@@ -242,6 +246,10 @@ function kkchat_maybe_migrate(){
     if (!kkchat_column_exists($t['messages'], 'hidden_cause')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `hidden_cause` VARCHAR(255) NULL AFTER `hidden_by`");
     }
+    if (!kkchat_column_exists($t['messages'], 'dm_key')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `dm_key` VARCHAR(64) NULL AFTER `recipient_ip`");
+      $wpdb->query("UPDATE `{$t['messages']}` SET dm_key = CONCAT(LEAST(sender_id, recipient_id), ':', GREATEST(sender_id, recipient_id)) WHERE recipient_id IS NOT NULL AND dm_key IS NULL");
+    }
 
     // Index helpers
     $has_index = function($name) use ($wpdb, $t){
@@ -260,8 +268,11 @@ function kkchat_maybe_migrate(){
     if (!$has_index('idx_room_hidden_id')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_room_hidden_id` (`room`,`hidden_at`,`id`)");
     }
-    if (!$has_index('idx_recipient_hidden_id')) {
-      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`)");
+    if (!$has_index('idx_recipient_unread')) {
+      if ($has_index('idx_recipient_hidden_id')) {
+        $wpdb->query("ALTER TABLE `{$t['messages']}` DROP INDEX `idx_recipient_hidden_id`");
+      }
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_unread` (`recipient_id`,`hidden_at`,`id`)");
     }
     if (!$has_index('idx_room_id')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_room_id` (`room`,`id`)");
@@ -271,6 +282,61 @@ function kkchat_maybe_migrate(){
     }
     if (!$has_index('idx_recipient_sender_id')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`)");
+    }
+    if (!$has_index('idx_dmkey_id') && kkchat_column_exists($t['messages'], 'dm_key')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_dmkey_id` (`dm_key`,`id`)");
+    }
+    if (!$has_index('idx_sender_created_at')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_sender_created_at` (`sender_id`,`created_at`)");
+    }
+    if (!$has_index('idx_created_at')) {
+      if ($has_index('idx_created')) {
+        $wpdb->query("ALTER TABLE `{$t['messages']}` DROP INDEX `idx_created`");
+      }
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_created_at` (`created_at`)");
+    }
+  }
+
+  if (kkchat_table_exists($t['reads'])) {
+    $has_reads_index = function($name) use ($wpdb, $t){
+      return (bool)$wpdb->get_var($wpdb->prepare(
+        "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s LIMIT 1",
+         $t['reads'], $name
+      ));
+    };
+
+    if (!$has_reads_index('idx_reads_unique')) {
+      $wpdb->query("ALTER TABLE `{$t['reads']}` ADD UNIQUE INDEX `idx_reads_unique` (`message_id`,`user_id`)");
+    }
+    if (!$has_reads_index('idx_reads_recipient')) {
+      if ($has_reads_index('idx_user')) {
+        $wpdb->query("ALTER TABLE `{$t['reads']}` DROP INDEX `idx_user`");
+      }
+      $wpdb->query("ALTER TABLE `{$t['reads']}` ADD INDEX `idx_reads_recipient` (`user_id`,`message_id`)");
+    }
+    if (!$has_reads_index('idx_reads_created_at')) {
+      if ($has_reads_index('idx_created')) {
+        $wpdb->query("ALTER TABLE `{$t['reads']}` DROP INDEX `idx_created`");
+      }
+      $wpdb->query("ALTER TABLE `{$t['reads']}` ADD INDEX `idx_reads_created_at` (`created_at`)");
+    }
+  }
+
+  if (kkchat_table_exists($t['users'])) {
+    $has_users_index = function($name) use ($wpdb, $t){
+      return (bool)$wpdb->get_var($wpdb->prepare(
+        "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s LIMIT 1",
+         $t['users'], $name
+      ));
+    };
+
+    if (!$has_users_index('idx_users_last_seen')) {
+      if ($has_users_index('idx_last_seen')) {
+        $wpdb->query("ALTER TABLE `{$t['users']}` DROP INDEX `idx_last_seen`");
+      }
+      $wpdb->query("ALTER TABLE `{$t['users']}` ADD INDEX `idx_users_last_seen` (`last_seen`)");
     }
   }
 

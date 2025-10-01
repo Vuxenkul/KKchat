@@ -139,6 +139,15 @@ function kkchat_sanitize_room_slug(string $s): string {
   return substr($s, 0, 64);
 }
 
+function kkchat_dm_key(int $a, int $b): string {
+  if ($a > $b) {
+    $tmp = $a;
+    $a   = $b;
+    $b   = $tmp;
+  }
+  return $a . ':' . $b;
+}
+
 /* ------------------------------
  * Auth/session helpers
  * ------------------------------ */
@@ -761,7 +770,7 @@ if (!function_exists('kkchat_rest_logout')) {
  * Load modules
  * ------------------------------ */
 require_once KKCHAT_PATH.'inc/schema.php';      // activation/deactivation, dbDelta, upgrade, cron
-require_once KKCHAT_PATH.'inc/rest.php';        // all REST routes (public + admin)
+require_once KKCHAT_PATH.'inc/rest/index.php'; // all REST routes (public + admin)
 if (is_admin()) {
   require_once KKCHAT_PATH.'inc/admin-pages.php'; // admin screens
 }
