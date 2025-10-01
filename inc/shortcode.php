@@ -17,6 +17,28 @@ add_shortcode('kkchat', function () {
   $is_admin = !empty($_SESSION['kkchat_is_admin']) && kkchat_is_admin();
 
   $rest_nonce = esc_js( wp_create_nonce('wp_rest') );
+  $ws_url_raw = apply_filters('kkchat_websocket_url', '');
+  if (!is_string($ws_url_raw)) {
+    $ws_url_raw = '';
+  }
+  $ws_url_raw = trim($ws_url_raw);
+  if ($ws_url_raw !== '') {
+    if ($ws_url_raw[0] === '/') {
+      $ws_url_raw = home_url($ws_url_raw);
+    }
+    $scheme = (string) parse_url($ws_url_raw, PHP_URL_SCHEME);
+    if ($scheme === 'http') {
+      $ws_url_raw = 'ws' . substr($ws_url_raw, 4);
+      $scheme = 'ws';
+    } elseif ($scheme === 'https') {
+      $ws_url_raw = 'wss' . substr($ws_url_raw, 5);
+      $scheme = 'wss';
+    }
+    if (!in_array($scheme, ['ws', 'wss'], true)) {
+      $ws_url_raw = '';
+    }
+  }
+  $ws_url_json = wp_json_encode($ws_url_raw);
   $open_dm = isset($_GET['dm']) ? (int)$_GET['dm'] : 'null';
 
   $plugin_root_url = plugin_dir_url( __DIR__ . '/../kkchat.php' );
@@ -335,7 +357,7 @@ f.addEventListener('submit', async (ev)=>{
 
     <audio id="kk-notifSound"   src="<?= $audio ?>"         preload="auto"></audio>
     <audio id="kk-mentionSound" src="<?= $mention_audio ?>" preload="auto"></audio>
-        <audio id="kk-reportSound"  src="<?= $report_audio ?>"  preload="auto"></audio>
+  <audio id="kk-reportSound"  src="<?= $report_audio ?>"  preload="auto"></audio>
 
     <div id="kk-toast" class="toast" role="status" aria-live="polite"></div>
 
@@ -344,10 +366,12 @@ f.addEventListener('submit', async (ev)=>{
   const API = "<?= $ns ?>";
   const CSRF = "<?= $csrf ?>";
   const REST_NONCE = "<?= $rest_nonce ?>";
+  const WS_URL = <?= $ws_url_json ?>;
   const ME_ID = <?= (int)$me_id ?>;
   const ME_NM = <?= json_encode($me_nm) ?>;
   const OPEN_DM_USER = <?= $open_dm ?>;
   const IS_ADMIN = <?= $is_admin ? 'true' : 'false' ?>;
+  const WS_CAN_USE = typeof window.WebSocket === 'function' && typeof WS_URL === 'string' && WS_URL.length > 0;
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -587,6 +611,8 @@ async function fetchJSONCancelable(url, signal){
 
 async function doLogout(){
   if (!confirm('Vill du logga ut?')) return;
+
+  stopRealtime();
 
   const fd = new FormData();
   fd.append('csrf_token', CSRF);
@@ -849,8 +875,9 @@ function applyCache(key){
       BLOCKED = new Set((Array.isArray(ids)?ids:[]).map(Number));
 
       if (currentDM && isBlocked(currentDM)) {
-            muteFor(1200);     
+            muteFor(1200);
         currentDM = null;
+        queueRealtimeScopeUpdate();
         applyCache(activeCacheKey());
         setComposerAccess();
         showView('vPublic');
@@ -1324,6 +1351,7 @@ userListEl.addEventListener('click', async (e)=>{
 
         if (js.now_blocked && currentDM === id) {
           currentDM = null;
+          queueRealtimeScopeUpdate();
           applyCache(activeCacheKey());
           setComposerAccess();
           showView('vPublic');
@@ -1779,9 +1807,10 @@ let currentDM = null;
     saveDMActive(ACTIVE_DMS);
 
 if (currentDM === id){
-    muteFor(1200);                    
+    muteFor(1200);
   try { POLL_CTL?.abort(); } catch(_){}
   currentDM = null;
+  queueRealtimeScopeUpdate();
   applyCache(activeCacheKey());
   setComposerAccess();
   showView('vPublic');
@@ -1908,8 +1937,12 @@ pubList.addEventListener('click', (e)=>{
 });
 
 actDm?.addEventListener('click', ()=>{
-  try { openDM(MSG_TARGET.id); } catch(_) { 
-    currentDM = MSG_TARGET.id; renderRoomTabs(); showView('vPublic'); setComposerAccess();
+  try { openDM(MSG_TARGET.id); } catch(_) {
+    currentDM = MSG_TARGET.id;
+    queueRealtimeScopeUpdate();
+    renderRoomTabs();
+    showView('vPublic');
+    setComposerAccess();
   }
   closeMsgSheet();
 });
@@ -1956,7 +1989,11 @@ actBlock?.addEventListener('click', async ()=>{
 });
 imgActDm?.addEventListener('click', ()=>{
   try { openDM(MSG_TARGET.id); } catch(_) {
-    currentDM = MSG_TARGET.id; renderRoomTabs(); showView('vPublic'); setComposerAccess();
+    currentDM = MSG_TARGET.id;
+    queueRealtimeScopeUpdate();
+    renderRoomTabs();
+    showView('vPublic');
+    setComposerAccess();
   }
   closeImagePreview();
 });
@@ -2140,6 +2177,7 @@ roomTabs.addEventListener('click', e => {
   stashActive();
   currentDM = null;
   currentRoom = slug;
+  queueRealtimeScopeUpdate();
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
@@ -2251,7 +2289,8 @@ roomsListEl?.addEventListener('click', (e) => {
             muteFor(1200);
         try { POLL_CTL?.abort(); } catch (_) {}
         currentRoom = next;
-        setTimeout(() => { pollActive().catch(()=>{}); }, 0); 
+        queueRealtimeScopeUpdate();
+        setTimeout(() => { pollActive().catch(()=>{}); }, 0);
         const cacheHit = applyCache(cacheKeyForRoom(currentRoom));
         setComposerAccess();
 
@@ -2278,7 +2317,10 @@ roomsListEl?.addEventListener('click', (e) => {
 
     if (!ROOMS.find(r=>r.slug===currentRoom) || !JOINED.has(currentRoom)){
       const next = ROOMS.find(r=> JOINED.has(r.slug) && r.allowed)?.slug || defaultRoomSlug();
-      if (next) currentRoom = next;
+      if (next && next !== currentRoom) {
+        currentRoom = next;
+        queueRealtimeScopeUpdate();
+      }
     }
 
     renderRoomsSidebar();
@@ -2465,9 +2507,26 @@ async function pollDM(){
     else { await pollRoom(); }
   }
 
- let _lpStop = false;
-    async function longPollLoop(){
-      while(!_lpStop){
+  let _lpShouldRun = true;
+  let _lpRunning = false;
+
+  function stopLongPollForRealtime(){
+    if (!_lpShouldRun) return;
+    _lpShouldRun = false;
+    try { POLL_CTL?.abort(); } catch(_) {}
+  }
+
+  function resumeLongPollAfterRealtime(){
+    if (_lpShouldRun) return;
+    _lpShouldRun = true;
+    if (!_lpRunning) longPollLoop();
+  }
+
+  async function longPollLoop(){
+    if (_lpRunning) return;
+    _lpRunning = true;
+    try {
+      while (_lpShouldRun) {
         try {
           window.__kkPollHealthy = true;
           await pollActive();
@@ -2479,21 +2538,283 @@ async function pollDM(){
           await new Promise(r => setTimeout(r, 1000));
         }
       }
+    } finally {
+      _lpRunning = false;
+    }
+  }
+
+  const WS_BACKOFF_MAX = 30000;
+  let ws = null;
+  let wsShouldReconnect = false;
+  let wsConnected = false;
+  let wsBackoffMs = 1000;
+  let wsReconnectTimer = null;
+  let wsPingTimer = null;
+  let wsFallbackInterval = null;
+  let wsScopeTimer = null;
+  let wsScheduledPoll = null;
+
+  function wsSend(payload){
+    if (!WS_CAN_USE || !ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      const message = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      ws.send(message);
+      return true;
+    } catch(_) {
+      return false;
+    }
+  }
+
+  function schedulePollFromRealtime(delay = 0){
+    if (!WS_CAN_USE) return;
+    if (wsScheduledPoll) return;
+    wsScheduledPoll = setTimeout(() => {
+      wsScheduledPoll = null;
+      pollActive().catch(()=>{});
+    }, Math.max(0, delay));
+  }
+
+  function handleRealtimeSync(payload){
+    if (!payload || typeof payload !== 'object') return false;
+
+    try {
+      applySyncPayload(payload);
+      reapplyPreviews();
+    } catch(_) {}
+
+    const items = Array.isArray(payload.messages) ? payload.messages : [];
+    if (!items.length) return false;
+
+    const prevLast = +pubList.dataset.last || -1;
+
+    if (currentDM != null) {
+      const peer = Number(currentDM);
+      const relevant = items.filter(m => {
+        const sid = Number(m?.sender_id);
+        const rid = Number(m?.recipient_id);
+        if (!Number.isFinite(sid)) return false;
+        if (!Number.isFinite(rid)) return false;
+        return (sid === ME_ID && rid === peer) || (sid === peer && rid === ME_ID);
+      });
+      if (!relevant.length) return false;
+      renderList(pubList, relevant);
+      const appended = didAppendNew(relevant, prevLast);
+      if (!appended) return false;
+      updateReceipts(pubList, relevant, /*isDM=*/true);
+      const allMax = relevant.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), prevLast);
+      pubList.dataset.last = String(Math.max(prevLast, allMax));
+      try {
+        ROOM_CACHE.set(cacheKeyForDM(peer), {
+          last: +pubList.dataset.last || -1,
+          html: pubList.innerHTML
+        });
+      } catch(_) {}
+      return true;
     }
 
-document.addEventListener('visibilitychange', () => {
-  // Always kill any in-flight long-poll when visibility changes
-  try { POLL_CTL?.abort(); } catch(_) {}
-  if (document.visibilityState === 'visible') {
-    // Kick a fresh poll immediately on resume
-    pollActive().catch(()=>{});
+    const roomSlug = currentRoom;
+    const relevant = items.filter(m => {
+      if (Number(m?.recipient_id)) return false;
+      const room = typeof m?.room === 'string' && m.room !== '' ? m.room : (payload.room || payload.slug || '');
+      return room === roomSlug;
+    });
+    if (!relevant.length) return false;
+    renderList(pubList, relevant);
+    const appended = didAppendNew(relevant, prevLast);
+    if (!appended) return false;
+    updateReceipts(pubList, relevant, /*isDM=*/false);
+    const allMax = relevant.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), prevLast);
+    pubList.dataset.last = String(Math.max(prevLast, allMax));
+    try {
+      ROOM_CACHE.set(cacheKeyForRoom(roomSlug), {
+        last: +pubList.dataset.last || -1,
+        html: pubList.innerHTML
+      });
+    } catch(_) {}
+    return true;
   }
-});
 
-window.addEventListener('focus',  () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive().catch(()=>{}); });
-window.addEventListener('online', () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive().catch(()=>{}); });
+  function queueRealtimeScopeUpdate(){
+    if (!WS_CAN_USE || !ws || ws.readyState !== WebSocket.OPEN) return;
+    if (wsScopeTimer) clearTimeout(wsScopeTimer);
+    wsScopeTimer = setTimeout(() => {
+      wsScopeTimer = null;
+      const payload = {
+        type: 'subscribe',
+        room: currentDM == null ? currentRoom : null,
+        dm: currentDM == null ? null : Number(currentDM)
+      };
+      wsSend(payload);
+    }, 80);
+  }
 
-longPollLoop();
+  function cleanupRealtimeTimers(){
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+    if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
+    if (wsFallbackInterval) { clearInterval(wsFallbackInterval); wsFallbackInterval = null; }
+    if (wsScopeTimer) { clearTimeout(wsScopeTimer); wsScopeTimer = null; }
+    if (wsScheduledPoll) { clearTimeout(wsScheduledPoll); wsScheduledPoll = null; }
+  }
+
+  function onWSDown(){
+    cleanupRealtimeTimers();
+    wsConnected = false;
+    ws = null;
+    resumeLongPollAfterRealtime();
+    if (wsShouldReconnect) {
+      scheduleWSReconnect();
+    }
+  }
+
+  function scheduleWSReconnect(){
+    if (!wsShouldReconnect || !WS_CAN_USE) return;
+    if (wsReconnectTimer) return;
+    const delay = wsBackoffMs;
+    wsReconnectTimer = setTimeout(() => {
+      wsReconnectTimer = null;
+      if (wsShouldReconnect) connectWebSocket();
+    }, delay);
+    wsBackoffMs = Math.min(wsBackoffMs * 2, WS_BACKOFF_MAX);
+  }
+
+  function onWSOpen(socket){
+    if (socket !== ws) return;
+    wsConnected = true;
+    wsBackoffMs = 1000;
+    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+    stopLongPollForRealtime();
+    schedulePollFromRealtime(0);
+    wsSend({ type: 'hello', csrf: CSRF, rest_nonce: REST_NONCE, me: ME_ID || null });
+    queueRealtimeScopeUpdate();
+    wsPingTimer = setInterval(() => {
+      wsSend({ type: 'ping', at: Date.now() });
+    }, 25000);
+    wsFallbackInterval = setInterval(() => {
+      schedulePollFromRealtime(0);
+    }, 45000);
+  }
+
+  function processRealtimeEnvelope(data){
+    if (!data || typeof data !== 'object') return;
+    const hintTypes = ['hint','wake','notify','change','message','presence'];
+    if (data.type === 'pong') return;
+    if (data.type === 'ping') {
+      wsSend({ type: 'pong', at: data.at || Date.now() });
+      return;
+    }
+    if (data.type === 'hello' || data.type === 'ok' || data.type === 'subscribed') return;
+
+    let payload = null;
+    if (data.type === 'sync') {
+      payload = data.payload && typeof data.payload === 'object' ? data.payload : data;
+    } else if (Array.isArray(data.messages)) {
+      payload = data;
+    } else if (data.payload && typeof data.payload === 'object' && Array.isArray(data.payload.messages)) {
+      payload = data.payload;
+    }
+
+    if (payload) {
+      const handled = handleRealtimeSync(payload);
+      if (!handled) schedulePollFromRealtime(0);
+      return;
+    }
+
+    if (hintTypes.includes(data.type) || hintTypes.includes(data.event)) {
+      schedulePollFromRealtime(0);
+    }
+  }
+
+  function handleRealtimeMessage(raw){
+    const txt = (raw == null ? '' : String(raw)).trim();
+    if (!txt) return;
+    if (txt === 'ping') { wsSend({ type: 'pong', at: Date.now() }); return; }
+    try {
+      const data = JSON.parse(txt);
+      processRealtimeEnvelope(data);
+    } catch(_) {}
+  }
+
+  function onWSMessage(event){
+    wsConnected = true;
+    const { data } = event;
+    if (typeof data === 'string') {
+      handleRealtimeMessage(data);
+      return;
+    }
+    if (data && typeof data.text === 'function') {
+      data.text().then(handleRealtimeMessage).catch(()=>{});
+    }
+  }
+
+  function connectWebSocket(){
+    if (!WS_CAN_USE || !wsShouldReconnect) return;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    try {
+      const socket = new WebSocket(WS_URL);
+      ws = socket;
+      socket.addEventListener('open', () => onWSOpen(socket));
+      socket.addEventListener('message', onWSMessage);
+      socket.addEventListener('close', onWSDown);
+      socket.addEventListener('error', onWSDown);
+    } catch(_) {
+      scheduleWSReconnect();
+    }
+  }
+
+  function startRealtime(){
+    if (!WS_CAN_USE) return;
+    wsShouldReconnect = true;
+    wsBackoffMs = 1000;
+    connectWebSocket();
+  }
+
+  function stopRealtime(){
+    if (!WS_CAN_USE) return;
+    wsShouldReconnect = false;
+    cleanupRealtimeTimers();
+    if (ws) {
+      try { ws.close(); } catch(_) {}
+      ws = null;
+    }
+    wsConnected = false;
+    resumeLongPollAfterRealtime();
+  }
+
+  function restartRealtime(){
+    if (!WS_CAN_USE) return;
+    wsShouldReconnect = true;
+    wsBackoffMs = 1000;
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
+      try { ws.close(); } catch(_) {}
+      return;
+    }
+    connectWebSocket();
+  }
+
+  document.addEventListener('visibilitychange', () => {
+    // Always kill any in-flight long-poll when visibility changes
+    try { POLL_CTL?.abort(); } catch(_) {}
+    if (document.visibilityState === 'visible') {
+      // Kick a fresh poll immediately on resume
+      pollActive().catch(()=>{});
+      if (wsConnected) queueRealtimeScopeUpdate();
+    }
+  });
+
+  window.addEventListener('focus',  () => {
+    try { POLL_CTL?.abort(); } catch(_){}
+    pollActive().catch(()=>{});
+    if (WS_CAN_USE) restartRealtime();
+  });
+
+  window.addEventListener('online', () => {
+    try { POLL_CTL?.abort(); } catch(_){}
+    pollActive().catch(()=>{});
+    if (WS_CAN_USE) restartRealtime();
+  });
+
+  longPollLoop();
+  if (WS_CAN_USE) startRealtime();
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -2514,6 +2835,7 @@ async function openDM(id) {
 
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
+  queueRealtimeScopeUpdate();
   UNREAD_PER[currentDM] = 0;
 
   // Recompute total DM unread so the left badge updates immediately
