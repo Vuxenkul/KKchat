@@ -426,41 +426,45 @@ register_rest_route($ns, '/sync', [
     $now = time();
 
     /* ------------ presence (active users) ------------ */
-    // Cleanup (presence purge can be heavy; keep it but feel free to make it probabilistic if needed)
-    $wpdb->query($wpdb->prepare(
-      "DELETE FROM {$t['users']}
-        WHERE %d - last_seen > %d",
-      $now, kkchat_user_ttl()
-    ));
-    $wpdb->query($wpdb->prepare(
-      "UPDATE {$t['users']}
-          SET watch_flag = 0, watch_flag_at = NULL
-        WHERE watch_flag = 1
-          AND watch_flag_at IS NOT NULL
-          AND %d - watch_flag_at > %d",
-      $now, kkchat_watch_reset_after()
-    ));
-    $wpdb->query($wpdb->prepare(
-      "UPDATE {$t['users']}
-          SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL
-        WHERE typing_at IS NOT NULL AND %d - typing_at > 10",
-      $now
-    ));
+    $run_presence_cleanup = kkchat_sync_cleanup_should_run($now);
+    if ($run_presence_cleanup) {
+      // Cleanup (presence purge can be heavy; rate limited via kkchat_sync_cleanup_should_run)
+      $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
+        $now, kkchat_user_ttl()
+      ));
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['users']} SET watch_flag = 0, watch_flag_at = NULL
+          WHERE watch_flag = 1
+            AND watch_flag_at IS NOT NULL
+            AND %d - watch_flag_at > %d",
+        $now, kkchat_watch_reset_after()
+      ));
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL
+          WHERE typing_at IS NOT NULL AND %d - typing_at > 10",
+        $now
+      ));
+    }
 
     $admin_names = kkchat_admin_usernames();
+    $active_window = max(30, (int)apply_filters('kkchat_presence_active_sec', 120));
+    $presence_limit = max(50, (int)apply_filters('kkchat_presence_limit', 200));
     $presence_rows = $wpdb->get_results(
       $wpdb->prepare(
-        "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username,last_seen
+        "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,watch_flag_at,wp_username,last_seen
            FROM {$t['users']}
           WHERE %d - last_seen <= %d
           ORDER BY name_lc ASC
           LIMIT %d",
         $now,
-        max(30, (int)apply_filters('kkchat_presence_active_sec', 120)),
-        max(50, (int)apply_filters('kkchat_presence_limit', 200))
+        $active_window,
+        $presence_limit
       ),
       ARRAY_A
     ) ?: [];
+
+    $presence_rows = kkchat_filter_presence_rows_by_ttl($presence_rows, $now, $active_window);
 
     // 10s window for typing to be considered "active"
     $presence = array_map(function($r) use ($now, $admin_names) {
@@ -478,7 +482,7 @@ register_rest_route($ns, '/sync', [
         'name'     => (string)$r['name'],
         'gender'   => (string)$r['gender'],
         'typing'   => $typing,
-        'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
+        'flagged'  => kkchat_presence_flagged_status($r, $now),
         'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
       ];
     }, $presence_rows);
