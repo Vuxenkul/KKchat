@@ -139,6 +139,15 @@ function kkchat_sanitize_room_slug(string $s): string {
   return substr($s, 0, 64);
 }
 
+function kkchat_dm_key(int $a, int $b): string {
+  if ($a > $b) {
+    $tmp = $a;
+    $a   = $b;
+    $b   = $tmp;
+  }
+  return $a . ':' . $b;
+}
+
 /* ------------------------------
  * Auth/session helpers
  * ------------------------------ */
