@@ -715,41 +715,67 @@ register_rest_route($ns, '/sync', [
 
     $mention_bumps = [];
     if ($mentionRe && !empty($perRoom)) {
+      $mentionSlugs = [];
       foreach ($perRoom as $slug => $count) {
-        if ((int)$count <= 0) continue;
+        if ((int)$count > 0) {
+          $mentionSlugs[] = (string)$slug;
+        }
+      }
 
-        // Query up to 30 unread public messages in this room since $since_pub with same filters as unread counts
-        $paramsMB = [$me, $me, $slug, $since_pub, $guest];
+      if (!empty($mentionSlugs)) {
+        $paramsMB = [$me, $me];
+        $placeholders = implode(',', array_fill(0, count($mentionSlugs), '%s'));
+        foreach ($mentionSlugs as $slug) {
+          $paramsMB[] = $slug;
+        }
+        $paramsMB[] = $since_pub;
+        $paramsMB[] = $guest;
+
         $blkMB = '';
         if ($blocked) {
           $blkMB = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-          foreach ($blocked as $bid) $paramsMB[] = (int)$bid;
+          foreach ($blocked as $bid) {
+            $paramsMB[] = (int)$bid;
+          }
         }
 
+        $paramsMB[] = 30 * count($mentionSlugs);
+
         $sqlMB =
-          "SELECT m.content
+          "SELECT m.room AS slug, m.content
              FROM {$t['messages']} m
         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
         LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
             WHERE m.recipient_id IS NULL
               AND m.sender_id <> %d
               AND r.user_id IS NULL
-              AND rr.slug = %s
+              AND rr.slug IN ({$placeholders})
               AND rr.slug IS NOT NULL
               AND m.created_at > %d
               AND (%d = 0 OR rr.member_only = 0)
               AND m.hidden_at IS NULL
               $blkMB
          ORDER BY m.id DESC
-            LIMIT 30";
+            LIMIT %d";
 
         $rowsMB = $wpdb->get_results($wpdb->prepare($sqlMB, ...$paramsMB), ARRAY_A) ?: [];
-        $hit = false;
+
+        $grouped = [];
         foreach ($rowsMB as $rowMB) {
-          $content = (string)($rowMB['content'] ?? '');
-          if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
+          $slug = (string)($rowMB['slug'] ?? '');
+          if ($slug === '') continue;
+          if (!isset($grouped[$slug])) $grouped[$slug] = [];
+          if (count($grouped[$slug]) >= 30) continue;
+          $grouped[$slug][] = (string)($rowMB['content'] ?? '');
         }
-        $mention_bumps[$slug] = $hit ? true : false;
+
+        foreach ($mentionSlugs as $slug) {
+          $hit = false;
+          foreach ($grouped[$slug] ?? [] as $content) {
+            if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
+          }
+          $mention_bumps[$slug] = $hit ? true : false;
+        }
       }
     }
 
