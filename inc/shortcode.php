@@ -348,6 +348,7 @@ f.addEventListener('submit', async (ev)=>{
   const ME_NM = <?= json_encode($me_nm) ?>;
   const OPEN_DM_USER = <?= $open_dm ?>;
   const IS_ADMIN = <?= $is_admin ? 'true' : 'false' ?>;
+  const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -717,6 +718,9 @@ async function doLogout(){
   const who = m.sender_name || 'Okänd';
   const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
   const roleClass = isAdminById?.(sid) ? ' admin' : '';
+  rememberName(sid, m.sender_name);
+  const gender = genderById(sid);
+  const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
   if ((m.kind||'chat') === 'banner'){
     return `<li class="item banner" data-id="${mid}"><div class="banner-bubble">${esc(String(m.content||''))}</div></li>`;
   }
@@ -725,14 +729,14 @@ async function doLogout(){
     const alt = `Bild från ${sid === ME_ID ? 'dig' : who}`;
     return `<li class="item ${sid===ME_ID?'me':'them'}${roleClass}" data-id="${mid}" data-sid="${sid}" data-sname="${escAttr(who)}">
       <div class="bubble img"><img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
-      <div class="small" style="min-width:52px;text-align:left">${who===ME_NM?'':esc(who)}<br>${when}</div>
+      ${metaHTML}
     </li>`;
   }
   const txt = String(m.content||'');
   const isMention = textMentionsName?.(txt, ME_NM) && sid !== ME_ID;
   return `<li class="item ${sid===ME_ID?'me':'them'}${roleClass}" data-id="${mid}" data-sid="${sid}" data-sname="${escAttr(who)}">
     <div class="bubble${isMention?' mention':''}">${esc(txt)}</div>
-    <div class="small" style="min-width:52px;text-align:left">${who===ME_NM?'':esc(who)}<br>${when}</div>
+    ${metaHTML}
   </li>`;
 }
 
@@ -998,8 +1002,10 @@ function renderList(el, items){
       const who = m.sender_name || 'Okänd';
 
       rememberName(m.sender_id, m.sender_name);
+      const gender = genderById(m.sender_id);
 
       const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+      const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
       let bubbleHTML = '';
       if ((m.kind||'chat') === 'image') {
@@ -1019,7 +1025,7 @@ function renderList(el, items){
         }
       }
 
-      li.innerHTML = `${bubbleHTML}<div class="small" style="min-width:52px;text-align:left">${who===ME_NM?'':esc(who)}<br>${when}</div>`;
+      li.innerHTML = `${bubbleHTML}${metaHTML}`;
     }
 
     frag.appendChild(li);
@@ -1214,6 +1220,64 @@ let PREV_UNREAD_PER  = {};
       const u = (typeof USERS!=='undefined' && Array.isArray(USERS)) ? USERS.find(x => Number(x.id) === Number(id)) : null;
       if (u && u.name){ rememberName(id, u.name); return u.name; }
       return NAME_CACHE.get(Number(id)) || 'Okänd';
+    }
+    const GENDER_CACHE = (()=>{
+      try { const raw = localStorage.getItem('kk_gender_cache'); return new Map(raw ? JSON.parse(raw) : []); }
+      catch(_) { return new Map(); }
+    })();
+    function saveGenderCache(){ try { localStorage.setItem('kk_gender_cache', JSON.stringify([...GENDER_CACHE])); } catch(_){} }
+    function rememberGender(id, gender){
+      const k = Number(id);
+      if (!Number.isFinite(k)) return;
+      const v = String(gender ?? '').trim();
+      if (!v) {
+        if (GENDER_CACHE.has(k)) { GENDER_CACHE.delete(k); saveGenderCache(); }
+        return;
+      }
+      if (!GENDER_CACHE.has(k) || GENDER_CACHE.get(k) !== v){
+        GENDER_CACHE.set(k, v);
+        saveGenderCache();
+      }
+    }
+    function genderById(id){
+      const n = Number(id);
+      if (!Number.isFinite(n)) return '';
+      try {
+        const u = Array.isArray(USERS) ? USERS.find(x => Number(x.id) === n) : null;
+        if (u && u.gender) {
+          rememberGender(n, u.gender);
+          return u.gender;
+        }
+      } catch(_) {}
+      return GENDER_CACHE.get(n) || '';
+    }
+    const GENDER_ICON_FILES = Object.freeze({
+      man: 'man.svg',
+      woman: 'woman.svg',
+      couple: 'couple.svg',
+      'trans-mtf': 'trans-mtf.svg',
+      'trans-ftm': 'trans-ftm.svg',
+      nonbinary: 'nonbinary.svg',
+      unknown: 'unknown.svg'
+    });
+    function normalizeGenderKey(gender){
+      const raw = String(gender || '').trim().toLowerCase();
+      if (!raw) return 'unknown';
+      if (raw.includes('couple') || raw.includes('par')) return 'couple';
+      if (raw.includes('trans') && raw.includes('mtf')) return 'trans-mtf';
+      if (raw.includes('trans') && raw.includes('ftm')) return 'trans-ftm';
+      if (raw.includes('non') && raw.includes('bin')) return 'nonbinary';
+      if (raw.includes('other')) return 'nonbinary';
+      if (raw.includes('woman') || raw.includes('kvinna') || raw.includes('female')) return 'woman';
+      if (raw.includes('man') || raw.includes('male') || raw.includes('kille')) return 'man';
+      return 'unknown';
+    }
+    function genderIconMarkup(gender){
+      const key = normalizeGenderKey(gender);
+      const file = GENDER_ICON_FILES[key] || GENDER_ICON_FILES.unknown;
+      if (!file || !GENDER_ICON_BASE) return '';
+      const src = `${GENDER_ICON_BASE}${file}`;
+      return `<span class="bubble-gender" aria-hidden="true"><img class="bubble-gender-icon" src="${escAttr(src)}" alt="" role="presentation"></span>`;
     }
     function isAdminById(id){
   const n = Number(id);
@@ -1577,6 +1641,7 @@ function applySyncPayload(js){
 
   if (js && Array.isArray(js.presence)) {
     USERS = normalizeUsersPayload(js.presence);
+    try { USERS.forEach(u => rememberGender(u.id, u.gender)); } catch(_){}
   }
 
   if (js && js.unread) {

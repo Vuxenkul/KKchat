@@ -568,6 +568,31 @@ html, body { margin: 0; height: 100%; }
   white-space: pre-wrap;
   font-size: 16px;
 }
+#kkchat-root .bubble-meta {
+  min-width: 52px;
+  text-align: left;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+#kkchat-root .bubble-gender {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+}
+#kkchat-root .bubble-gender-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+#kkchat-root .bubble-meta-text {
+  display: inline-block;
+  line-height: 1.3;
+}
 #kkchat-root .me { justify-content: flex-end; }
 #kkchat-root .me .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
 #kkchat-root .them .bubble { background: #fff; border-bottom-left-radius: 4px; }
