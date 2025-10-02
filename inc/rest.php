@@ -1364,7 +1364,7 @@ register_rest_route($ns, '/fetch', [
         $content = esc_url_raw($image_url);
         $raw     = 'image:' . $content;
       } else {
-        $content = kkchat_html_esc($txt);
+        $content = $txt;
         $raw     = trim($txt);
       }
 

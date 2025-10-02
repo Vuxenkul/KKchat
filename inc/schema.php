@@ -361,7 +361,7 @@ function kkchat_run_scheduled_banners(){
       error_log("[KKchat] Banner #{$r['id']} rooms not found: {$r['rooms_csv']}");
     } else {
       // Insert one banner message per valid room
-      $content = kkchat_html_esc((string)$r['content']);
+      $content = (string)$r['content'];
       foreach ($rooms as $slug) {
         $attempts++;
         $ok = $wpdb->insert($t['messages'], [
