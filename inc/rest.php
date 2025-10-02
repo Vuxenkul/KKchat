@@ -576,11 +576,12 @@ register_rest_route($ns, '/sync', [
 
     /* ------------ messages (like /fetch) ------------ */
     $msgs = [];
+    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
     if ($onlyPub) {
       if ($since < 0) {
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT * FROM {$t['messages']}
+            "SELECT $msgColumns FROM {$t['messages']}
              WHERE recipient_id IS NULL
                AND room = %s
                AND hidden_at IS NULL
@@ -594,7 +595,7 @@ register_rest_route($ns, '/sync', [
       } else {
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT * FROM {$t['messages']}
+            "SELECT $msgColumns FROM {$t['messages']}
              WHERE id > %d
                AND recipient_id IS NULL
                AND room = %s
@@ -611,13 +612,13 @@ register_rest_route($ns, '/sync', [
         if ($since < 0) {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "(SELECT * FROM {$t['messages']}
+              "(SELECT $msgColumns FROM {$t['messages']}
                  WHERE sender_id = %d
                    AND recipient_id = %d
                    AND hidden_at IS NULL
                  ORDER BY id DESC LIMIT %d)
                UNION ALL
-               (SELECT * FROM {$t['messages']}
+               (SELECT $msgColumns FROM {$t['messages']}
                  WHERE sender_id = %d
                    AND recipient_id = %d
                    AND hidden_at IS NULL
@@ -633,7 +634,7 @@ register_rest_route($ns, '/sync', [
         } else {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT * FROM {$t['messages']}
+              "SELECT $msgColumns FROM {$t['messages']}
                WHERE id > %d
                  AND hidden_at IS NULL
                  AND ((sender_id = %d AND recipient_id = %d) OR
@@ -649,7 +650,7 @@ register_rest_route($ns, '/sync', [
         // Legacy: all DMs to/from me (kept for compatibility)
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT * FROM {$t['messages']}
+            "SELECT $msgColumns FROM {$t['messages']}
              WHERE id > %d
                AND (recipient_id = %d OR sender_id = %d)
                AND hidden_at IS NULL
@@ -1084,13 +1085,14 @@ register_rest_route($ns, '/fetch', [
     $limit = max(1, min($limit, 500));               // 1..500
 
     $blocked = kkchat_blocked_ids($me);
+    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
 
     if ($onlyPublic) {
       if ($since < 0) {
         // First load: last N messages in the room (ASC order for display)
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT * FROM {$t['messages']}
+            "SELECT $msgColumns FROM {$t['messages']}
              WHERE recipient_id IS NULL
                AND room = %s
                AND hidden_at IS NULL
@@ -1104,7 +1106,7 @@ register_rest_route($ns, '/fetch', [
       } else {
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT * FROM {$t['messages']}
+            "SELECT $msgColumns FROM {$t['messages']}
              WHERE id > %d
                AND recipient_id IS NULL
                AND room = %s
@@ -1129,13 +1131,13 @@ register_rest_route($ns, '/fetch', [
           // Last N in thread with specific peer
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "(SELECT * FROM {$t['messages']}
+              "(SELECT $msgColumns FROM {$t['messages']}
                  WHERE sender_id = %d
                    AND recipient_id = %d
                    AND hidden_at IS NULL
                  ORDER BY id DESC LIMIT %d)
                UNION ALL
-               (SELECT * FROM {$t['messages']}
+               (SELECT $msgColumns FROM {$t['messages']}
                  WHERE sender_id = %d
                    AND recipient_id = %d
                    AND hidden_at IS NULL
@@ -1151,7 +1153,7 @@ register_rest_route($ns, '/fetch', [
         } else {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT * FROM {$t['messages']}
+              "SELECT $msgColumns FROM {$t['messages']}
                WHERE id > %d
                  AND hidden_at IS NULL
                  AND ((sender_id = %d AND recipient_id = %d)
@@ -1167,7 +1169,7 @@ register_rest_route($ns, '/fetch', [
         // Legacy: all DMs to/from me (kept for backward compatibility)
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT * FROM {$t['messages']}
+            "SELECT $msgColumns FROM {$t['messages']}
              WHERE id > %d
                AND (recipient_id = %d OR sender_id = %d)
                AND hidden_at IS NULL
