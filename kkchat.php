@@ -82,8 +82,50 @@ add_action('wp_enqueue_scripts', function () {
 
 
 function kkchat_json($data, int $code = 200) {
+  $options = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES;
+  $json    = wp_json_encode($data, $options);
+
+  if ($json === false) {
+    $json = 'null';
+  }
+
   status_header($code);
-  wp_send_json($data, $code, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+  if (!headers_sent()) {
+    header('Content-Type: application/json; charset=' . get_option('blog_charset'));
+    header('Cache-Control: no-cache, must-revalidate, max-age=0');
+    header('Expires: Wed, 11 Jan 1984 05:00:00 GMT');
+    header('Pragma: no-cache');
+  }
+
+  $output     = $json;
+  $gzip_ready = function_exists('gzencode') && !ini_get('zlib.output_compression');
+
+  if ($gzip_ready) {
+    $accept_encoding = $_SERVER['HTTP_ACCEPT_ENCODING'] ?? '';
+    if (stripos($accept_encoding, 'gzip') !== false) {
+      $gzipped = gzencode($json, 6, FORCE_GZIP);
+      if ($gzipped !== false) {
+        $output = $gzipped;
+        if (!headers_sent()) {
+          header('Content-Encoding: gzip');
+          header('Vary: Accept-Encoding');
+        }
+      }
+    }
+  }
+
+  if (!headers_sent()) {
+    header('Content-Length: ' . strlen($output));
+  }
+
+  echo $output;
+
+  if (wp_doing_ajax()) {
+    wp_die();
+  }
+
+  exit;
 }
 
 /** SECURITY: use ENT_QUOTES so attributes are safe too. */
