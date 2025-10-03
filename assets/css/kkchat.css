@@ -398,16 +398,116 @@ html, body { margin: 0; height: 100%; }
 }
 
 #kkchat-root .people {
-  padding: 0;
+  padding: 10px 12px;
   border-bottom: 1px solid #eee;
   background: #fff;
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-#kkchat-root .people input {
+#kkchat-root .user-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#kkchat-root .user-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   padding: 10px;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
+}
+#kkchat-root .user-filter-btn {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+  color: #1f2937;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+#kkchat-root .user-filter-btn:hover {
+  background: #f3f4f6;
+}
+#kkchat-root .user-filter-btn:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(224, 51, 71, 0.2);
+}
+#kkchat-root .user-filter-btn[data-active="1"] {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+#kkchat-root .user-filter-btn[data-active="1"]:hover {
+  background: var(--brand);
+}
+#kkchat-root .user-filter-ico {
+  width: 18px;
+  height: 18px;
+  display: block;
+  background-color: currentColor;
+  mask: url('../icons/filter.svg') center/contain no-repeat;
+  -webkit-mask: url('../icons/filter.svg') center/contain no-repeat;
+}
+#kkchat-root .user-filter-menu {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+#kkchat-root .user-filter-menu[hidden] {
+  display: none;
+}
+#kkchat-root .user-filter-menu fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#kkchat-root .user-filter-menu legend {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+#kkchat-root .user-filter-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #111827;
+}
+#kkchat-root .user-filter-menu input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--brand);
+}
+#kkchat-root .filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+#kkchat-root .user-filter-clear {
+  background: none;
+  border: 0;
+  color: var(--brand);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+}
+#kkchat-root .user-filter-clear:hover,
+#kkchat-root .user-filter-clear:focus-visible {
+  text-decoration: underline;
+  outline: none;
 }
 
 #kkchat-root .users {

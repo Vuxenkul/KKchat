@@ -197,7 +197,37 @@ f.addEventListener('submit', async (ev)=>{
 </div>
 
             <div class="leftview" id="kk-lvUsers" active>
-              <div class="people"><input id="kk-uSearch" placeholder="Sök person…"></div>
+              <div class="people">
+                <div class="user-search-row">
+                  <input id="kk-uSearch" class="user-search-input" placeholder="Sök person…" autocomplete="off">
+                  <button
+                    type="button"
+                    id="kk-userFilterBtn"
+                    class="user-filter-btn"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                    aria-controls="kk-userFilterMenu"
+                    title="Filtrera på kön"
+                    aria-label="Filtrera användare på kön">
+                    <span class="user-filter-ico" aria-hidden="true"></span>
+                  </button>
+                </div>
+                <div class="user-filter-menu" id="kk-userFilterMenu" role="group" aria-label="Filtrera på kön" hidden>
+                  <fieldset>
+                    <legend>Visa kön</legend>
+                    <label for="kk-filter-man"><input type="checkbox" id="kk-filter-man" value="man"> Man</label>
+                    <label for="kk-filter-woman"><input type="checkbox" id="kk-filter-woman" value="woman"> Kvinna</label>
+                    <label for="kk-filter-couple"><input type="checkbox" id="kk-filter-couple" value="couple"> Par</label>
+                    <label for="kk-filter-trans-mtf"><input type="checkbox" id="kk-filter-trans-mtf" value="trans-mtf"> Trans (MTF)</label>
+                    <label for="kk-filter-trans-ftm"><input type="checkbox" id="kk-filter-trans-ftm" value="trans-ftm"> Trans (FTM)</label>
+                    <label for="kk-filter-nonbinary"><input type="checkbox" id="kk-filter-nonbinary" value="nonbinary"> Icke-binär / annat</label>
+                    <label for="kk-filter-unknown"><input type="checkbox" id="kk-filter-unknown" value="unknown"> Okänt / utan kön</label>
+                  </fieldset>
+                  <div class="filter-actions">
+                    <button type="button" id="kk-userFilterClear" class="user-filter-clear">Rensa filter</button>
+                  </div>
+                </div>
+              </div>
               <div id="kk-userList" class="users"></div>
             </div>
 
@@ -359,6 +389,11 @@ f.addEventListener('submit', async (ev)=>{
 
   const userListEl = $('#kk-userList');
   const userSearch = $('#kk-uSearch');
+  const userFilterBtn   = document.getElementById('kk-userFilterBtn');
+  const userFilterMenu  = document.getElementById('kk-userFilterMenu');
+  const userFilterClear = document.getElementById('kk-userFilterClear');
+  const userFilterInputs= userFilterMenu ? Array.from(userFilterMenu.querySelectorAll('input[type="checkbox"]')) : [];
+  const activeGenderFilters = new Set();
   const logoutBtn  = $('#kk-logout');
   const roomTabs   = document.getElementById('kk-roomTabs');
 
@@ -404,6 +439,72 @@ f.addEventListener('submit', async (ev)=>{
     if (roomTabs) _tabsObserver.observe(roomTabs, {childList:true});
 
     retitleDmTabs();
+
+
+  function updateFilterButtonState(){
+    if (!userFilterBtn) return;
+    const active = activeGenderFilters.size > 0;
+    userFilterBtn.dataset.active = active ? '1' : '0';
+    userFilterBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+  }
+
+  let isFilterMenuOpen = false;
+  function setFilterMenuVisible(show){
+    if (!userFilterMenu || !userFilterBtn) return;
+    const wantOpen = !!show;
+    isFilterMenuOpen = wantOpen;
+    userFilterMenu.hidden = !wantOpen;
+    userFilterBtn.setAttribute('aria-expanded', wantOpen ? 'true' : 'false');
+    if (wantOpen) {
+      requestAnimationFrame(()=>{
+        const first = userFilterInputs.find(input => !input.disabled);
+        first?.focus();
+      });
+    }
+  }
+
+  userFilterBtn?.addEventListener('click', (ev)=>{
+    ev.preventDefault();
+    setFilterMenuVisible(!isFilterMenuOpen);
+  });
+
+  document.addEventListener('click', (ev)=>{
+    if (!isFilterMenuOpen) return;
+    const t = ev.target;
+    if (typeof Node !== 'undefined' && t instanceof Node) {
+      if (userFilterBtn?.contains(t) || userFilterMenu?.contains(t)) return;
+    }
+    setFilterMenuVisible(false);
+  });
+
+  document.addEventListener('keydown', (ev)=>{
+    if (!isFilterMenuOpen) return;
+    if (ev.key === 'Escape') {
+      setFilterMenuVisible(false);
+      userFilterBtn?.focus();
+    }
+  });
+
+  userFilterInputs.forEach(input => {
+    input.addEventListener('change', ()=>{
+      const val = input.value;
+      if (!val) return;
+      if (input.checked) activeGenderFilters.add(val);
+      else activeGenderFilters.delete(val);
+      updateFilterButtonState();
+      renderUsers();
+    });
+  });
+
+  userFilterClear?.addEventListener('click', ()=>{
+    activeGenderFilters.clear();
+    userFilterInputs.forEach(input => { input.checked = false; });
+    updateFilterButtonState();
+    setFilterMenuVisible(false);
+    renderUsers();
+  });
+
+  updateFilterButtonState();
 
 
   const leftTabs     = document.getElementById('kk-leftTabs');
@@ -1364,8 +1465,17 @@ function userRow(u){
 }
 
   function renderUsers(){
-    const q = (userSearch.value||'').toLowerCase();
-    const sorted = sortUsersForList().filter(u=> (u.name||'').toLowerCase().includes(q));
+    const q = (userSearch.value||'').toLowerCase().trim();
+    const hasGenderFilters = activeGenderFilters.size > 0;
+    const sorted = sortUsersForList().filter(u=>{
+      const name = (u.name||'').toLowerCase();
+      if (q && !name.includes(q)) return false;
+      if (!hasGenderFilters) return true;
+      const key = (typeof normalizeGenderKey === 'function')
+        ? normalizeGenderKey(u.gender)
+        : String(u.gender || '').trim().toLowerCase();
+      return activeGenderFilters.has(key);
+    });
     userListEl.innerHTML = sorted.map(userRow).join('');
     if (currentDM){ userListEl.querySelector(`[data-dm="${currentDM}"]`)?.setAttribute('aria-current','true'); }
     updateLeftCounts();
