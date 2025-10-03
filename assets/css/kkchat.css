@@ -323,7 +323,8 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .tabs {
   display: flex;
   gap: 8px;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
   padding: 2px 3px 7px;
   background: white;
   -webkit-overflow-scrolling: touch;
