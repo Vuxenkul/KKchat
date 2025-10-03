@@ -664,13 +664,15 @@ async function fetchJSONCancelable(url, signal){
 
     const BLUR_KEY = 'kk_blur_images';
     let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '0') === '1';
+    let SETTINGS_OPEN = false;
 
     function applyBlurClass(){ root?.classList.toggle('nsfw-blur', IMG_BLUR); }
     function setImageBlur(on){
+      SETTINGS_OPEN = false;
       IMG_BLUR = !!on;
       localStorage.setItem(BLUR_KEY, IMG_BLUR ? '1' : '0');
       applyBlurClass();
-      renderRoomTabs(); 
+      renderRoomTabs();
     }
     applyBlurClass();
 
@@ -769,16 +771,59 @@ async function doLogout(){
     function isDmMuted(id){ return Number.isFinite(+id) && MUTED_DMS.has(+id); }
     
     function toggleRoomMute(slug){
+      SETTINGS_OPEN = false;
       if (!slug) return;
       if (MUTED_ROOMS.has(String(slug))) MUTED_ROOMS.delete(String(slug));
       else MUTED_ROOMS.add(String(slug));
       saveSet(MUTE_ROOMS_KEY, MUTED_ROOMS);
       renderRoomTabs();
     }
-    
+
     function toggleDmMute(id){
       const n = +id; if (!Number.isFinite(n)) return;
+      SETTINGS_OPEN = false;
       if (MUTED_DMS.has(n)) MUTED_DMS.delete(n); else MUTED_DMS.add(n);
+      saveSet(MUTE_DMS_KEY, MUTED_DMS);
+      renderRoomTabs();
+    }
+
+    function toggleActiveChatMute(){
+      if (currentDM != null) { toggleDmMute(currentDM); return; }
+      if (currentRoom) toggleRoomMute(currentRoom);
+    }
+
+    function allChatsMuted(){
+      let anyRoomUnmuted = false;
+      for (const slug of JOINED) {
+        if (!MUTED_ROOMS.has(String(slug))) { anyRoomUnmuted = true; break; }
+      }
+      if (!anyRoomUnmuted) {
+        for (const id of ACTIVE_DMS) {
+          const n = +id;
+          if (Number.isFinite(n) && !MUTED_DMS.has(n)) { anyRoomUnmuted = true; break; }
+        }
+      }
+      return !anyRoomUnmuted;
+    }
+
+    function setAllMute(on){
+      const shouldMute = !!on;
+      if (shouldMute) {
+        for (const slug of JOINED) {
+          MUTED_ROOMS.add(String(slug));
+        }
+        for (const id of ACTIVE_DMS) {
+          const n = +id; if (Number.isFinite(n)) MUTED_DMS.add(n);
+        }
+      } else {
+        for (const slug of JOINED) {
+          MUTED_ROOMS.delete(String(slug));
+        }
+        for (const id of ACTIVE_DMS) {
+          const n = +id; if (Number.isFinite(n)) MUTED_DMS.delete(n);
+        }
+      }
+      saveSet(MUTE_ROOMS_KEY, MUTED_ROOMS);
       saveSet(MUTE_DMS_KEY, MUTED_DMS);
       renderRoomTabs();
     }
@@ -2225,23 +2270,48 @@ function renderRoomTabs(){
         </button>`;
     }).join('');
 
-  const blurIcon = IMG_BLUR ? '👁️' : '🙈';
-  const blurTitle = IMG_BLUR
-    ? 'Bilder är censurerade – klicka för att visa'
-    : 'Bilder visas – klicka för att censurera';
+  const activeRoom = currentRoom ? ROOMS.find(r => r.slug === currentRoom) : null;
+  const activeNameRaw = currentDM != null
+    ? (nameById(currentDM) || ('#' + currentDM))
+    : (activeRoom?.title || 'den här fliken');
+  const activeName = esc(activeNameRaw);
+  const activeMuted = currentDM != null
+    ? isDmMuted(currentDM)
+    : isRoomMuted(currentRoom);
+  const activeMuteLabel = activeMuted
+    ? `🔔 Slå på ljud för ${activeName}`
+    : `🔕 Tysta ${activeName}`;
+
+  const autoLabel = AUTO_SCROLL
+    ? '🔓 Autoscroll på (klicka för att låsa)'
+    : '🔒 Autoscroll av (klicka för att låsa upp)';
+
+  const blurLabel = IMG_BLUR
+    ? '👁️ Visa bilder'
+    : '🙈 Censurera bilder';
+
+  const allMuted = allChatsMuted();
+  const allMuteLabel = allMuted
+    ? '🔔 Slå på ljud för alla'
+    : '🔕 Tysta alla';
 
   const controls = `
     <span class="spacer"></span>
-    <button class="tabicons" data-blur="1"
-            title="${blurTitle}"
-            aria-label="${blurTitle}"
-            aria-pressed="${IMG_BLUR ? 'true' : 'false'}">${blurIcon}</button>
-    <button class="tabicons" data-lock="1"
-            title="${AUTO_SCROLL ? 'Autoscroll PÅ — klicka för att låsa' : 'Autoscroll AV — klicka för att låsa upp'}"
-            aria-label="${AUTO_SCROLL ? 'Autoscroll på' : 'Autoscroll av'}"
-            aria-pressed="${AUTO_SCROLL ? 'false' : 'true'}">
-      ${AUTO_SCROLL ? '🔓' : '🔒'}
-    </button>`;
+    <div class="tab-settings${SETTINGS_OPEN ? ' is-open' : ''}" data-settings-root>
+      <button class="tabicons" data-settings-toggle="1"
+              title="Fler inställningar"
+              aria-label="Fler inställningar"
+              aria-haspopup="menu"
+              aria-expanded="${SETTINGS_OPEN ? 'true' : 'false'}">⚙️</button>
+      <div class="tab-settings-menu${SETTINGS_OPEN ? ' is-open' : ''}"
+           role="menu"
+           aria-hidden="${SETTINGS_OPEN ? 'false' : 'true'}">
+        <button type="button" class="tab-settings-item" data-settings-blur="1" role="menuitem">${blurLabel}</button>
+        <button type="button" class="tab-settings-item" data-settings-autoscroll="1" role="menuitem">${autoLabel}</button>
+        <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
+        <button type="button" class="tab-settings-item" data-settings-mute-all="1" role="menuitem">${allMuteLabel}</button>
+      </div>
+    </div>`;
 
   roomTabs.innerHTML = roomBtns + dmBtns + controls;
 }
@@ -2289,14 +2359,28 @@ roomTabs.addEventListener('click', e => {
     return;
   }
 
-  const blurBtn = e.target.closest('[data-blur]');
+  const settingsToggle = e.target.closest('[data-settings-toggle]');
+  if (settingsToggle) {
+    e.preventDefault();
+    e.stopPropagation();
+    SETTINGS_OPEN = !SETTINGS_OPEN;
+    renderRoomTabs();
+    return;
+  }
+
+  const blurBtn = e.target.closest('[data-settings-blur]');
   if (blurBtn) {
+    e.preventDefault();
+    e.stopPropagation();
     setImageBlur(!IMG_BLUR);
     return;
   }
 
-  const lockBtn = e.target.closest('[data-lock]');
+  const lockBtn = e.target.closest('[data-settings-autoscroll]');
   if (lockBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    SETTINGS_OPEN = false;
     AUTO_SCROLL = !AUTO_SCROLL;
     localStorage.setItem(AUTO_KEY, AUTO_SCROLL ? '1' : '0');
     renderRoomTabs();
@@ -2304,6 +2388,24 @@ roomTabs.addEventListener('click', e => {
       const activeList = document.querySelector('.view[active] .list');
       if (activeList) scrollToBottom(activeList, true);
     }
+    return;
+  }
+
+  const muteActiveBtn = e.target.closest('[data-settings-mute-active]');
+  if (muteActiveBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    SETTINGS_OPEN = false;
+    toggleActiveChatMute();
+    return;
+  }
+
+  const muteAllBtn = e.target.closest('[data-settings-mute-all]');
+  if (muteAllBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    SETTINGS_OPEN = false;
+    setAllMute(!allChatsMuted());
     return;
   }
 
@@ -2351,6 +2453,20 @@ if (cacheHit) {
   markVisible(pubList);
 }
   // (No else branch — fast fetch already scheduled)
+});
+
+document.addEventListener('click', e => {
+  if (!SETTINGS_OPEN) return;
+  if (e.target.closest('[data-settings-root]')) return;
+  SETTINGS_OPEN = false;
+  renderRoomTabs();
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && SETTINGS_OPEN) {
+    SETTINGS_OPEN = false;
+    renderRoomTabs();
+  }
 });
 
 roomTabs.addEventListener('keydown', e => {

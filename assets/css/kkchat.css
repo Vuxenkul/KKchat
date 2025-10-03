@@ -278,10 +278,53 @@ html, body { margin: 0; height: 100%; }
   font-size: 1.5rem;
   padding-right: 5px;
 }
+#kkchat-root .tab-settings {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+#kkchat-root .tab-settings.is-open > .tabicons {
+  color: var(--brand);
+}
+#kkchat-root .tab-settings-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+  padding: 8px;
+  min-width: 220px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 30;
+}
+#kkchat-root .tab-settings-menu.is-open {
+  display: flex;
+}
+#kkchat-root .tab-settings-item {
+  background: #f6f7f9;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: .95rem;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+}
+#kkchat-root .tab-settings-item:hover,
+#kkchat-root .tab-settings-item:focus {
+  background: #fff;
+  border-color: var(--brand);
+  outline: none;
+}
 #kkchat-root .tabs {
   display: flex;
   gap: 8px;
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
   padding: 2px 3px 7px;
   background: white;
   -webkit-overflow-scrolling: touch;
