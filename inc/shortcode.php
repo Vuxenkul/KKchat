@@ -197,7 +197,27 @@ f.addEventListener('submit', async (ev)=>{
 </div>
 
             <div class="leftview" id="kk-lvUsers" active>
-              <div class="people"><input id="kk-uSearch" placeholder="Sök person…"></div>
+              <div class="people people-search">
+                <div class="people-controls">
+                  <input id="kk-uSearch" placeholder="Sök person…">
+                  <button
+                    type="button"
+                    class="user-filter-btn"
+                    id="kk-userFilterBtn"
+                    aria-haspopup="true"
+                    aria-expanded="false"
+                    aria-controls="kk-userFilterMenu"
+                    aria-label="Filtrera användare"
+                    title="Filtrera användare">
+                    <img src="<?= esc_url($plugin_root_url . 'assets/icons/filter.svg') ?>" alt="" aria-hidden="true">
+                    <span class="user-filter-label" id="kk-userFilterLabel">Alla</span>
+                  </button>
+                </div>
+                <div class="user-filter-menu" id="kk-userFilterMenu" role="menu" aria-labelledby="kk-userFilterTitle" hidden tabindex="-1">
+                  <p class="filter-title" id="kk-userFilterTitle">Filtrera efter kön</p>
+                  <div class="user-filter-options" id="kk-userFilterOptions"></div>
+                </div>
+              </div>
               <div id="kk-userList" class="users"></div>
             </div>
 
@@ -359,6 +379,10 @@ f.addEventListener('submit', async (ev)=>{
 
   const userListEl = $('#kk-userList');
   const userSearch = $('#kk-uSearch');
+  const userFilterBtn = $('#kk-userFilterBtn');
+  const userFilterMenu = $('#kk-userFilterMenu');
+  const userFilterOptionsEl = $('#kk-userFilterOptions');
+  const userFilterLabel = $('#kk-userFilterLabel');
   const logoutBtn  = $('#kk-logout');
   const roomTabs   = document.getElementById('kk-roomTabs');
 
@@ -423,6 +447,158 @@ f.addEventListener('submit', async (ev)=>{
   // State for reports
   let OPEN_REPORTS_COUNT = 0;
   let LAST_REPORT_MAX_ID = 0; // rising-edge anchor
+
+  const GENDER_FILTER_STORAGE_KEY = 'kk_gender_filter_selection';
+  const DEFAULT_FILTER_LABEL = 'Alla';
+
+  function normalizeGenderFilterValue(val){
+    return (val ?? '').toString().trim().toLowerCase();
+  }
+
+  function readStoredGenderFilter(){
+    try {
+      const raw = localStorage.getItem(GENDER_FILTER_STORAGE_KEY);
+      if (!raw) return 'all';
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed.value === 'string') {
+          const v = normalizeGenderFilterValue(parsed.value);
+          return v || 'all';
+        }
+      } catch(_) {
+        const v = normalizeGenderFilterValue(raw);
+        if (v) return v;
+      }
+    } catch(_){}
+    return 'all';
+  }
+
+  function persistGenderFilter(){
+    try {
+      localStorage.setItem(GENDER_FILTER_STORAGE_KEY, JSON.stringify({ value: userGenderFilter }));
+    } catch(_){}
+  }
+
+  let userGenderFilter = readStoredGenderFilter();
+  let userGenderFilterLabel = DEFAULT_FILTER_LABEL;
+
+  function syncGenderFilterLabel(){
+    if (userGenderFilter === 'all') {
+      userGenderFilterLabel = DEFAULT_FILTER_LABEL;
+    }
+    if (userFilterLabel) userFilterLabel.textContent = userGenderFilterLabel;
+    if (userFilterBtn) userFilterBtn.dataset.filter = userGenderFilter;
+  }
+
+  function buildGenderFilterOptions(){
+    if (!userFilterOptionsEl) return;
+    const seen = new Set();
+    const options = [];
+    if (Array.isArray(USERS)) {
+      for (const u of USERS) {
+        const gender = (u && u.gender ? String(u.gender) : '').trim();
+        if (!gender) continue;
+        const value = normalizeGenderFilterValue(gender);
+        if (!value || seen.has(value)) continue;
+        seen.add(value);
+        options.push({ value, label: gender });
+      }
+    }
+    options.sort((a, b) => a.label.localeCompare(b.label, 'sv'));
+
+    if (userGenderFilter !== 'all' && !seen.has(userGenderFilter)) {
+      userGenderFilter = 'all';
+      userGenderFilterLabel = DEFAULT_FILTER_LABEL;
+      persistGenderFilter();
+    }
+
+    if (userGenderFilter !== 'all') {
+      const match = options.find(opt => opt.value === userGenderFilter);
+      if (match) {
+        userGenderFilterLabel = match.label;
+      } else {
+        userGenderFilterLabel = DEFAULT_FILTER_LABEL;
+      }
+    }
+
+    const rows = [];
+    rows.push(`<button type="button" class="filter-option" data-filter="all" data-label="${safeEsc(DEFAULT_FILTER_LABEL)}" aria-pressed="${userGenderFilter==='all'?'true':'false'}">${safeEsc(DEFAULT_FILTER_LABEL)}</button>`);
+    for (const opt of options) {
+      rows.push(`<button type="button" class="filter-option" data-filter="${safeEsc(opt.value)}" data-label="${safeEsc(opt.label)}" aria-pressed="${opt.value===userGenderFilter?'true':'false'}">${safeEsc(opt.label)}</button>`);
+    }
+    userFilterOptionsEl.innerHTML = rows.join('');
+  }
+
+  function matchesGenderFilter(u){
+    if (userGenderFilter === 'all') return true;
+    const g = normalizeGenderFilterValue(u && u.gender ? u.gender : '');
+    return g === userGenderFilter;
+  }
+
+  function closeUserFilterMenu(){
+    if (!userFilterMenu) return;
+    userFilterMenu.hidden = true;
+    if (userFilterBtn) userFilterBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function openUserFilterMenu(){
+    if (!userFilterMenu) return;
+    userFilterMenu.hidden = false;
+    if (userFilterBtn) userFilterBtn.setAttribute('aria-expanded', 'true');
+    setTimeout(() => {
+      try {
+        userFilterOptionsEl?.querySelector('[aria-pressed="true"]')?.focus({ preventScroll: true });
+      } catch(_){}
+    }, 0);
+  }
+
+  function toggleUserFilterMenu(){
+    if (!userFilterMenu) return;
+    if (userFilterMenu.hidden) openUserFilterMenu(); else closeUserFilterMenu();
+  }
+
+  function setUserGenderFilter(value, label){
+    const normalized = value === 'all' ? 'all' : normalizeGenderFilterValue(value);
+    userGenderFilter = normalized || 'all';
+    userGenderFilterLabel = (userGenderFilter === 'all') ? DEFAULT_FILTER_LABEL : (label || DEFAULT_FILTER_LABEL);
+    persistGenderFilter();
+    syncGenderFilterLabel();
+    closeUserFilterMenu();
+    renderUsers();
+  }
+
+  userFilterBtn?.addEventListener('click', ev => {
+    ev.preventDefault();
+    toggleUserFilterMenu();
+  });
+
+  userFilterOptionsEl?.addEventListener('click', ev => {
+    const btn = ev.target.closest('[data-filter]');
+    if (!btn) return;
+    const value = btn.getAttribute('data-filter') || 'all';
+    const label = btn.getAttribute('data-label') || btn.textContent || DEFAULT_FILTER_LABEL;
+    setUserGenderFilter(value, label);
+  });
+
+  document.addEventListener('click', ev => {
+    if (!userFilterMenu || userFilterMenu.hidden) return;
+    const target = ev.target;
+    if (target instanceof Element) {
+      if (userFilterBtn?.contains(target)) return;
+      if (userFilterMenu.contains(target)) return;
+    }
+    closeUserFilterMenu();
+  });
+
+  userFilterMenu?.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeUserFilterMenu();
+      userFilterBtn?.focus();
+    }
+  });
+
+  syncGenderFilterLabel();
 
 // New buttons/inputs
 const pubCamBtn = document.getElementById('kk-pubCamBtn');
@@ -1364,8 +1540,14 @@ function userRow(u){
 }
 
   function renderUsers(){
-    const q = (userSearch.value||'').toLowerCase();
-    const sorted = sortUsersForList().filter(u=> (u.name||'').toLowerCase().includes(q));
+    buildGenderFilterOptions();
+    syncGenderFilterLabel();
+    const q = (userSearch?.value || '').trim().toLowerCase();
+    const sorted = sortUsersForList().filter(u=> {
+      const nm = (u.name||'').toLowerCase();
+      const matchesSearch = !q || nm.includes(q);
+      return matchesSearch && matchesGenderFilter(u);
+    });
     userListEl.innerHTML = sorted.map(userRow).join('');
     if (currentDM){ userListEl.querySelector(`[data-dm="${currentDM}"]`)?.setAttribute('aria-current','true'); }
     updateLeftCounts();

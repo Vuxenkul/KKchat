@@ -410,6 +410,129 @@ html, body { margin: 0; height: 100%; }
   border-radius: 12px;
 }
 
+#kkchat-root .people.people-search {
+  padding: 8px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#kkchat-root .people.people-search .people-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#kkchat-root .people.people-search input {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+#kkchat-root .people.people-search .user-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+#kkchat-root .people.people-search .user-filter-btn:hover {
+  background: #f3f4f6;
+}
+
+#kkchat-root .people.people-search .user-filter-btn:focus-visible {
+  outline: 2px solid var(--brand, #ef4444);
+  outline-offset: 2px;
+}
+
+#kkchat-root .people.people-search .user-filter-btn[data-filter]:not([data-filter="all"]) {
+  background: var(--brand, #ef4444);
+  border-color: var(--brand, #ef4444);
+  color: #fff;
+}
+
+#kkchat-root .people.people-search .user-filter-btn[data-filter]:not([data-filter="all"]):hover {
+  background: var(--brandD, #dc2626);
+}
+
+#kkchat-root .people.people-search .user-filter-btn[data-filter]:not([data-filter="all"]) img {
+  filter: brightness(0) invert(1);
+}
+
+#kkchat-root .people.people-search .user-filter-btn img {
+  width: 18px;
+  height: 18px;
+}
+
+#kkchat-root .people.people-search .user-filter-label {
+  line-height: 1;
+}
+
+#kkchat-root .people.people-search .user-filter-menu {
+  position: absolute;
+  top: 100%;
+  right: 8px;
+  margin-top: 6px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.15);
+  min-width: 200px;
+  max-width: min(260px, calc(100% - 16px));
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+#kkchat-root .people.people-search .user-filter-menu p.filter-title {
+  margin: 0;
+  font-weight: 700;
+  font-size: 14px;
+  color: #111827;
+}
+
+#kkchat-root .people.people-search .user-filter-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+#kkchat-root .people.people-search .user-filter-options .filter-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+#kkchat-root .people.people-search .user-filter-options .filter-option:hover {
+  background: #f3f4f6;
+}
+
+#kkchat-root .people.people-search .user-filter-options .filter-option[aria-pressed="true"] {
+  background: var(--brand, #ef4444);
+  border-color: var(--brand, #ef4444);
+  color: #fff;
+}
+
+#kkchat-root .people.people-search .user-filter-options .filter-option:focus-visible {
+  outline: 2px solid var(--brand, #ef4444);
+  outline-offset: 2px;
+}
+
 #kkchat-root .users {
   flex: 1 1 auto;
   min-height: 0;
