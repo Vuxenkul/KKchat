@@ -183,10 +183,45 @@ function kkchat_sanitize_room_slug(string $s): string {
 /* ------------------------------
  * Auth/session helpers
  * ------------------------------ */
-function kkchat_require_login() {
-  if (!isset($_SESSION['kkchat_user_id'], $_SESSION['kkchat_user_name'])) kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
+function kkchat_logout_session(bool $regenerate_id = true): void {
+  global $wpdb; $t = kkchat_tables();
+
+  if (!empty($_SESSION['kkchat_user_id'])) {
+    $wpdb->delete($t['users'], ['id' => (int) $_SESSION['kkchat_user_id']], ['%d']);
+  }
+
+  $preserve = [];
+  if (array_key_exists('kkchat_csrf', $_SESSION)) {
+    $preserve['kkchat_csrf'] = $_SESSION['kkchat_csrf'];
+  }
+
+  $_SESSION = $preserve;
+
+  if ($regenerate_id && function_exists('session_regenerate_id')) {
+    @session_regenerate_id(true);
+  }
 }
-function kkchat_user_ttl() { return 600; }
+
+function kkchat_require_login() {
+  if (!isset($_SESSION['kkchat_user_id'], $_SESSION['kkchat_user_name'])) {
+    kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
+  }
+
+  $ttl = (int) kkchat_user_ttl();
+  if ($ttl > 0) {
+    $last_active = (int) ($_SESSION['kkchat_last_active_at'] ?? 0);
+    if ($last_active > 0 && (time() - $last_active) > $ttl) {
+      kkchat_logout_session();
+      if (function_exists('kkchat_close_session_if_open')) {
+        kkchat_close_session_if_open();
+      }
+      kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
+    }
+  }
+
+  $_SESSION['kkchat_last_active_at'] = time();
+}
+function kkchat_user_ttl() { return 1800; }
 function kkchat_is_guest(): bool { return !empty($_SESSION['kkchat_is_guest']); }
 function kkchat_current_user_id(): int { return (int) ($_SESSION['kkchat_user_id'] ?? 0); }
 function kkchat_current_user_name(): string { return (string) ($_SESSION['kkchat_user_name'] ?? ''); }
@@ -239,6 +274,8 @@ function kkchat_touch_active_user(): int {
     ));
   }
   if ($id > 0) $_SESSION['kkchat_user_id'] = $id;
+
+  $_SESSION['kkchat_last_active_at'] = $now;
 
   return $id;
 }
