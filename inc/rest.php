@@ -127,13 +127,7 @@ add_action('rest_api_init', function () {
   register_rest_route($ns, '/logout', [
     'methods'  => ['GET','POST'],
     'callback' => function () {
-      global $wpdb; $t = kkchat_tables();
-      if (!empty($_SESSION['kkchat_user_id'])) {
-        $wpdb->delete($t['users'], ['id' => (int)$_SESSION['kkchat_user_id']], ['%d']);
-      }
-      // Keep only CSRF in session
-      $_SESSION = array_intersect_key($_SESSION, ['kkchat_csrf'=>true]);
-      if (function_exists('session_regenerate_id')) @session_regenerate_id(true);
+      kkchat_logout_session();
       kkchat_close_session_if_open(); // unlock after session mutation
       kkchat_json(['ok' => true]);
     },
@@ -348,14 +342,14 @@ function kk_computeMentionBumps(PDO $db, array $authUser, array $perRoom, array 
 register_rest_route($ns, '/sync', [
   'methods'  => 'GET',
   'callback' => function (WP_REST_Request $req) {
-    kkchat_require_login(); 
+    kkchat_require_login(false);
     kkchat_assert_not_blocked_or_fail();
     nocache_headers();
 
     global $wpdb; $t = kkchat_tables();
 
     // ✅ Count this as activity so presence doesn't expire
-    kkchat_touch_active_user();
+    kkchat_touch_active_user(false);
 
     // Read any session-derived values you need, then unlock the session
     $since_pub = isset($_SESSION['kkchat_seen_at_public']) ? (int)$_SESSION['kkchat_seen_at_public'] : 0;
@@ -939,14 +933,14 @@ register_rest_route($ns, '/ping', [
   'methods'  => ['GET','POST'],
   'callback' => function () {
     // Auth & access checks (may read/write session)
-    kkchat_require_login();
+    kkchat_require_login(false);
     kkchat_assert_not_blocked_or_fail();
 
     // Pings should never be cached
     nocache_headers();
 
     // Ensure/refresh my presence row (also ensures session knows my id)
-    $uid = kkchat_touch_active_user();
+    $uid = kkchat_touch_active_user(false);
 
     // Release the PHP session lock ASAP — ping is frequent
     kkchat_close_session_if_open();
@@ -1490,13 +1484,13 @@ register_rest_route($ns, '/fetch', [
 register_rest_route($ns, '/reads/mark', [
   'methods'  => 'POST',
   'callback' => function (WP_REST_Request $req) {
-    kkchat_require_login();
+    kkchat_require_login(false);
     kkchat_assert_not_blocked_or_fail();
     kkchat_check_csrf_or_fail($req);   // ✅ require CSRF
     nocache_headers();
 
-    // keep presence warm — but DON'T close the session yet (we'll write to $_SESSION below)
-    kkchat_touch_active_user();
+    // keep presence warm without refreshing the inactivity timer — we'll write to $_SESSION below
+    kkchat_touch_active_user(false);
 
     global $wpdb;
     $t  = kkchat_tables();
