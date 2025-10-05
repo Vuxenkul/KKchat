@@ -549,6 +549,45 @@ const camFlip   = document.getElementById('kk-camFlip');
   const imgActBlock  = document.getElementById('kk-img-act-block');
 
   const h = {'X-WP-Nonce': REST_NONCE};
+
+  let redirectingToLogin = false;
+  async function maybeRedirectToLogin(response){
+    if (!response || redirectingToLogin) return;
+
+    const status = Number(response.status) || 0;
+    if (status !== 401 && status !== 403) return;
+
+    let code = '';
+    try {
+      const contentType = response.headers?.get?.('Content-Type') || '';
+      if (contentType.toLowerCase().includes('application/json')) {
+        const payload = await response.clone().json();
+        const raw = (payload && (payload.err ?? payload.error)) ?? '';
+        if (typeof raw === 'string') {
+          code = raw;
+        } else if (raw != null) {
+          code = String(raw);
+        }
+      }
+    } catch(_) {}
+
+    const normalized = code.trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+    if (normalized !== 'not logged in') return;
+
+    redirectingToLogin = true;
+    try { clearLocalState(); } catch(_) {}
+    setTimeout(() => { try { window.location.reload(); } catch(_) {} }, 50);
+  }
+
+  if (typeof window.fetch === 'function' && !window.__kk_fetch_patched) {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      maybeRedirectToLogin(response).catch(()=>{});
+      return response;
+    };
+    window.__kk_fetch_patched = true;
+  }
   
   // === Seen / Read helpers ===============================================
 // Server "now" used as a watermark for public room read state
