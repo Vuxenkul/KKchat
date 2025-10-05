@@ -127,13 +127,7 @@ add_action('rest_api_init', function () {
   register_rest_route($ns, '/logout', [
     'methods'  => ['GET','POST'],
     'callback' => function () {
-      global $wpdb; $t = kkchat_tables();
-      if (!empty($_SESSION['kkchat_user_id'])) {
-        $wpdb->delete($t['users'], ['id' => (int)$_SESSION['kkchat_user_id']], ['%d']);
-      }
-      // Keep only CSRF in session
-      $_SESSION = array_intersect_key($_SESSION, ['kkchat_csrf'=>true]);
-      if (function_exists('session_regenerate_id')) @session_regenerate_id(true);
+      kkchat_logout_session();
       kkchat_close_session_if_open(); // unlock after session mutation
       kkchat_json(['ok' => true]);
     },
