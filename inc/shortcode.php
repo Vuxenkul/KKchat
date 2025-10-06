@@ -713,7 +713,9 @@ function openStream(){
   try {
     source = new EventSource(url, { withCredentials: true });
   } catch (_) {
+    try { window.__kkPollHealthy = false; } catch(_) {}
     scheduleStreamReconnect();
+    maybePollActiveFallback();
     return;
   }
 
@@ -740,6 +742,7 @@ function openStream(){
     try { window.__kkPollHealthy = false; } catch(_) {}
     stopStream();
     scheduleStreamReconnect();
+    maybePollActiveFallback();
   };
 }
 
@@ -2860,17 +2863,38 @@ async function pollActive(forceCold = false){
   } catch(_) {}
 }
 
+let lastHiddenAt = 0;
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
+    lastHiddenAt = Date.now();
     suspendStream();
   } else {
+    const hiddenFor = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
+    lastHiddenAt = 0;
     resumeStream();
-    pollActive().catch(()=>{});
+    pollActive(hiddenFor > 45000).catch(()=>{});
+    try { window.__kkMaybePollActiveFallback?.(hiddenFor > 1200); } catch(_) {}
   }
 });
 
-window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => {
+  pollActive().catch(()=>{});
+  restartStream();
+  try { window.__kkMaybePollActiveFallback?.(true); } catch(_) {}
+});
+
+window.addEventListener('online', () => {
+  pollActive().catch(()=>{});
+  restartStream();
+  try { window.__kkMaybePollActiveFallback?.(true); } catch(_) {}
+});
+
+window.addEventListener('pageshow', () => {
+  pollActive().catch(()=>{});
+  restartStream();
+  try { window.__kkMaybePollActiveFallback?.(true); } catch(_) {}
+});
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -3516,21 +3540,53 @@ jumpBtn.addEventListener('click', ()=>{
   window.addEventListener('online', touch);
 
   let pingTimer = null;
-    window.__kkPollHealthy = true;
-    
-    function schedulePingFallback(){
-      clearInterval(pingTimer);
-      pingTimer = setInterval(()=>{
-        // Only ping if tab is hidden or long-poll recently errored
-        if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
-        touch();
-      }, 120000); // 2 minutes
+  window.__kkPollHealthy = typeof EventSource === 'function';
+
+  let pollFallbackTimer = null;
+  let pollFallbackBusy  = false;
+
+  function maybePollActiveFallback(force = false){
+    if (pollFallbackBusy) return;
+    if (!force && document.visibilityState === 'hidden') return;
+
+    const sseSupported = typeof EventSource === 'function';
+    const healthy      = sseSupported ? window.__kkPollHealthy !== false : false;
+
+    if (!force && healthy && STREAM) return;
+
+    pollFallbackBusy = true;
+    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
+  }
+
+  function ensurePollFallback(){
+    if (pollFallbackTimer) return;
+    pollFallbackTimer = setInterval(maybePollActiveFallback, 20000);
+
+    if (!window.__kkPollHealthy || typeof EventSource !== 'function') {
+      setTimeout(maybePollActiveFallback, 1000);
     }
-    
-    schedulePingFallback();
-    document.addEventListener('visibilitychange', schedulePingFallback);
-    window.addEventListener('online', schedulePingFallback);
-    window.addEventListener('focus', schedulePingFallback);
+  }
+
+  try {
+    window.__kkMaybePollActiveFallback = maybePollActiveFallback;
+  } catch(_) {}
+
+  ensurePollFallback();
+
+  function schedulePingFallback(){
+    clearInterval(pingTimer);
+    pingTimer = setInterval(()=>{
+      // Only ping if tab is hidden or long-poll recently errored
+      if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
+      touch();
+      maybePollActiveFallback();
+    }, 120000); // 2 minutes
+  }
+
+  schedulePingFallback();
+  document.addEventListener('visibilitychange', schedulePingFallback);
+  window.addEventListener('online', schedulePingFallback);
+  window.addEventListener('focus', schedulePingFallback);
 
 })();
 
