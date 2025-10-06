@@ -128,6 +128,496 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_sync_build_context')) {
+    function kkchat_sync_build_context(WP_REST_Request $req): array {
+      kkchat_require_login();
+      kkchat_assert_not_blocked_or_fail();
+      nocache_headers();
+
+      global $wpdb; $t = kkchat_tables();
+
+      kkchat_touch_active_user();
+
+      $since_pub = isset($_SESSION['kkchat_seen_at_public']) ? (int) $_SESSION['kkchat_seen_at_public'] : 0;
+
+      $me             = kkchat_current_user_id();
+      $guest          = kkchat_is_guest() ? 1 : 0;
+      $is_admin_viewer = kkchat_is_admin();
+
+      kkchat_close_session_if_open();
+
+      $since = max(-1, (int) $req->get_param('since'));
+      $room  = kkchat_sanitize_room_slug((string) $req->get_param('room'));
+      if ($room === '') { $room = 'general'; }
+      $peer  = $req->get_param('to') !== null ? (int) $req->get_param('to') : null;
+      $onlyPub = $req->get_param('public') !== null;
+
+      $limit = (int) $req->get_param('limit');
+      if ($limit <= 0) { $limit = 200; }
+      $limit = max(1, min($limit, 200));
+
+      $timeout = max(5, min(25, (int) ($req->get_param('timeout') ?? 7)));
+      $do_lp   = ((string) $req->get_param('lp') === '1') && ($since >= 0);
+
+      return [
+        'tables'          => $t,
+        'me'              => $me,
+        'guest'           => $guest,
+        'is_admin_viewer' => $is_admin_viewer,
+        'since_pub'       => $since_pub,
+        'since'           => $since,
+        'room'            => $room,
+        'peer'            => $peer,
+        'only_public'     => $onlyPub,
+        'limit'           => $limit,
+        'timeout'         => $timeout,
+        'long_poll'       => $do_lp,
+      ];
+    }
+  }
+
+  if (!function_exists('kkchat_sync_wait_for_changes')) {
+    function kkchat_sync_wait_for_changes(array $ctx, int $timeout): void {
+      if (empty($ctx['long_poll'])) { return; }
+
+      $since = (int) ($ctx['since'] ?? -1);
+      if ($since < 0) { return; }
+
+      global $wpdb; $t = kkchat_tables();
+
+      $onlyPub = !empty($ctx['only_public']);
+      $room    = (string) ($ctx['room'] ?? 'general');
+      $me      = (int) ($ctx['me'] ?? 0);
+      $peer    = $ctx['peer'] !== null ? (int) $ctx['peer'] : null;
+
+      $checkNew = function () use ($wpdb, $t, $since, $onlyPub, $room, $me, $peer) {
+        if ($onlyPub) {
+          return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COALESCE(MAX(id),0)
+               FROM {$t['messages']}
+              WHERE recipient_id IS NULL
+                AND room = %s
+                AND hidden_at IS NULL
+                AND id > %d",
+            $room,
+            $since
+          ));
+        }
+
+        if ($peer) {
+          return (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COALESCE(MAX(id),0)
+               FROM {$t['messages']}
+              WHERE id > %d
+                AND hidden_at IS NULL
+                AND ((sender_id = %d AND recipient_id = %d) OR
+                     (sender_id = %d AND recipient_id = %d))",
+            $since, $me, $peer, $peer, $me
+          ));
+        }
+
+        return (int) $wpdb->get_var($wpdb->prepare(
+          "SELECT COALESCE(MAX(id),0)
+             FROM {$t['messages']}
+            WHERE id > %d
+              AND hidden_at IS NULL
+              AND (recipient_id = %d OR sender_id = %d)",
+          $since, $me, $me
+        ));
+      };
+
+      $deadline = time() + max(1, $timeout);
+
+      if ($checkNew() === 0) {
+        $sleepUs = (int) apply_filters('kkchat_longpoll_sleep_us', 1800000);
+        if ($sleepUs < 200000) { $sleepUs = 200000; }
+
+        while (time() < $deadline) {
+          kkchat_wpdb_close_connection();
+          usleep($sleepUs);
+          kkchat_wpdb_reconnect_if_needed();
+          if ($checkNew() > 0) { break; }
+        }
+
+        kkchat_wpdb_reconnect_if_needed();
+      }
+    }
+  }
+
+  if (!function_exists('kkchat_sync_build_payload')) {
+    function kkchat_sync_build_payload(array $ctx): array {
+      global $wpdb; $t = kkchat_tables();
+
+      $now = time();
+
+      $me      = (int) ($ctx['me'] ?? 0);
+      $guest   = !empty($ctx['guest']) ? 1 : 0;
+      $since   = (int) ($ctx['since'] ?? -1);
+      $room    = (string) ($ctx['room'] ?? 'general');
+      $peer    = $ctx['peer'] !== null ? (int) $ctx['peer'] : null;
+      $onlyPub = !empty($ctx['only_public']);
+      $limit   = (int) ($ctx['limit'] ?? 200);
+      $limit   = max(1, min($limit, 200));
+      $since_pub = (int) ($ctx['since_pub'] ?? 0);
+      $is_admin_viewer = !empty($ctx['is_admin_viewer']);
+
+      $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$t['users']}
+          WHERE %d - last_seen > %d",
+        $now, kkchat_user_ttl()
+      ));
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['users']}
+            SET watch_flag = 0, watch_flag_at = NULL
+          WHERE watch_flag = 1
+            AND watch_flag_at IS NOT NULL
+            AND %d - watch_flag_at > %d",
+        $now, kkchat_watch_reset_after()
+      ));
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['users']}
+            SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL
+          WHERE typing_at IS NOT NULL AND %d - typing_at > 10",
+        $now
+      ));
+
+      $admin_names = kkchat_admin_usernames();
+      $presence    = [];
+      if ($is_admin_viewer) {
+        $presence_rows = $wpdb->get_results(
+          $wpdb->prepare(
+            "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username,last_seen
+               FROM {$t['users']}
+              WHERE %d - last_seen <= %d
+              ORDER BY name_lc ASC
+              LIMIT %d",
+            $now,
+            max(30, (int) apply_filters('kkchat_presence_active_sec', 60)),
+            max(50, (int) apply_filters('kkchat_presence_limit', 1200))
+          ),
+          ARRAY_A
+        ) ?: [];
+
+        foreach ($presence_rows as $r) {
+          $typing = null;
+          if (!empty($r['typing_text']) && (int) $r['typing_at'] > $now - 8) {
+            $typing = [
+              'text' => (string) ($r['typing_text'] ?? ''),
+              'room' => ($r['typing_room'] ?? '') !== '' ? (string) $r['typing_room'] : null,
+              'to'   => isset($r['typing_to']) ? (int) $r['typing_to'] : null,
+              'at'   => (int) ($r['typing_at'] ?? 0),
+            ];
+          }
+
+          $presence[] = [
+            'id'       => (int) ($r['id'] ?? 0),
+            'name'     => (string) ($r['name'] ?? ''),
+            'gender'   => (string) ($r['gender'] ?? ''),
+            'typing'   => $typing,
+            'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
+            'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+            'last_seen'=> (int) ($r['last_seen'] ?? 0),
+          ];
+        }
+      } else {
+        $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
+        $presence = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [
+          'include_typing'  => false,
+          'include_flagged' => false,
+        ]);
+      }
+
+      $blocked = kkchat_blocked_ids($me);
+
+      $params = [$me, $me];
+      $blkClause = '';
+      if ($blocked) {
+        $blkClause = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $params[] = (int) $bid; }
+      }
+      $sqlPriv =
+        "SELECT COUNT(*) FROM {$t['messages']} m
+         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
+         WHERE m.recipient_id = %d
+           AND r.user_id IS NULL
+           AND m.hidden_at IS NULL
+         $blkClause";
+      $totPriv = (int) $wpdb->get_var($wpdb->prepare($sqlPriv, ...$params));
+
+      $paramsPub = [$me, $me, $since_pub, $guest];
+      $blkClausePub = '';
+      if ($blocked) {
+        $blkClausePub = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsPub[] = (int) $bid; }
+      }
+      $sqlPub =
+        "SELECT COUNT(*) FROM {$t['messages']} m
+         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
+         LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+         WHERE m.recipient_id IS NULL
+           AND m.sender_id <> %d
+           AND r.user_id IS NULL
+           AND rr.slug IS NOT NULL
+           AND m.created_at > %d
+           AND (%d = 0 OR rr.member_only = 0)
+           AND m.hidden_at IS NULL
+           $blkClausePub";
+      $totPub = (int) $wpdb->get_var($wpdb->prepare($sqlPub, ...$paramsPub));
+
+      $paramsPer = [$me, $me];
+      $blkPer = '';
+      if ($blocked) {
+        $blkPer = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsPer[] = (int) $bid; }
+      }
+      $sqlPer =
+        "SELECT m.sender_id, COUNT(*) AS c
+           FROM {$t['messages']} m
+     LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
+          WHERE m.recipient_id = %d
+            AND r.user_id IS NULL
+            AND m.hidden_at IS NULL
+            $blkPer
+       GROUP BY m.sender_id";
+      $per = [];
+      $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
+      foreach ($rowsPer as $r) { $per[(int) $r['sender_id']] = (int) $r['c']; }
+
+      $paramsRoom = [$me, $me, $since_pub, $guest];
+      $blkRoom = '';
+      if ($blocked) {
+        $blkRoom = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsRoom[] = (int) $bid; }
+      }
+      $sqlRoom =
+        "SELECT m.room AS slug, COUNT(*) AS c
+           FROM {$t['messages']} m
+     LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
+     LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+          WHERE m.recipient_id IS NULL
+            AND m.sender_id <> %d
+            AND r.user_id IS NULL
+            AND rr.slug IS NOT NULL
+            AND m.created_at > %d
+            AND (%d = 0 OR rr.member_only = 0)
+            AND m.hidden_at IS NULL
+            $blkRoom
+       GROUP BY m.room";
+      $perRoom = [];
+      $rowsRoom = $wpdb->get_results($wpdb->prepare($sqlRoom, ...$paramsRoom), ARRAY_A) ?: [];
+      foreach ($rowsRoom as $r) { $perRoom[$r['slug']] = (int) $r['c']; }
+
+      $unread = [
+        'totPriv' => $totPriv,
+        'totPub'  => $totPub,
+        'per'     => (object) $per,
+        'rooms'   => (object) $perRoom,
+      ];
+
+      $msgs = [];
+      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+      if ($onlyPub) {
+        if ($since < 0) {
+          $rows = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT $msgColumns FROM {$t['messages']}
+               WHERE recipient_id IS NULL
+                 AND room = %s
+                 AND hidden_at IS NULL
+               ORDER BY id DESC
+               LIMIT %d",
+              $room, $limit
+            ),
+            ARRAY_A
+          ) ?: [];
+          $rows = array_reverse($rows);
+        } else {
+          $rows = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT $msgColumns FROM {$t['messages']}
+               WHERE id > %d
+                 AND recipient_id IS NULL
+                 AND room = %s
+                 AND hidden_at IS NULL
+               ORDER BY id ASC
+               LIMIT %d",
+              $since, $room, $limit
+            ),
+            ARRAY_A
+          ) ?: [];
+        }
+      } else {
+        if ($peer) {
+          if ($since < 0) {
+            $rows = $wpdb->get_results(
+              $wpdb->prepare(
+                "(SELECT $msgColumns FROM {$t['messages']}
+                   WHERE sender_id = %d
+                     AND recipient_id = %d
+                     AND hidden_at IS NULL
+                   ORDER BY id DESC LIMIT %d)
+                 UNION ALL
+                 (SELECT $msgColumns FROM {$t['messages']}
+                   WHERE sender_id = %d
+                     AND recipient_id = %d
+                     AND hidden_at IS NULL
+                   ORDER BY id DESC LIMIT %d)
+                 ORDER BY id ASC
+                 LIMIT %d",
+                $me, $peer, $limit,
+                $peer, $me, $limit,
+                $limit
+              ),
+              ARRAY_A
+            ) ?: [];
+          } else {
+            $rows = $wpdb->get_results(
+              $wpdb->prepare(
+                "SELECT $msgColumns FROM {$t['messages']}
+                 WHERE id > %d
+                   AND hidden_at IS NULL
+                   AND ((sender_id = %d AND recipient_id = %d) OR
+                        (sender_id = %d AND recipient_id = %d))
+                 ORDER BY id ASC
+                 LIMIT %d",
+                $since, $me, $peer, $peer, $me, $limit
+              ),
+              ARRAY_A
+            ) ?: [];
+          }
+        } else {
+          $rows = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT $msgColumns FROM {$t['messages']}
+               WHERE id > %d
+                 AND (recipient_id = %d OR sender_id = %d)
+                 AND hidden_at IS NULL
+               ORDER BY id ASC
+               LIMIT %d",
+              $since, $me, $me, $limit
+            ),
+            ARRAY_A
+          ) ?: [];
+        }
+      }
+
+      if (!empty($rows)) {
+        if ($blocked) {
+          $rows = array_values(array_filter($rows, function ($r) use ($blocked, $me, $onlyPub) {
+            $sid = (int) $r['sender_id'];
+            if (!$onlyPub && $sid === $me) { return true; }
+            return !in_array($sid, $blocked, true);
+          }));
+        }
+
+        if (!empty($rows)) {
+          $ids = array_map(fn($r) => (int) $r['id'], $rows);
+          $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+          $read_rows = $wpdb->get_results(
+            $wpdb->prepare("SELECT message_id, user_id FROM {$t['reads']} WHERE message_id IN ($placeholders)", ...$ids),
+            ARRAY_A
+          ) ?: [];
+          $read_map = [];
+          foreach ($read_rows as $rr) {
+            $mid = (int) $rr['message_id'];
+            $uid = (int) $rr['user_id'];
+            $read_map[$mid][] = $uid;
+          }
+          foreach ($rows as $r) {
+            $mid = (int) $r['id'];
+            $msgs[] = [
+              'id'             => $mid,
+              'time'           => (int) $r['created_at'],
+              'kind'           => $r['kind'] ?: 'chat',
+              'room'           => $r['room'] ?: null,
+              'sender_id'      => (int) $r['sender_id'],
+              'sender_name'    => (string) $r['sender_name'],
+              'recipient_id'   => isset($r['recipient_id']) ? (int) $r['recipient_id'] : null,
+              'recipient_name' => $r['recipient_name'] ?: null,
+              'content'        => $r['content'],
+              'read_by'        => isset($read_map[$mid]) ? array_values(array_map('intval', $read_map[$mid])) : [],
+            ];
+          }
+        }
+      }
+
+      $urow = $wpdb->get_row($wpdb->prepare(
+        "SELECT name, wp_username FROM {$t['users']} WHERE id = %d LIMIT 1", $me
+      ), ARRAY_A);
+      $dispName = trim((string) ($urow['name'] ?? '')) ?: ('User' . $me);
+      $wpUser   = trim((string) ($urow['wp_username'] ?? ''));
+      $parts    = array_filter([preg_quote($dispName, '/'), $wpUser !== '' ? preg_quote($wpUser, '/') : null]);
+      $nameAlt  = implode('|', $parts);
+      $mentionRe = $nameAlt !== '' ? "/(^|[^\\w])@(?:{$nameAlt})(?=$|\\W)/i" : null;
+
+      $mention_bumps = [];
+      if ($mentionRe && !empty($perRoom)) {
+        $mentionSlugs = [];
+        foreach ($perRoom as $slug => $count) {
+          if ((int) $count > 0) {
+            $mentionSlugs[] = (string) $slug;
+          }
+        }
+
+        if ($mentionSlugs) {
+          $paramsMB = [$me, $since_pub, $guest];
+          if ($blocked) {
+            foreach ($blocked as $bid) { $paramsMB[] = (int) $bid; }
+            $blkList = implode(',', array_fill(0, count($blocked), '%d'));
+            $blkSql  = " AND m.sender_id NOT IN ($blkList)";
+          } else {
+            $blkSql = '';
+          }
+          $inClause = implode(',', array_fill(0, count($mentionSlugs), '%s'));
+          foreach ($mentionSlugs as $slug) { $paramsMB[] = $slug; }
+
+          $sqlMB =
+            "SELECT m.room, m.content
+               FROM {$t['messages']} m
+          LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
+          LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+              WHERE m.recipient_id IS NULL
+                AND m.sender_id <> %d
+                AND r.user_id IS NULL
+                AND rr.slug IS NOT NULL
+                AND m.created_at > %d
+                AND (%d = 0 OR rr.member_only = 0)
+                AND m.hidden_at IS NULL
+                $blkSql
+                AND m.room IN ($inClause)
+           ORDER BY m.id DESC
+              LIMIT 300";
+          $rowsMB = $wpdb->get_results($wpdb->prepare($sqlMB, ...$paramsMB), ARRAY_A) ?: [];
+
+          $grouped = [];
+          foreach ($rowsMB as $rowMB) {
+            $slug = (string) ($rowMB['slug'] ?? ($rowMB['room'] ?? ''));
+            if ($slug === '') { continue; }
+            if (!isset($grouped[$slug])) { $grouped[$slug] = []; }
+            if (count($grouped[$slug]) >= 30) { continue; }
+            $grouped[$slug][] = (string) ($rowMB['content'] ?? '');
+          }
+
+          foreach ($mentionSlugs as $slug) {
+            $hit = false;
+            foreach ($grouped[$slug] ?? [] as $content) {
+              if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
+            }
+            $mention_bumps[$slug] = $hit ? true : false;
+          }
+        }
+      }
+
+      return [
+        'now'           => $now,
+        'unread'        => $unread,
+        'presence'      => $presence,
+        'messages'      => $msgs,
+        'mention_bumps' => (object) $mention_bumps,
+      ];
+    }
+  }
+
   /* =========================================================
    *                     AUTH
    * ========================================================= */
@@ -452,467 +942,72 @@ function kk_computeMentionBumps(PDO $db, array $authUser, array $perRoom, array 
 register_rest_route($ns, '/sync', [
   'methods'  => 'GET',
   'callback' => function (WP_REST_Request $req) {
-    kkchat_require_login(); 
-    kkchat_assert_not_blocked_or_fail();
-    nocache_headers();
-
-    global $wpdb; $t = kkchat_tables();
-
-    // ✅ Count this as activity so presence doesn't expire
-    kkchat_touch_active_user();
-
-    // Read any session-derived values you need, then unlock the session
-    $since_pub = isset($_SESSION['kkchat_seen_at_public']) ? (int)$_SESSION['kkchat_seen_at_public'] : 0;
-
-    $me      = kkchat_current_user_id();
-    $guest   = kkchat_is_guest() ? 1 : 0;
-    $is_admin_viewer = kkchat_is_admin();
-    kkchat_close_session_if_open();
-    $since   = max(-1, (int)$req->get_param('since'));
-    $room    = kkchat_sanitize_room_slug((string)$req->get_param('room'));
-    if ($room === '') $room = 'general';
-    $peer    = $req->get_param('to') !== null ? (int)$req->get_param('to') : null;
-    $onlyPub = $req->get_param('public') !== null;
-    $limit   = (int)$req->get_param('limit');
-    if ($limit <= 0) $limit = 200;
-    $limit   = max(1, min($limit, 200));
-
-    // Optional long-polling flags
-    $do_lp    = ((string)$req->get_param('lp') === '1') && ($since >= 0); // only long-poll with a cursor
-    $tmo      = max(5, min(25, (int)($req->get_param('timeout') ?? 7)));
-    $deadline = $do_lp ? (time() + $tmo) : 0;
-
-    /* ----------------- lightweight long-poll wait ----------------- */
-    if ($do_lp) {
-      $checkNew = function() use ($wpdb, $t, $since, $onlyPub, $room, $me, $peer) {
-        if ($onlyPub) {
-          return (int)$wpdb->get_var($wpdb->prepare(
-            "SELECT COALESCE(MAX(id),0)
-               FROM {$t['messages']}
-              WHERE recipient_id IS NULL
-                AND room = %s
-                AND hidden_at IS NULL
-                AND id > %d",
-            $room, $since
-          ));
-        }
-        if ($peer) {
-          return (int)$wpdb->get_var($wpdb->prepare(
-            "SELECT COALESCE(MAX(id),0)
-               FROM {$t['messages']}
-              WHERE id > %d
-                AND hidden_at IS NULL
-                AND ((sender_id = %d AND recipient_id = %d) OR
-                     (sender_id = %d AND recipient_id = %d))",
-            $since, $me, $peer, $peer, $me
-          ));
-        }
-        // Fallback: any new DM involving me
-        return (int)$wpdb->get_var($wpdb->prepare(
-          "SELECT COALESCE(MAX(id),0)
-             FROM {$t['messages']}
-            WHERE id > %d
-              AND hidden_at IS NULL
-              AND (recipient_id = %d OR sender_id = %d)",
-          $since, $me, $me
-        ));
-      };
-
-      if ($checkNew() === 0) {
-        $sleepUs = (int) apply_filters('kkchat_longpoll_sleep_us', 1800000);
-        if ($sleepUs < 200000) { $sleepUs = 200000; }
-        while (time() < $deadline) {
-        kkchat_wpdb_close_connection();
-          usleep($sleepUs); // allow DB to serve other clients while idle
-          kkchat_wpdb_reconnect_if_needed();
-          if ($checkNew() > 0) break;
-        }
-                kkchat_wpdb_reconnect_if_needed();
-      }
-    }
-
-    // Recompute $now after any wait to keep TTL math accurate
-    $now = time();
-
-    /* ------------ presence (active users) ------------ */
-    // Cleanup (presence purge can be heavy; keep it but feel free to make it probabilistic if needed)
-    $wpdb->query($wpdb->prepare(
-      "DELETE FROM {$t['users']}
-        WHERE %d - last_seen > %d",
-      $now, kkchat_user_ttl()
-    ));
-    $wpdb->query($wpdb->prepare(
-      "UPDATE {$t['users']}
-          SET watch_flag = 0, watch_flag_at = NULL
-        WHERE watch_flag = 1
-          AND watch_flag_at IS NOT NULL
-          AND %d - watch_flag_at > %d",
-      $now, kkchat_watch_reset_after()
-    ));
-    $wpdb->query($wpdb->prepare(
-      "UPDATE {$t['users']}
-          SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL
-        WHERE typing_at IS NOT NULL AND %d - typing_at > 10",
-      $now
-    ));
-
-    $admin_names = kkchat_admin_usernames();
-    $presence    = [];
-    if ($is_admin_viewer) {
-      $presence_rows = $wpdb->get_results(
-        $wpdb->prepare(
-          "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username,last_seen
-             FROM {$t['users']}
-            WHERE %d - last_seen <= %d
-            ORDER BY name_lc ASC
-            LIMIT %d",
-          $now,
-          max(30, (int)apply_filters('kkchat_presence_active_sec', 60)),
-          max(50, (int)apply_filters('kkchat_presence_limit', 1200))
-        ),
-        ARRAY_A
-      ) ?: [];
-
-      // 10s window for typing to be considered "active"
-      $presence = array_map(function($r) use ($now, $admin_names) {
-        $typing = null;
-        if (!empty($r['typing_text']) && (int)$r['typing_at'] > $now - 10) {
-          $typing = [
-            'text' => $r['typing_text'],
-            'room' => $r['typing_room'] ?: null,
-            'to'   => isset($r['typing_to']) ? (int)$r['typing_to'] : null,
-            'at'   => (int)$r['typing_at'],
-          ];
-        }
-        return [
-          'id'       => (int)$r['id'],
-          'name'     => (string)$r['name'],
-          'gender'   => (string)$r['gender'],
-          'typing'   => $typing,
-          'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
-          'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-        ];
-      }, $presence_rows);
-    } else {
-      $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
-      $presence = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [
-        'include_typing'  => false,
-        'include_flagged' => false,
-      ]);
-    }
-
-    /* ------------ unread counts ------------ */
-    $blocked = kkchat_blocked_ids($me);
-
-    // Private total
-    $params = [$me, $me];
-    $blkClause = '';
-    if ($blocked) {
-      $blkClause = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-      foreach ($blocked as $bid) $params[] = (int)$bid;
-    }
-    $sqlPriv =
-      "SELECT COUNT(*) FROM {$t['messages']} m
-       LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-       WHERE m.recipient_id = %d
-         AND r.user_id IS NULL
-         AND m.hidden_at IS NULL
-       $blkClause";
-    $totPriv = (int)$wpdb->get_var($wpdb->prepare($sqlPriv, ...$params));
-
-    // Public total (since last seen in public)
-    $paramsPub = [$me, $me, $since_pub, $guest];
-    $blkClausePub = '';
-    if ($blocked) {
-      $blkClausePub = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-      foreach ($blocked as $bid) $paramsPub[] = (int)$bid;
-    }
-    $sqlPub =
-      "SELECT COUNT(*) FROM {$t['messages']} m
-       LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-       LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-       WHERE m.recipient_id IS NULL
-         AND m.sender_id <> %d
-         AND r.user_id IS NULL
-         AND rr.slug IS NOT NULL
-         AND m.created_at > %d
-         AND (%d = 0 OR rr.member_only = 0)
-         AND m.hidden_at IS NULL
-         $blkClausePub";
-    $totPub = (int)$wpdb->get_var($wpdb->prepare($sqlPub, ...$paramsPub));
-
-    // Per-sender DMs
-    $paramsPer = [$me, $me];
-    $blkPer = '';
-    if ($blocked) {
-      $blkPer = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-      foreach ($blocked as $bid) $paramsPer[] = (int)$bid;
-    }
-    $sqlPer =
-      "SELECT m.sender_id, COUNT(*) AS c
-         FROM {$t['messages']} m
-    LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-        WHERE m.recipient_id = %d
-          AND r.user_id IS NULL
-          AND m.hidden_at IS NULL
-          $blkPer
-     GROUP BY m.sender_id";
-    $per = [];
-    $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
-    foreach ($rowsPer as $r) $per[(int)$r['sender_id']] = (int)$r['c'];
-
-    // Per-room public
-    $paramsRoom = [$me, $me, $since_pub, $guest];
-    $blkRoom = '';
-    if ($blocked) {
-      $blkRoom = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-      foreach ($blocked as $bid) $paramsRoom[] = (int)$bid;
-    }
-    $sqlRoom =
-      "SELECT m.room AS slug, COUNT(*) AS c
-         FROM {$t['messages']} m
-    LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-    LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-        WHERE m.recipient_id IS NULL
-          AND m.sender_id <> %d
-          AND r.user_id IS NULL
-          AND rr.slug IS NOT NULL
-          AND m.created_at > %d
-          AND (%d = 0 OR rr.member_only = 0)
-          AND m.hidden_at IS NULL
-          $blkRoom
-     GROUP BY m.room";
-    $perRoom = [];
-    $rowsRoom = $wpdb->get_results($wpdb->prepare($sqlRoom, ...$paramsRoom), ARRAY_A) ?: [];
-    foreach ($rowsRoom as $r) $perRoom[$r['slug']] = (int)$r['c'];
-
-    $unread = [
-      'totPriv' => $totPriv,
-      'totPub'  => $totPub,
-      'per'     => (object)$per,
-      'rooms'   => (object)$perRoom,
-    ];
-
-    /* ------------ messages (like /fetch) ------------ */
-    $msgs = [];
-    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
-    if ($onlyPub) {
-      if ($since < 0) {
-        $rows = $wpdb->get_results(
-          $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
-             WHERE recipient_id IS NULL
-               AND room = %s
-               AND hidden_at IS NULL
-             ORDER BY id DESC
-             LIMIT %d",
-            $room, $limit
-          ),
-          ARRAY_A
-        ) ?: [];
-        $rows = array_reverse($rows);
-      } else {
-        $rows = $wpdb->get_results(
-          $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
-             WHERE id > %d
-               AND recipient_id IS NULL
-               AND room = %s
-               AND hidden_at IS NULL
-             ORDER BY id ASC
-             LIMIT %d",
-            $since, $room, $limit
-          ),
-          ARRAY_A
-        ) ?: [];
-      }
-    } else {
-      if ($peer) {
-        if ($since < 0) {
-          $rows = $wpdb->get_results(
-            $wpdb->prepare(
-              "(SELECT $msgColumns FROM {$t['messages']}
-                 WHERE sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id DESC LIMIT %d)
-               UNION ALL
-               (SELECT $msgColumns FROM {$t['messages']}
-                 WHERE sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id DESC LIMIT %d)
-               ORDER BY id ASC
-               LIMIT %d",
-              $me, $peer, $limit,
-              $peer, $me, $limit,
-              $limit
-            ),
-            ARRAY_A
-          ) ?: [];
-        } else {
-          $rows = $wpdb->get_results(
-            $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
-               WHERE id > %d
-                 AND hidden_at IS NULL
-                 AND ((sender_id = %d AND recipient_id = %d) OR
-                      (sender_id = %d AND recipient_id = %d))
-               ORDER BY id ASC
-               LIMIT %d",
-              $since, $me, $peer, $peer, $me, $limit
-            ),
-            ARRAY_A
-          ) ?: [];
-        }
-      } else {
-        // Legacy: all DMs to/from me (kept for compatibility)
-        $rows = $wpdb->get_results(
-          $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
-             WHERE id > %d
-               AND (recipient_id = %d OR sender_id = %d)
-               AND hidden_at IS NULL
-             ORDER BY id ASC
-             LIMIT %d",
-            $since, $me, $me, $limit
-          ),
-          ARRAY_A
-        ) ?: [];
-      }
-    }
-
-    // Apply block filter + attach read_by
-    if (!empty($rows)) {
-      if ($blocked) {
-        $rows = array_values(array_filter($rows, function($r) use ($blocked, $me, $onlyPub){
-          $sid = (int)$r['sender_id'];
-          if (!$onlyPub && $sid === $me) return true; // show own DMs
-          return !in_array($sid, $blocked, true);
-        }));
-      }
-      if (!empty($rows)) {
-        $ids = array_map(fn($r)=>(int)$r['id'], $rows);
-        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-        $read_rows = $wpdb->get_results(
-          $wpdb->prepare("SELECT message_id, user_id FROM {$t['reads']} WHERE message_id IN ($placeholders)", ...$ids),
-          ARRAY_A
-        ) ?: [];
-        $read_map = [];
-        foreach ($read_rows as $rr) {
-          $mid = (int)$rr['message_id']; $uid = (int)$rr['user_id'];
-          $read_map[$mid][] = $uid;
-        }
-        foreach ($rows as $r) {
-          $mid = (int)$r['id'];
-          $msgs[] = [
-            'id'             => $mid,
-            'time'           => (int)$r['created_at'],
-            'kind'           => $r['kind'] ?: 'chat',
-            'room'           => $r['room'] ?: null,
-            'sender_id'      => (int)$r['sender_id'],
-            'sender_name'    => (string)$r['sender_name'],
-            'recipient_id'   => isset($r['recipient_id']) ? (int)$r['recipient_id'] : null,
-            'recipient_name' => $r['recipient_name'] ?: null,
-            'content'        => $r['content'],
-            'read_by'        => isset($read_map[$mid]) ? array_values(array_map('intval',$read_map[$mid])) : [],
-          ];
-        }
-      }
-    }
-
-    /* ------------ mention hints for public rooms ------------ */
-    // Build mention regex for current user (match @Display Name or @wp_username, case-insensitive)
-    $urow = $wpdb->get_row($wpdb->prepare(
-      "SELECT name, wp_username FROM {$t['users']} WHERE id = %d LIMIT 1", $me
-    ), ARRAY_A);
-    $dispName = trim((string)($urow['name'] ?? '')) ?: ('User'.$me);
-    $wpUser   = trim((string)($urow['wp_username'] ?? ''));
-    $parts    = array_filter([preg_quote($dispName, '/'), $wpUser !== '' ? preg_quote($wpUser, '/') : null]);
-    $nameAlt  = implode('|', $parts);
-    // (^|[^\w]) ensures non-word or start before '@'; (?=$|\W) ensures a boundary after the name
-    $mentionRe = $nameAlt !== '' ? "/(^|[^\\w])@(?:{$nameAlt})(?=$|\\W)/i" : null;
-
-    $mention_bumps = [];
-    if ($mentionRe && !empty($perRoom)) {
-      $mentionSlugs = [];
-      foreach ($perRoom as $slug => $count) {
-        if ((int)$count > 0) {
-          $mentionSlugs[] = (string)$slug;
-        }
-      }
-
-      if (!empty($mentionSlugs)) {
-        $paramsMB = [$me, $me];
-        $placeholders = implode(',', array_fill(0, count($mentionSlugs), '%s'));
-        foreach ($mentionSlugs as $slug) {
-          $paramsMB[] = $slug;
-        }
-        $paramsMB[] = $since_pub;
-        $paramsMB[] = $guest;
-
-        $blkMB = '';
-        if ($blocked) {
-          $blkMB = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-          foreach ($blocked as $bid) {
-            $paramsMB[] = (int)$bid;
-          }
-        }
-
-        $paramsMB[] = 30 * count($mentionSlugs);
-
-        $sqlMB =
-          "SELECT m.room AS slug, m.content
-             FROM {$t['messages']} m
-        LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-        LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-            WHERE m.recipient_id IS NULL
-              AND m.sender_id <> %d
-              AND r.user_id IS NULL
-              AND rr.slug IN ({$placeholders})
-              AND rr.slug IS NOT NULL
-              AND m.created_at > %d
-              AND (%d = 0 OR rr.member_only = 0)
-              AND m.hidden_at IS NULL
-              $blkMB
-         ORDER BY m.id DESC
-            LIMIT %d";
-
-        $rowsMB = $wpdb->get_results($wpdb->prepare($sqlMB, ...$paramsMB), ARRAY_A) ?: [];
-
-        $grouped = [];
-        foreach ($rowsMB as $rowMB) {
-          $slug = (string)($rowMB['slug'] ?? '');
-          if ($slug === '') continue;
-          if (!isset($grouped[$slug])) $grouped[$slug] = [];
-          if (count($grouped[$slug]) >= 30) continue;
-          $grouped[$slug][] = (string)($rowMB['content'] ?? '');
-        }
-
-        foreach ($mentionSlugs as $slug) {
-          $hit = false;
-          foreach ($grouped[$slug] ?? [] as $content) {
-            if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
-          }
-          $mention_bumps[$slug] = $hit ? true : false;
-        }
-      }
-    }
-
-    kkchat_json([
-      'now'           => $now,
-      'unread'        => $unread,
-      'presence'      => $presence,
-      'messages'      => $msgs,
-      'mention_bumps' => (object)$mention_bumps, // e.g. { "general": true, "photography": false }
-    ]);
+    $ctx = kkchat_sync_build_context($req);
+    kkchat_sync_wait_for_changes($ctx, (int) ($ctx['timeout'] ?? 7));
+    $payload = kkchat_sync_build_payload($ctx);
+    kkchat_json($payload);
   },
   'permission_callback' => '__return_true',
 ]);
 
-  /* =========================================================
-   *                     Core endpoints (guarded)
-   * ========================================================= */
+register_rest_route($ns, '/stream', [
+  'methods'  => 'GET',
+  'callback' => function (WP_REST_Request $req) {
+    $ctx = kkchat_sync_build_context($req);
+
+    if (!headers_sent()) {
+      header('Content-Type: text/event-stream; charset=UTF-8');
+      header('Cache-Control: no-cache, no-transform');
+      header('X-Accel-Buffering: no');
+    }
+
+    if (function_exists('apache_setenv')) { @apache_setenv('no-gzip', '1'); }
+    @ini_set('zlib.output_compression', '0');
+    while (ob_get_level() > 0) { @ob_end_flush(); }
+    @ob_implicit_flush(1);
+    echo ":connected\n\n";
+    @flush();
+
+    ignore_user_abort(true);
+
+    $timeout   = (int) ($ctx['timeout'] ?? 7);
+    $cursor    = (int) ($ctx['since'] ?? -1);
+    $firstLoop = true;
+
+    while (!connection_aborted()) {
+      $loopCtx = $ctx;
+      $loopCtx['since'] = $cursor;
+      $loopCtx['long_poll'] = ($cursor >= 0);
+
+      if (!$firstLoop && $loopCtx['long_poll']) {
+        kkchat_sync_wait_for_changes($loopCtx, $timeout);
+      } elseif (!$firstLoop) {
+        usleep(250000);
+      }
+
+      $payload = kkchat_sync_build_payload($loopCtx);
+
+      $maxId = $cursor;
+      foreach (($payload['messages'] ?? []) as $msg) {
+        $mid = isset($msg['id']) ? (int) $msg['id'] : null;
+        if ($mid !== null) { $maxId = max($maxId, $mid); }
+      }
+      $cursor = $maxId;
+
+      $json = wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+      if ($json === false) { $json = '{}'; }
+
+      echo "event: sync\n";
+      echo "data: {$json}\n\n";
+      @flush();
+
+      $firstLoop = false;
+    }
+
+    exit;
+  },
+  'permission_callback' => '__return_true',
+]);
 
 register_rest_route($ns, '/users', [
   'methods'  => 'GET',

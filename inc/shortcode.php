@@ -647,14 +647,118 @@ function hasMediaDevices(){
 }
 
 
-let POLL_CTL = null;
-function newSignal(ms = 30000){
-  try { POLL_CTL?.abort(); } catch(_) {}
-  POLL_CTL = new AbortController();
-  // kill the request if it outlives the server timeout window (safety net)
-  const t = setTimeout(() => { try { POLL_CTL.abort(); } catch(_){} }, ms);
-  POLL_CTL.signal.addEventListener('abort', () => clearTimeout(t));
-  return POLL_CTL.signal;
+const STREAM_RETRY_MS = 2500;
+let STREAM = null;
+let STREAM_ID = 0;
+let STREAM_TIMER = null;
+let STREAM_SUSPENDED = false;
+
+function desiredStreamState(){
+  if (currentDM) { return { kind: 'dm', to: Number(currentDM) }; }
+  if (currentRoom) { return { kind: 'room', room: currentRoom }; }
+  return null;
+}
+
+function computeStreamParams(state){
+  const params = new URLSearchParams();
+  const last = +pubList.dataset.last || -1;
+  const isCold = last < 0;
+  params.set('since', String(last));
+  params.set('limit', isCold ? String(FIRST_LOAD_LIMIT) : '250');
+  params.set('timeout', '25');
+  params.set('_wpnonce', REST_NONCE);
+  if (state.kind === 'dm') {
+    params.set('to', String(state.to));
+  } else {
+    params.set('public', '1');
+    params.set('room', state.room);
+  }
+  return params;
+}
+
+function stopStream(){
+  if (STREAM) {
+    try { STREAM.close(); } catch(_) {}
+  }
+  STREAM = null;
+  STREAM_ID++;
+  if (STREAM_TIMER) {
+    clearTimeout(STREAM_TIMER);
+    STREAM_TIMER = null;
+  }
+}
+
+function scheduleStreamReconnect(delay = STREAM_RETRY_MS){
+  if (STREAM_SUSPENDED) return;
+  if (STREAM_TIMER) return;
+  if (!desiredStreamState()) return;
+  STREAM_TIMER = setTimeout(() => {
+    STREAM_TIMER = null;
+    openStream();
+  }, delay);
+}
+
+function openStream(){
+  if (STREAM_SUSPENDED) return;
+  if (typeof EventSource !== 'function') return;
+  const state = desiredStreamState();
+  if (!state) return;
+
+  const params = computeStreamParams(state);
+  const url = `${API}/stream?${params.toString()}`;
+
+  stopStream();
+
+  let source;
+  try {
+    source = new EventSource(url, { withCredentials: true });
+  } catch (_) {
+    scheduleStreamReconnect();
+    return;
+  }
+
+  const id = ++STREAM_ID;
+  const context = { ...state };
+  STREAM = source;
+
+  source.onopen = () => { try { window.__kkPollHealthy = true; } catch(_) {}; };
+
+  source.addEventListener('sync', ev => {
+    if (STREAM_ID !== id) return;
+    try { window.__kkPollHealthy = true; } catch(_) {}
+    let payload;
+    try { payload = JSON.parse(ev.data); } catch(_) { return; }
+    if (payload && Number.isFinite(+payload.now)) {
+      LAST_SERVER_NOW = +payload.now;
+    } else {
+      LAST_SERVER_NOW = Math.floor(Date.now()/1000);
+    }
+    handleStreamSync(payload, context);
+  });
+
+  source.onerror = () => {
+    try { window.__kkPollHealthy = false; } catch(_) {}
+    stopStream();
+    scheduleStreamReconnect();
+  };
+}
+
+function suspendStream(){
+  STREAM_SUSPENDED = true;
+  stopStream();
+}
+
+function resumeStream(){
+  if (!STREAM_SUSPENDED) return;
+  STREAM_SUSPENDED = false;
+  openStream();
+}
+
+function restartStream(){
+  stopStream();
+  if (!STREAM_SUSPENDED) {
+    openStream();
+  }
 }
 
 // --- SOUND MUTE WINDOW -----------------------------------------
@@ -680,21 +784,6 @@ function playNotifOnce() {
 }
 
 
-
-async function fetchJSONCancelable(url, signal){
-  const r = await fetch(url, { credentials:'include', cache:'no-cache', headers:h, signal });
-
-  if (!r.ok){
-    let js={}; try{ js = await r.json(); }catch(_){}
-    if (js.err === 'kicked' || js.err === 'ip_banned') {
-      alert(js.err === 'ip_banned' ? 'Regelbrott - Bannad' : 'Regelbrott - Kickad');
-      location.reload();
-      return [];
-    }
-    throw new Error('fetch '+url);
-  }
-  return r.json();
-}
 
   const AUTO_KEY = 'kk_autoscroll';
   let AUTO_SCROLL = (localStorage.getItem(AUTO_KEY) ?? '1') === '1';
@@ -2055,13 +2144,14 @@ let currentDM = null;
     saveDMActive(ACTIVE_DMS);
 
 if (currentDM === id){
-    muteFor(1200);                    
-  try { POLL_CTL?.abort(); } catch(_){}
+    muteFor(1200);
+  stopStream();
   currentDM = null;
   applyCache(activeCacheKey());
   setComposerAccess();
   showView('vPublic');
-  pollActive();
+  pollActive().catch(()=>{});
+  openStream();
 }
     renderDMSidebar();
     renderRoomTabs();
@@ -2375,7 +2465,7 @@ function renderRoomTabs(){
     if (!allowed) ta.removeAttribute('aria-label'); else ta.setAttribute('aria-label', 'Skriv ett meddelande');
   }
 
-roomTabs.addEventListener('click', e => {
+roomTabs.addEventListener('click', async e => {
   const closer = e.target.closest('.tab-close[data-close-dm]');
   if (closer) {
     e.preventDefault();
@@ -2453,9 +2543,7 @@ roomTabs.addEventListener('click', e => {
   if (dmBtn) {
     muteFor(1200);
     const id = +dmBtn.dataset.dm;
-    try { POLL_CTL?.abort(); } catch (_) {}
-    // openDM handles cache-hit and schedules a fast fetch internally
-    openDM(id);
+    await openDM(id);
     return;
   }
 
@@ -2470,6 +2558,7 @@ roomTabs.addEventListener('click', e => {
   if (!room.allowed) { showToast('Endast för medlemmar'); return; }
 
   muteFor(1200);
+  stopStream();
   stashActive();
   currentDM = null;
   currentRoom = slug;
@@ -2478,20 +2567,15 @@ roomTabs.addEventListener('click', e => {
 
 const cacheHit = applyCache(cacheKeyForRoom(slug));
 setComposerAccess();
+showView('vPublic');
 
-// 1) cancel any in-flight long-poll from prior tab
-try { POLL_CTL?.abort(); } catch(_){}
-
-
-// 3) kick a fast, non-long-poll fetch to drain backlog now
-setTimeout(() => { pollActive().catch(()=>{}); }, 0);
-
-// 4) longPollLoop() is already running; the next pollActive()
-//     will set lp=1 only after the backlog is drained.
 if (cacheHit) {
   markVisible(pubList);
 }
-  // (No else branch — fast fetch already scheduled)
+  // (No else branch — fetch happens immediately below)
+
+  await pollActive();
+  openStream();
 });
 
 document.addEventListener('click', e => {
@@ -2569,7 +2653,7 @@ leftTabs?.addEventListener('click', async (e) => {
   }
 });
 
-roomsListEl?.addEventListener('click', (e) => {
+roomsListEl?.addEventListener('click', async (e) => {
   const j = e.target.closest('[data-join]');
   const l = e.target.closest('[data-leave]');
   if (!j && !l) return;
@@ -2596,18 +2680,19 @@ roomsListEl?.addEventListener('click', (e) => {
       const next = ROOMS.find(r => JOINED.has(r.slug) && r.allowed)?.slug || defaultRoomSlug();
       if (next && next !== currentRoom) {
             muteFor(1200);
-        try { POLL_CTL?.abort(); } catch (_) {}
+        stopStream();
         currentRoom = next;
-        setTimeout(() => { pollActive().catch(()=>{}); }, 0); 
         const cacheHit = applyCache(cacheKeyForRoom(currentRoom));
         setComposerAccess();
+        showView('vPublic');
 
         if (cacheHit) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
-        } else {
-          pollActive();
         }
+
+        await pollActive();
+        openStream();
       }
     }
 
@@ -2675,42 +2760,31 @@ function didAppendNew(payload, prevLast) {
   return false;
 }
 
-async function pollRoom(){
-  if (!isVisible(pubList)) { await new Promise(r => setTimeout(r, 800)); return; }
-  try{
-    const prevLast     = +pubList.dataset.last || -1;
-    const isCold       = prevLast < 0;
-    const wasAtBottom  = atBottom(pubList);
-    const roomAtStart  = currentRoom; // guard against tab switch mid-request
+function handleStreamSync(js, context){
+  if (!js || typeof js !== 'object') return;
 
-    const params = new URLSearchParams();
-    params.set('public', '1');
-    params.set('room', roomAtStart);
-    params.set('since', String(prevLast));
-    params.set('limit', isCold ? String(FIRST_LOAD_LIMIT) : '250');
-    
-    const visible = document.visibilityState === 'visible';
-    const doLongPoll = visible && !isCold;     // pause long-poll when tab hidden
-    const lpTimeout = isCold ? 0 : (doLongPoll ? (visible ? 25 : 35) : 8);
-    params.set('lp', doLongPoll ? '1' : '0');
-    params.set('timeout', String(lpTimeout));
+  const active = desiredStreamState();
+  if (!active) return;
 
-    // ⬇️ Let admins “tap” DMs in the public stream
-    if (IS_ADMIN) params.set('include_dms', '1'); // <-- adjust name to your backend
-    const signal = newSignal();
-    const js = await fetchJSONCancelable(`${API}/sync?${params.toString()}`, signal);
-    if (js && Number.isFinite(+js.now)) { LAST_SERVER_NOW = +js.now; } else { LAST_SERVER_NOW = Math.floor(Date.now()/1000); }
-    // if user switched room while we were waiting, drop the payload
-    if (roomAtStart !== currentRoom) return;
+  if (context?.kind === 'dm') {
+    if (active.kind !== 'dm' || Number(active.to) !== Number(context.to)) return;
+  } else {
+    if (active.kind !== 'room' || active.room !== context.room) return;
+  }
 
-    applySyncPayload(js);
-    reapplyPreviews();
+  applySyncPayload(js);
+  reapplyPreviews();
 
+  const prevLast    = +pubList.dataset.last || -1;
+  const isCold      = prevLast < 0;
+  const wasAtBottom = atBottom(pubList);
+
+  if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
     const items   = isCold ? payload.slice(-FIRST_LOAD_LIMIT) : payload;
 
     renderList(pubList, items);
-    markVisible(pubList);  
+    markVisible(pubList);
     watchNewImages(pubList);
     updateReceipts(pubList, items, /*isDM=*/false);
 
@@ -2719,59 +2793,21 @@ async function pollRoom(){
     }
 
     const currentLast = +pubList.dataset.last || -1;
-    const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), currentLast);
+    const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
 
-    ROOM_CACHE.set(cacheKeyForRoom(currentRoom), {
+    ROOM_CACHE.set(cacheKeyForRoom(context.room), {
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML
     });
-  }catch(_){
-    // swallow; loop/backoff handles retry
-  }
-}
-
-async function pollDM(){
-  if (!isVisible(pubList) || !currentDM) { await new Promise(r => setTimeout(r, 800)); return; }
-  try{
-    const prevLast     = +pubList.dataset.last || -1;
-    const isCold       = prevLast < 0;
-    const wasAtBottom  = atBottom(pubList);
-    const dmAtStart    = currentDM; // guard against tab switch mid-request
-
-    const params = new URLSearchParams();
-    params.set('to', String(dmAtStart));
-    params.set('since', String(prevLast));
-    params.set('limit', isCold ? String(FIRST_LOAD_LIMIT) : '250');
-    
-    const visible = document.visibilityState === 'visible';
-    const doLongPoll = visible && !isCold;     // pause long-poll when tab hidden
-    const lpTimeout = isCold ? 0 : (doLongPoll ? (visible ? 25 : 35) : 8);
-    params.set('lp', doLongPoll ? '1' : '0');
-    params.set('timeout', String(lpTimeout));
-
-
-
-    const signal = newSignal();
-    const js = await fetchJSONCancelable(`${API}/sync?${params.toString()}`, signal);
-    if (js && Number.isFinite(+js.now)) { LAST_SERVER_NOW = +js.now; } else { LAST_SERVER_NOW = Math.floor(Date.now()/1000); }
-
-    // if user switched DM peer while we were waiting, drop the payload
-    if (dmAtStart !== currentDM) return;
-
-    applySyncPayload(js);
-    reapplyPreviews();
-
+  } else {
     const raw = Array.isArray(js?.messages) ? js.messages : [];
-
-    // (Server already scopes by ?to=, but keep this filter as defense)
     const between = raw.filter(m => {
       const sid = Number(m.sender_id);
-      const rid = Number(m.recipient_id);
-      return (sid === ME_ID && rid === dmAtStart) || (sid === dmAtStart && rid === ME_ID);
+      const rid = m.recipient_id == null ? null : Number(m.recipient_id);
+      return (sid === ME_ID && rid === context.to) || (sid === context.to && rid === ME_ID);
     });
 
-    // hide blocked peer’s messages (still show my own)
     const mine = between.filter(m => {
       const sid = Number(m.sender_id);
       return !isBlocked(sid) || sid === ME_ID;
@@ -2779,13 +2815,13 @@ async function pollDM(){
 
     const items = (isCold ? mine.slice(-FIRST_LOAD_LIMIT) : mine).map(m => ({
       ...m,
-      id:           Number(m.id),
-      sender_id:    Number(m.sender_id),
+      id: Number(m.id),
+      sender_id: Number(m.sender_id),
       recipient_id: m.recipient_id == null ? null : Number(m.recipient_id)
     }));
 
     renderList(pubList, items);
-    markVisible(pubList);  
+    markVisible(pubList);
     watchNewImages(pubList);
     updateReceipts(pubList, items, /*isDM=*/true);
 
@@ -2794,53 +2830,47 @@ async function pollDM(){
     }
 
     const currentLast = +pubList.dataset.last || -1;
-    const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), currentLast);
+    const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
 
-    ROOM_CACHE.set(cacheKeyForDM(dmAtStart), {
-  last: +pubList.dataset.last || -1,
-  html: pubList.innerHTML
-});
-  }catch(_){
-    // swallow; loop/backoff handles retry
+    ROOM_CACHE.set(cacheKeyForDM(context.to), {
+      last: +pubList.dataset.last || -1,
+      html: pubList.innerHTML
+    });
   }
 }
 
+async function pollActive(forceCold = false){
+  const state = desiredStreamState();
+  if (!state) return;
 
-  async function pollActive(){
-    if (currentDM) { await pollDM(); }
-    else { await pollRoom(); }
+  const params = computeStreamParams(state);
+  if (forceCold) {
+    params.set('since', '-1');
+    params.set('limit', String(FIRST_LOAD_LIMIT));
   }
+  params.set('lp', '0');
+  params.set('timeout', '0');
 
- let _lpStop = false;
-    async function longPollLoop(){
-      while(!_lpStop){
-        try {
-          window.__kkPollHealthy = true;
-          await pollActive();
-          if (document.visibilityState !== 'visible') {
-            await new Promise(r => setTimeout(r, 3000));
-          }
-        } catch(_){
-          window.__kkPollHealthy = false;
-          await new Promise(r => setTimeout(r, 1000));
-        }
-      }
-    }
+  try {
+    const js = await fetchJSON(`${API}/sync?${params.toString()}`);
+    if (js && Number.isFinite(+js.now)) { LAST_SERVER_NOW = +js.now; }
+    else { LAST_SERVER_NOW = Math.floor(Date.now()/1000); }
+    handleStreamSync(js, state);
+  } catch(_) {}
+}
 
 document.addEventListener('visibilitychange', () => {
-  // Always kill any in-flight long-poll when visibility changes
-  try { POLL_CTL?.abort(); } catch(_) {}
-  if (document.visibilityState === 'visible') {
-    // Kick a fresh poll immediately on resume
+  if (document.visibilityState === 'hidden') {
+    suspendStream();
+  } else {
+    resumeStream();
     pollActive().catch(()=>{});
   }
 });
 
-window.addEventListener('focus',  () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive().catch(()=>{}); });
-window.addEventListener('online', () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive().catch(()=>{}); });
-
-longPollLoop();
+window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -2849,8 +2879,7 @@ async function openDM(id) {
   if (isBlocked(id)) { showToast('Du har blockerat denna användare'); return; }
   muteFor(1200);
 
-  // 1) cancel any in-flight long-poll from prior view
-  try { POLL_CTL?.abort(); } catch (_) {}
+  stopStream();
 
   // Remember current scroll/content before switching
   stashActive();
@@ -2884,21 +2913,16 @@ const cacheHit = applyCache(cacheKeyForDM(currentDM));
 setComposerAccess();
 showView('vPublic');
 
-// 1) cancel any in-flight long-poll from prior tab
-try { POLL_CTL?.abort(); } catch(_){}
-
-
-// 3) kick a fast, non-long-poll fetch to drain backlog now
-setTimeout(() => { pollActive().catch(()=>{}); }, 0);
-
-// 4) longPollLoop() is already running; the next pollActive()
-//     will set lp=1 only after the backlog is drained.
 if (cacheHit) {
   markVisible(pubList);
 } else {
   // If you prefer to keep your existing cold-load path, you can omit this else.
   // (You already have a cold-load branch elsewhere in openDM.)
 }
+
+
+  await pollActive();
+  openStream();
 
 
 
@@ -3902,13 +3926,13 @@ async function init(){
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
       await pollActive();              // single, awaited warm-up poll
+      openStream();
     }
   } catch (e) {
     // optionally log e
   }
 
   maybeToggleFab();
-  // no extra pollActive() here; longPollLoop() handles continuous updates
 }
 init();
 
