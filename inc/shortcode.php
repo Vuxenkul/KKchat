@@ -2690,8 +2690,8 @@ async function pollRoom(){
     params.set('limit', isCold ? String(FIRST_LOAD_LIMIT) : '250');
     
     const visible = document.visibilityState === 'visible';
-    const doLongPoll = !isCold;                // long-poll even when hidden
-    const lpTimeout = isCold ? 0 : (visible ? 25 : 35); // shorter when hidden
+    const doLongPoll = visible && !isCold;     // pause long-poll when tab hidden
+    const lpTimeout = isCold ? 0 : (doLongPoll ? (visible ? 25 : 35) : 8);
     params.set('lp', doLongPoll ? '1' : '0');
     params.set('timeout', String(lpTimeout));
 
@@ -2745,8 +2745,8 @@ async function pollDM(){
     params.set('limit', isCold ? String(FIRST_LOAD_LIMIT) : '250');
     
     const visible = document.visibilityState === 'visible';
-    const doLongPoll = !isCold;                // long-poll even when hidden
-    const lpTimeout = isCold ? 0 : (visible ? 25 : 35); // 
+    const doLongPoll = visible && !isCold;     // pause long-poll when tab hidden
+    const lpTimeout = isCold ? 0 : (doLongPoll ? (visible ? 25 : 35) : 8);
     params.set('lp', doLongPoll ? '1' : '0');
     params.set('timeout', String(lpTimeout));
 
