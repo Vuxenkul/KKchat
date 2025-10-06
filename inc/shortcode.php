@@ -2577,8 +2577,9 @@ if (cacheHit) {
 }
   // (No else branch — fetch happens immediately below)
 
-  await pollActive();
+  const syncPromise = pollActive().catch(()=>{});
   openStream();
+  await syncPromise;
 });
 
 document.addEventListener('click', e => {
@@ -2694,8 +2695,9 @@ roomsListEl?.addEventListener('click', async (e) => {
           markVisible(pubList);
         }
 
-        await pollActive();
+        const syncPromise = pollActive().catch(()=>{});
         openStream();
+        await syncPromise;
       }
     }
 
@@ -2924,8 +2926,9 @@ if (cacheHit) {
 }
 
 
-  await pollActive();
+  const syncPromise = pollActive().catch(()=>{});
   openStream();
+  await syncPromise;
 
 
 
@@ -3956,8 +3959,9 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      await pollActive();              // single, awaited warm-up poll
+      const syncPromise = pollActive().catch(()=>{});              // single, awaited warm-up poll
       openStream();
+      await syncPromise;
     }
   } catch (e) {
     // optionally log e
