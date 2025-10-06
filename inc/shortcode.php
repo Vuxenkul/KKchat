@@ -605,18 +605,20 @@ let _lastPublicSeenSent = 0;
  */
 // Mark a batch of DM messages as read
 async function markDMSeen(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) return;
+  if (!Array.isArray(ids) || ids.length === 0) return false;
   try {
     const fd = new FormData()
-    fd.append('csrf_token', CSRF); 
+    fd.append('csrf_token', CSRF);
     for (const id of ids) fd.append('dms[]', String(id));
     await fetch(`${API}/reads/mark`, {
       method: 'POST',
       credentials: 'include',
       body: fd
     });
+    return true;
   } catch (e) {
     console.warn('reads/mark (DM) failed', e);
+    return false;
   }
 }
 
@@ -645,6 +647,9 @@ function isMobileLike(){
 function hasMediaDevices(){
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 }
+
+
+const sleep = (ms) => new Promise(res => setTimeout(res, Math.max(0, ms || 0)));
 
 
 let POLL_CTL = null;
@@ -1302,28 +1307,82 @@ function updateReceipts(el, items /*, isDM */){
 }
 
 
-let pendingMark = []; let markTimer = null;
-// Debounced, batched read-marking — optimistic clear only
+const DM_SEEN_STATE = new Map();
+let markFlushTimer = null;
+let markFlushInFlight = false;
+let markBackoffMs = 0;
+const MARK_BACKOFF_BASE = 1500;
+const MARK_BACKOFF_MAX = 12000;
+
 const queueMark = (() => {
-  let pending = [];
-  let t = null;
+  const hasPending = () => {
+    for (const state of DM_SEEN_STATE.values()) {
+      if (state.pending?.size) return true;
+    }
+    return false;
+  };
+
+  const scheduleFlush = (delay = 250) => {
+    const wait = markBackoffMs > 0 ? markBackoffMs : delay;
+    if (markFlushTimer) return;
+    markFlushTimer = setTimeout(async () => {
+      markFlushTimer = null;
+      if (markFlushInFlight) {
+        scheduleFlush(wait);
+        return;
+      }
+      await runFlush();
+    }, wait);
+  };
+
+  const runFlush = async () => {
+    const payload = [];
+    DM_SEEN_STATE.forEach((state) => {
+      if (!state.pending?.size) return;
+      const ids = Array.from(state.pending).sort((a, b) => a - b);
+      if (!ids.length) return;
+      state.pending.clear();
+      payload.push({ state, ids });
+    });
+
+    if (!payload.length) return;
+
+    markFlushInFlight = true;
+    const ok = await markDMSeen(payload.flatMap(entry => entry.ids));
+    markFlushInFlight = false;
+
+    if (ok) {
+      markBackoffMs = 0;
+      for (const entry of payload) {
+        const maxId = entry.ids[entry.ids.length - 1] || 0;
+        if (maxId > (entry.state.lastSent || 0)) {
+          entry.state.lastSent = maxId;
+        }
+      }
+      if (hasPending()) scheduleFlush();
+    } else {
+      markBackoffMs = markBackoffMs
+        ? Math.min(markBackoffMs * 2, MARK_BACKOFF_MAX)
+        : MARK_BACKOFF_BASE;
+      for (const entry of payload) {
+        entry.ids.forEach(id => entry.state.pending.add(id));
+      }
+      scheduleFlush(markBackoffMs);
+    }
+  };
 
   return function(ids) {
     // PUBLIC room path
     if (!currentDM) {
-      // Optimistically clear unread for the active room
       if (currentRoom) {
         ROOM_UNREAD[currentRoom] = 0;
         renderRoomTabs();
         updateLeftCounts?.();
       }
-      // Keep existing behavior: move the public watermark server-side
       markPublicSeen(LAST_SERVER_NOW);
       return;
     }
 
-    // DM path
-    // Optimistically clear unread for this DM
     if (currentDM != null) {
       UNREAD_PER[currentDM] = 0;
       renderDMSidebar();
@@ -1331,17 +1390,19 @@ const queueMark = (() => {
       updateLeftCounts?.();
     }
 
-    // Keep existing debounce/batching + post
-    const add = (ids || []).map(Number).filter(n => n > 0);
-    pending = [...new Set(pending.concat(add))];
+    const dmId = currentDM;
+    let state = DM_SEEN_STATE.get(dmId);
+    if (!state) {
+      state = { pending: new Set(), lastSent: 0 };
+      DM_SEEN_STATE.set(dmId, state);
+    }
 
-    if (t) return;
-    t = setTimeout(() => {
-      const toSend = [...new Set(pending)];
-      pending = [];
-      t = null;
-      if (toSend.length) markDMSeen(toSend);
-    }, 300);
+    const lastSent = state.lastSent || 0;
+    const fresh = (ids || []).map(Number).filter(n => n > lastSent);
+    if (!fresh.length) return;
+
+    fresh.forEach(id => state.pending.add(id));
+    scheduleFlush();
   };
 })();
 
@@ -2054,15 +2115,15 @@ let currentDM = null;
     ACTIVE_DMS.delete(id);
     saveDMActive(ACTIVE_DMS);
 
-if (currentDM === id){
-    muteFor(1200);                    
-  try { POLL_CTL?.abort(); } catch(_){}
-  currentDM = null;
-  applyCache(activeCacheKey());
-  setComposerAccess();
-  showView('vPublic');
-  pollActive();
-}
+    if (currentDM === id){
+      muteFor(1200);
+      try { POLL_CTL?.abort(); } catch(_){}
+      currentDM = null;
+      applyCache(activeCacheKey());
+      setComposerAccess();
+      showView('vPublic');
+      pollActive({ force: true }).catch(()=>{});
+    }
     renderDMSidebar();
     renderRoomTabs();
     updateLeftCounts();
@@ -2484,7 +2545,7 @@ try { POLL_CTL?.abort(); } catch(_){}
 
 
 // 3) kick a fast, non-long-poll fetch to drain backlog now
-setTimeout(() => { pollActive().catch(()=>{}); }, 0);
+setTimeout(() => { pollActive({ force: true }).catch(()=>{}); }, 0);
 
 // 4) longPollLoop() is already running; the next pollActive()
 //     will set lp=1 only after the backlog is drained.
@@ -2598,7 +2659,7 @@ roomsListEl?.addEventListener('click', (e) => {
             muteFor(1200);
         try { POLL_CTL?.abort(); } catch (_) {}
         currentRoom = next;
-        setTimeout(() => { pollActive().catch(()=>{}); }, 0); 
+        setTimeout(() => { pollActive({ force: true }).catch(()=>{}); }, 0);
         const cacheHit = applyCache(cacheKeyForRoom(currentRoom));
         setComposerAccess();
 
@@ -2606,7 +2667,7 @@ roomsListEl?.addEventListener('click', (e) => {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
         } else {
-          pollActive();
+          pollActive({ force: true });
         }
       }
     }
@@ -2726,8 +2787,8 @@ async function pollRoom(){
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML
     });
-  }catch(_){
-    // swallow; loop/backoff handles retry
+  }catch(err){
+    throw err;
   }
 }
 
@@ -2801,29 +2862,85 @@ async function pollDM(){
   last: +pubList.dataset.last || -1,
   html: pubList.innerHTML
 });
-  }catch(_){
-    // swallow; loop/backoff handles retry
+  }catch(err){
+    throw err;
   }
 }
 
 
-  async function pollActive(){
-    if (currentDM) { await pollDM(); }
-    else { await pollRoom(); }
+  const POLL_MIN_INTERVAL_MS = 3500;
+  const POLL_ERROR_BASE_MS   = 2000;
+  const POLL_ERROR_MAX_MS    = 30000;
+  let POLL_PROMISE = null;
+  let POLL_FORCE_NEXT = false;
+  let POLL_LAST_ENDED_AT = 0;
+  let POLL_ERROR_DELAY = 0;
+
+  async function pollActive(opts = {}){
+    const force = !!opts.force;
+
+    if (POLL_PROMISE) {
+      if (force) POLL_FORCE_NEXT = true;
+      return POLL_PROMISE;
+    }
+
+    const skipWait = (force || POLL_FORCE_NEXT) && POLL_ERROR_DELAY === 0;
+    POLL_FORCE_NEXT = false;
+
+    const run = (async () => {
+      if (!skipWait) {
+        const now = Date.now();
+        const since = now - POLL_LAST_ENDED_AT;
+        const waitFor = Math.max(POLL_ERROR_DELAY, POLL_MIN_INTERVAL_MS - since);
+        if (waitFor > 0) await sleep(waitFor);
+      }
+
+      let status = 'success';
+      try {
+        if (currentDM) { await pollDM(); }
+        else { await pollRoom(); }
+        window.__kkPollHealthy = true;
+        POLL_ERROR_DELAY = 0;
+      } catch (err) {
+        if (err?.name === 'AbortError') {
+          status = 'aborted';
+          POLL_ERROR_DELAY = 0;
+        } else {
+          status = 'error';
+          window.__kkPollHealthy = false;
+          POLL_ERROR_DELAY = POLL_ERROR_DELAY
+            ? Math.min(POLL_ERROR_DELAY * 2, POLL_ERROR_MAX_MS)
+            : POLL_ERROR_BASE_MS;
+        }
+      } finally {
+        POLL_LAST_ENDED_AT = Date.now();
+      }
+
+      return status;
+    })();
+
+    POLL_PROMISE = run.finally(() => {
+      const shouldForce = POLL_FORCE_NEXT;
+      POLL_PROMISE = null;
+      if (shouldForce) {
+        POLL_FORCE_NEXT = false;
+        pollActive({ force: true });
+      }
+    });
+
+    return POLL_PROMISE;
   }
 
  let _lpStop = false;
     async function longPollLoop(){
       while(!_lpStop){
-        try {
-          window.__kkPollHealthy = true;
-          await pollActive();
-          if (document.visibilityState !== 'visible') {
-            await new Promise(r => setTimeout(r, 3000));
-          }
-        } catch(_){
-          window.__kkPollHealthy = false;
-          await new Promise(r => setTimeout(r, 1000));
+        const status = await pollActive();
+        if (status === 'aborted') {
+          await sleep(150);
+          continue;
+        }
+        if (document.visibilityState !== 'visible') {
+          await sleep(3000);
         }
       }
     }
@@ -2833,12 +2950,12 @@ document.addEventListener('visibilitychange', () => {
   try { POLL_CTL?.abort(); } catch(_) {}
   if (document.visibilityState === 'visible') {
     // Kick a fresh poll immediately on resume
-    pollActive().catch(()=>{});
+    pollActive({ force: true }).catch(()=>{});
   }
 });
 
-window.addEventListener('focus',  () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive().catch(()=>{}); });
-window.addEventListener('online', () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive().catch(()=>{}); });
+window.addEventListener('focus',  () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive({ force: true }).catch(()=>{}); });
+window.addEventListener('online', () => { try { POLL_CTL?.abort(); } catch(_){}; pollActive({ force: true }).catch(()=>{}); });
 
 longPollLoop();
 
@@ -2889,7 +3006,7 @@ try { POLL_CTL?.abort(); } catch(_){}
 
 
 // 3) kick a fast, non-long-poll fetch to drain backlog now
-setTimeout(() => { pollActive().catch(()=>{}); }, 0);
+setTimeout(() => { pollActive({ force: true }).catch(()=>{}); }, 0);
 
 // 4) longPollLoop() is already running; the next pollActive()
 //     will set lp=1 only after the backlog is drained.
@@ -3087,7 +3204,7 @@ async function takeWebcamPhoto(){
     const url = await uploadImage(file);
 
     const ok = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) { await pollActive({ force: true }); showToast('Bild skickad'); }
   } catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   } finally {
@@ -3187,7 +3304,7 @@ pubForm.addEventListener('submit', async (e)=>{
     pubForm.reset();
     pending?.remove();
 
-    await pollActive();
+    await pollActive({ force: true });
   }catch(_){
     pending?.classList.remove('pending'); pending?.classList.add('error');
     showToast('Tekniskt fel');
@@ -3353,7 +3470,7 @@ pubImgInp?.addEventListener('change', async ()=>{
     showToast('Laddar bild…');
     const url = await uploadImage(small);
     const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) { await pollActive({ force: true }); showToast('Bild skickad'); }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -3386,7 +3503,7 @@ pubCamInp?.addEventListener('change', async ()=>{
     showToast('Laddar bild…');
     const url = await uploadImage(small);
     const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) { await pollActive({ force: true }); showToast('Bild skickad'); }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -3901,7 +4018,7 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      await pollActive();              // single, awaited warm-up poll
+      await pollActive({ force: true });              // single, awaited warm-up poll
     }
   } catch (e) {
     // optionally log e
