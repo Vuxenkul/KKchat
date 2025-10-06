@@ -451,25 +451,17 @@ add_action('rest_api_init', function () {
           if ($since < 0) {
             $rows = $wpdb->get_results(
               $wpdb->prepare(
-                "(SELECT $msgColumns FROM {$t['messages']}
-                   WHERE sender_id = %d
-                     AND recipient_id = %d
-                     AND hidden_at IS NULL
-                   ORDER BY id DESC LIMIT %d)
-                 UNION ALL
-                 (SELECT $msgColumns FROM {$t['messages']}
-                   WHERE sender_id = %d
-                     AND recipient_id = %d
-                     AND hidden_at IS NULL
-                   ORDER BY id DESC LIMIT %d)
-                 ORDER BY id ASC
+                "SELECT $msgColumns FROM {$t['messages']}
+                 WHERE hidden_at IS NULL
+                   AND ((sender_id = %d AND recipient_id = %d) OR
+                        (sender_id = %d AND recipient_id = %d))
+                 ORDER BY id DESC
                  LIMIT %d",
-                $me, $peer, $limit,
-                $peer, $me, $limit,
-                $limit
+                $me, $peer, $peer, $me, $limit
               ),
               ARRAY_A
             ) ?: [];
+            $rows = array_reverse($rows);
           } else {
             $rows = $wpdb->get_results(
               $wpdb->prepare(
@@ -1347,25 +1339,17 @@ register_rest_route($ns, '/fetch', [
           // Last N in thread with specific peer
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "(SELECT $msgColumns FROM {$t['messages']}
-                 WHERE sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id DESC LIMIT %d)
-               UNION ALL
-               (SELECT $msgColumns FROM {$t['messages']}
-                 WHERE sender_id = %d
-                   AND recipient_id = %d
-                   AND hidden_at IS NULL
-                 ORDER BY id DESC LIMIT %d)
-               ORDER BY id ASC
+              "SELECT $msgColumns FROM {$t['messages']}
+               WHERE hidden_at IS NULL
+                 AND ((sender_id = %d AND recipient_id = %d) OR
+                      (sender_id = %d AND recipient_id = %d))
+               ORDER BY id DESC
                LIMIT %d",
-              $me, $peer, $limit,
-              $peer, $me, $limit,
-              $limit
+              $me, $peer, $peer, $me, $limit
             ),
             ARRAY_A
           ) ?: [];
+          $rows = array_reverse($rows);
         } else {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
