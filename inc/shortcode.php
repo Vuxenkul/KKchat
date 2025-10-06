@@ -713,7 +713,9 @@ function openStream(){
   try {
     source = new EventSource(url, { withCredentials: true });
   } catch (_) {
+    try { window.__kkPollHealthy = false; } catch(_) {}
     scheduleStreamReconnect();
+    maybePollActiveFallback();
     return;
   }
 
@@ -740,6 +742,7 @@ function openStream(){
     try { window.__kkPollHealthy = false; } catch(_) {}
     stopStream();
     scheduleStreamReconnect();
+    maybePollActiveFallback();
   };
 }
 
@@ -3516,21 +3519,49 @@ jumpBtn.addEventListener('click', ()=>{
   window.addEventListener('online', touch);
 
   let pingTimer = null;
-    window.__kkPollHealthy = true;
-    
-    function schedulePingFallback(){
-      clearInterval(pingTimer);
-      pingTimer = setInterval(()=>{
-        // Only ping if tab is hidden or long-poll recently errored
-        if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
-        touch();
-      }, 120000); // 2 minutes
+  window.__kkPollHealthy = typeof EventSource === 'function';
+
+  let pollFallbackTimer = null;
+  let pollFallbackBusy  = false;
+
+  function maybePollActiveFallback(){
+    if (pollFallbackBusy) return;
+    if (document.visibilityState === 'hidden') return;
+
+    const sseSupported = typeof EventSource === 'function';
+    const healthy      = sseSupported ? window.__kkPollHealthy !== false : false;
+
+    if (healthy && STREAM) return;
+
+    pollFallbackBusy = true;
+    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
+  }
+
+  function ensurePollFallback(){
+    if (pollFallbackTimer) return;
+    pollFallbackTimer = setInterval(maybePollActiveFallback, 20000);
+
+    if (!window.__kkPollHealthy || typeof EventSource !== 'function') {
+      setTimeout(maybePollActiveFallback, 1000);
     }
-    
-    schedulePingFallback();
-    document.addEventListener('visibilitychange', schedulePingFallback);
-    window.addEventListener('online', schedulePingFallback);
-    window.addEventListener('focus', schedulePingFallback);
+  }
+
+  ensurePollFallback();
+
+  function schedulePingFallback(){
+    clearInterval(pingTimer);
+    pingTimer = setInterval(()=>{
+      // Only ping if tab is hidden or long-poll recently errored
+      if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
+      touch();
+      maybePollActiveFallback();
+    }, 120000); // 2 minutes
+  }
+
+  schedulePingFallback();
+  document.addEventListener('visibilitychange', schedulePingFallback);
+  window.addEventListener('online', schedulePingFallback);
+  window.addEventListener('focus', schedulePingFallback);
 
 })();
 
