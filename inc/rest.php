@@ -18,6 +18,116 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_public_presence_snapshot')) {
+    /**
+     * Shared helper for public presence payloads (non-admin views).
+     *
+     * @param int   $now           Current unix timestamp for freshness/TTL checks.
+     * @param int   $window        Seconds of recency to include (<=0 disables the cutoff).
+     * @param array $admin_names   Lower-cased admin WP usernames for flagging.
+     * @param array $opts          Optional flags: include_typing, include_flagged.
+     */
+    function kkchat_public_presence_snapshot(int $now, int $window, array $admin_names, array $opts = []): array {
+      global $wpdb; $t = kkchat_tables();
+
+      $includeTyping  = !empty($opts['include_typing']);
+      $includeFlagged = !empty($opts['include_flagged']);
+
+      $limit = (int) apply_filters('kkchat_public_presence_limit', 400);
+      if ($limit <= 0) { $limit = 400; }
+      $limit = max(1, $limit);
+
+      $cols = ['id','name','gender','wp_username'];
+      if ($includeFlagged) { $cols[] = 'watch_flag'; }
+      if ($includeTyping) {
+        $cols[] = 'typing_text';
+        $cols[] = 'typing_room';
+        $cols[] = 'typing_to';
+        $cols[] = 'typing_at';
+      }
+
+      $select = implode(',', $cols);
+
+      $cacheTtl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', 2));
+      $cacheKey = null;
+      if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
+        $bucket   = max(1, $cacheTtl);
+        $cacheKey = sprintf(
+          'presence:%s:%s:%d:%d:%d',
+          $includeTyping ? 't1' : 't0',
+          $includeFlagged ? 'f1' : 'f0',
+          $window,
+          $limit,
+          (int) floor($now / $bucket)
+        );
+        $cached = wp_cache_get($cacheKey, 'kkchat');
+        if (is_array($cached)) {
+          return $cached;
+        }
+      }
+
+      if ($window > 0) {
+        $sql = $wpdb->prepare(
+          "SELECT {$select}
+             FROM {$t['users']}
+            WHERE %d - last_seen <= %d
+            ORDER BY name_lc ASC
+            LIMIT %d",
+          $now,
+          $window,
+          $limit
+        );
+      } else {
+        $sql = $wpdb->prepare(
+          "SELECT {$select}
+             FROM {$t['users']}
+            ORDER BY name_lc ASC
+            LIMIT %d",
+          $limit
+        );
+      }
+
+      $rows = $wpdb->get_results($sql, ARRAY_A) ?: [];
+      $out  = [];
+
+      foreach ($rows as $r) {
+        $entry = [
+          'id'       => (int) ($r['id'] ?? 0),
+          'name'     => (string) ($r['name'] ?? ''),
+          'gender'   => (string) ($r['gender'] ?? ''),
+          'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+        ];
+
+        if ($includeFlagged) {
+          $entry['flagged'] = !empty($r['watch_flag']) ? 1 : 0;
+        }
+
+        if ($includeTyping) {
+          $typing = null;
+          if (!empty($r['typing_text']) && (int) ($r['typing_at'] ?? 0) > $now - 8) {
+            $typing = [
+              'text' => (string) ($r['typing_text'] ?? ''),
+              'room' => ($r['typing_room'] ?? '') !== '' ? (string) $r['typing_room'] : null,
+              'to'   => isset($r['typing_to']) ? (int) $r['typing_to'] : null,
+              'at'   => (int) ($r['typing_at'] ?? 0),
+            ];
+          }
+          $entry['typing'] = $typing;
+        }
+
+        if ($entry['id'] > 0) {
+          $out[] = $entry;
+        }
+      }
+
+      if ($cacheTtl > 0 && $cacheKey && function_exists('wp_cache_set')) {
+        wp_cache_set($cacheKey, $out, 'kkchat', $cacheTtl);
+      }
+
+      return $out;
+    }
+  }
+
   /* =========================================================
    *                     AUTH
    * ========================================================= */
@@ -356,6 +466,7 @@ register_rest_route($ns, '/sync', [
 
     $me      = kkchat_current_user_id();
     $guest   = kkchat_is_guest() ? 1 : 0;
+    $is_admin_viewer = kkchat_is_admin();
     kkchat_close_session_if_open();
     $since   = max(-1, (int)$req->get_param('since'));
     $room    = kkchat_sanitize_room_slug((string)$req->get_param('room'));
@@ -441,40 +552,49 @@ register_rest_route($ns, '/sync', [
     ));
 
     $admin_names = kkchat_admin_usernames();
-    $presence_rows = $wpdb->get_results(
-      $wpdb->prepare(
-        "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username,last_seen
-           FROM {$t['users']}
-          WHERE %d - last_seen <= %d
-          ORDER BY name_lc ASC
-          LIMIT %d",
-        $now,
-        max(30, (int)apply_filters('kkchat_presence_active_sec', 60)),
-        max(50, (int)apply_filters('kkchat_presence_limit', 1200))
-      ),
-      ARRAY_A
-    ) ?: [];
+    $presence    = [];
+    if ($is_admin_viewer) {
+      $presence_rows = $wpdb->get_results(
+        $wpdb->prepare(
+          "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username,last_seen
+             FROM {$t['users']}
+            WHERE %d - last_seen <= %d
+            ORDER BY name_lc ASC
+            LIMIT %d",
+          $now,
+          max(30, (int)apply_filters('kkchat_presence_active_sec', 60)),
+          max(50, (int)apply_filters('kkchat_presence_limit', 1200))
+        ),
+        ARRAY_A
+      ) ?: [];
 
-    // 10s window for typing to be considered "active"
-    $presence = array_map(function($r) use ($now, $admin_names) {
-      $typing = null;
-      if (!empty($r['typing_text']) && (int)$r['typing_at'] > $now - 10) {
-        $typing = [
-          'text' => $r['typing_text'],
-          'room' => $r['typing_room'] ?: null,
-          'to'   => isset($r['typing_to']) ? (int)$r['typing_to'] : null,
-          'at'   => (int)$r['typing_at'],
+      // 10s window for typing to be considered "active"
+      $presence = array_map(function($r) use ($now, $admin_names) {
+        $typing = null;
+        if (!empty($r['typing_text']) && (int)$r['typing_at'] > $now - 10) {
+          $typing = [
+            'text' => $r['typing_text'],
+            'room' => $r['typing_room'] ?: null,
+            'to'   => isset($r['typing_to']) ? (int)$r['typing_to'] : null,
+            'at'   => (int)$r['typing_at'],
+          ];
+        }
+        return [
+          'id'       => (int)$r['id'],
+          'name'     => (string)$r['name'],
+          'gender'   => (string)$r['gender'],
+          'typing'   => $typing,
+          'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
+          'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
         ];
-      }
-      return [
-        'id'       => (int)$r['id'],
-        'name'     => (string)$r['name'],
-        'gender'   => (string)$r['gender'],
-        'typing'   => $typing,
-        'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
-        'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-      ];
-    }, $presence_rows);
+      }, $presence_rows);
+    } else {
+      $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
+      $presence = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [
+        'include_typing'  => false,
+        'include_flagged' => false,
+      ]);
+    }
 
     /* ------------ unread counts ------------ */
     $blocked = kkchat_blocked_ids($me);
@@ -813,6 +933,10 @@ register_rest_route($ns, '/users', [
     // Query param (read-only); allow "1", 1, true-ish.
     $typingOnly = ((string) $req->get_param('typing_only') === '1');
 
+    // Public presence lists should stay lean — limit non-admin views to
+    // recently active users (default: last 2 minutes).
+    $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
+
     // Release the PHP session lock early so this GET can long-run
     // without blocking other requests (especially long-pollers).
     kkchat_close_session_if_open();
@@ -906,19 +1030,17 @@ register_rest_route($ns, '/users', [
     }
 
     // NON-ADMIN: no typing detail, minimal fields
-    $rows = $wpdb->get_results(
-      "SELECT id,name,gender,wp_username
-         FROM {$t['users']}
-     ORDER BY name ASC",
-      ARRAY_A
-    );
+    $rows = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [
+      'include_typing'  => false,
+      'include_flagged' => false,
+    ]);
 
-    $out = array_map(function ($r) use ($admin_names) {
+    $out = array_map(function ($r) {
       return [
-        'id'       => (int) $r['id'],
-        'name'     => (string) $r['name'],
+        'id'       => (int) ($r['id'] ?? 0),
+        'name'     => (string) ($r['name'] ?? ''),
         'gender'   => (string) ($r['gender'] ?? ''),
-        'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+        'is_admin' => !empty($r['is_admin']) ? 1 : 0,
       ];
     }, $rows ?? []);
 
