@@ -41,10 +41,38 @@ function kkchat_tables(){
 
 function kkchat_ensure_users_table() {
   global $wpdb; $t = kkchat_tables();
-  if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $t['users'])) === $t['users']) return;
+
+  $target = $t['users'];
+  $legacy = $wpdb->prefix . 'kkchat_active_users';
+
+  $target_exists = ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $target)) === $target);
+  $needs_dbdelta = false;
+
+  if (!$target_exists) {
+    $legacy_exists = ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $legacy)) === $legacy);
+    if ($legacy_exists) {
+      // Attempt an in-place rename so we keep existing presence data.
+      $renamed = $wpdb->query("ALTER TABLE `{$legacy}` RENAME TO `{$target}`");
+      if ($renamed !== false) {
+        $target_exists = true;
+        $needs_dbdelta = true; // Ensure new columns/indexes are added post-rename.
+      }
+    }
+
+    if (!$target_exists) {
+      // Fresh install or rename failed — create the table from scratch.
+      $needs_dbdelta = true;
+    }
+  }
+
+  if (!$needs_dbdelta) {
+    return; // Table already matches the expected name and was previously installed.
+  }
+
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
   $charset = $wpdb->get_charset_collate();
-  dbDelta("CREATE TABLE `{$t['users']}` (
+
+  dbDelta("CREATE TABLE `{$target}` (
     `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
     `name` VARCHAR(64) NOT NULL,
     `name_lc` VARCHAR(64) NOT NULL,
