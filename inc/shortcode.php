@@ -3173,12 +3173,15 @@ pubForm.addEventListener('submit', async (e)=>{
     const js = await r.json().catch(()=>({}));
 
     if (!r.ok || !js.ok) {
+      const reason = js.cause || js.err || `HTTP ${r.status}`;
+      console.error('[KKChat] Failed to send message:', reason, { status: r.status, response: js });
       pending?.classList.remove('pending'); pending?.classList.add('error');
       showToast(js.err==='no_room_access' ? 'Endast för medlemmar' : (js.cause || 'Kunde inte skicka'));
       return;
     }
 
     if (js.deduped) {
+      console.warn('[KKChat] Message rejected as duplicate');
       pending?.remove();
       showToast('Spam - Ditt meddelande avvisades.');
       return;
@@ -3188,7 +3191,8 @@ pubForm.addEventListener('submit', async (e)=>{
     pending?.remove();
 
     await pollActive();
-  }catch(_){
+  }catch(err){
+    console.error('[KKChat] Error sending message:', err);
     pending?.classList.remove('pending'); pending?.classList.add('error');
     showToast('Tekniskt fel');
   }
@@ -3336,8 +3340,17 @@ async function uploadImage(file){
     else fd.append('room', currentRoom);
     const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
-    if (!r.ok || !js.ok) { showToast(js.cause || js.err || 'Kunde inte skicka bild'); return false; }
-    if (js.deduped) { showToast('Spam - Duplicerad bild avvisades.'); return false; }
+    if (!r.ok || !js.ok) {
+      const reason = js.cause || js.err || `HTTP ${r.status}`;
+      console.error('[KKChat] Failed to send image message:', reason, { status: r.status, response: js });
+      showToast(js.cause || js.err || 'Kunde inte skicka bild');
+      return false;
+    }
+    if (js.deduped) {
+      console.warn('[KKChat] Image message rejected as duplicate');
+      showToast('Spam - Duplicerad bild avvisades.');
+      return false;
+    }
     return true;
   }
 
