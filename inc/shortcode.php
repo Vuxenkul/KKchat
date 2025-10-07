@@ -269,6 +269,12 @@ f.addEventListener('submit', async (ev)=>{
         <section id="vPublic" class="view" active>
           <div class="msgwrap">
             <ul id="kk-pubList" class="list" data-last="-1"></ul>
+            <div id="kk-loadingStatus" class="loading-status" role="status" aria-live="polite" hidden>
+              <div class="loading-pill">
+                <div class="loading-spinner" aria-hidden="true"></div>
+                <span class="loading-text">Loading…</span>
+              </div>
+            </div>
             <button id="kk-jumpBottom" class="fab" type="button" aria-label="Hoppa till botten">⬇️</button>
             <form id="kk-pubForm" class="inputbar">
               <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($_SESSION['kkchat_csrf']) ?>">
@@ -386,6 +392,7 @@ f.addEventListener('submit', async (ev)=>{
   const notif   = $('#kk-notifSound');
   const toast   = $('#kk-toast');
   const jumpBtn = $('#kk-jumpBottom');
+  const loadingStatus = document.getElementById('kk-loadingStatus');
 
   const userListEl = $('#kk-userList');
   const userSearch = $('#kk-uSearch');
@@ -652,6 +659,7 @@ const POLL_CHANNEL_NAME = 'kkchat-sync-v1';
 const POLL_LEADER_KEY   = 'kkchat:poll:leader';
 const POLL_SYNC_KEY     = 'kkchat:poll:last';
 const POLL_POKE_KEY     = 'kkchat:poll:poke';
+const POLL_LOADING_KEY  = 'kkchat:poll:loading';
 const POLL_HEARTBEAT_MS = 4000;
 const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
 
@@ -666,6 +674,136 @@ let POLL_HIDDEN_SINCE = 0;
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
+
+const LOADING_SHOW_DELAY = 200;
+const LOADING_MIN_VISIBLE = 250;
+let loadingCount = 0;
+let loadingBroadcastRefs = 0;
+let loadingActive = false;
+let loadingShowTimer = null;
+let loadingMinTimer = null;
+let loadingHidePending = false;
+let remoteLoading = false;
+let remoteLoadingTs = 0;
+let loadingBroadcastActive = false;
+
+function wantLoadingVisible(){
+  if (!loadingStatus) return false;
+  if (document.visibilityState === 'hidden') return false;
+  return loadingCount > 0 || remoteLoading;
+}
+
+function finishHide(){
+  if (!loadingStatus) return;
+  if (loadingMinTimer) {
+    clearTimeout(loadingMinTimer);
+    loadingMinTimer = null;
+  }
+  loadingActive = false;
+  loadingHidePending = false;
+  delete loadingStatus.dataset.active;
+  loadingStatus.hidden = true;
+}
+
+function showLoadingIndicator(){
+  if (!loadingStatus) return;
+  if (loadingActive) {
+    loadingHidePending = false;
+    return;
+  }
+  if (loadingShowTimer) return;
+  loadingShowTimer = setTimeout(() => {
+    loadingShowTimer = null;
+    if (!wantLoadingVisible()) return;
+    loadingActive = true;
+    loadingHidePending = false;
+    loadingStatus.hidden = false;
+    loadingStatus.dataset.active = '1';
+    if (loadingMinTimer) clearTimeout(loadingMinTimer);
+    loadingMinTimer = setTimeout(() => {
+      loadingMinTimer = null;
+      if (loadingHidePending) {
+        finishHide();
+      }
+    }, LOADING_MIN_VISIBLE);
+  }, LOADING_SHOW_DELAY);
+}
+
+function hideLoadingIndicator(){
+  if (loadingShowTimer) {
+    clearTimeout(loadingShowTimer);
+    loadingShowTimer = null;
+  }
+  if (!loadingActive) return;
+  if (loadingMinTimer) {
+    loadingHidePending = true;
+    return;
+  }
+  finishHide();
+}
+
+function updateLoadingIndicator(){
+  if (!loadingStatus) return;
+  if (wantLoadingVisible()) showLoadingIndicator();
+  else hideLoadingIndicator();
+}
+
+function broadcastLoadingState(on){
+  const message = {
+    type: 'loading',
+    from: POLL_CLIENT_ID,
+    loading: !!on,
+    ts: Date.now()
+  };
+  if (POLL_BROADCAST) {
+    try { POLL_BROADCAST.postMessage(message); } catch (_) {}
+  }
+  try {
+    localStorage.setItem(POLL_LOADING_KEY, JSON.stringify(message));
+    localStorage.removeItem(POLL_LOADING_KEY);
+  } catch (_) {}
+}
+
+function beginLoading(options){
+  const opts = options || {};
+  loadingCount += 1;
+  updateLoadingIndicator();
+  if (opts.broadcast) {
+    const wasZero = loadingBroadcastRefs === 0;
+    loadingBroadcastRefs += 1;
+    if (POLL_IS_LEADER && wasZero) {
+      broadcastLoadingState(true);
+      loadingBroadcastActive = true;
+    }
+  }
+}
+
+function endLoading(options){
+  const opts = options || {};
+  loadingCount = Math.max(0, loadingCount - 1);
+  if (opts.broadcast) {
+    loadingBroadcastRefs = Math.max(0, loadingBroadcastRefs - 1);
+    if (loadingBroadcastRefs === 0 && loadingBroadcastActive) {
+      broadcastLoadingState(false);
+      loadingBroadcastActive = false;
+    }
+  }
+  updateLoadingIndicator();
+}
+
+function applyRemoteLoading(on, ts){
+  const when = Number(ts) || Date.now();
+  if (when < remoteLoadingTs) return;
+  remoteLoading = !!on;
+  remoteLoadingTs = when;
+  updateLoadingIndicator();
+}
+
+function handleLoadingMessage(msg){
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.from === POLL_CLIENT_ID) return;
+  applyRemoteLoading(!!msg.loading, msg.ts);
+}
 
 const POLL_BROADCAST = (typeof BroadcastChannel === 'function') ? new BroadcastChannel(POLL_CHANNEL_NAME) : null;
 if (POLL_BROADCAST) {
@@ -690,6 +828,11 @@ window.addEventListener('storage', (ev) => {
   if (ev.key === POLL_POKE_KEY) {
     if (ev.newValue) {
       try { handlePollMessage(JSON.parse(ev.newValue)); } catch (_) {}
+    }
+  }
+  if (ev.key === POLL_LOADING_KEY) {
+    if (ev.newValue) {
+      try { handleLoadingMessage(JSON.parse(ev.newValue)); } catch (_) {}
     }
   }
 });
@@ -808,6 +951,10 @@ function leaderExpired(rec){
 
 function becomeLeader(){
   POLL_IS_LEADER = true;
+  remoteLoading = false;
+  remoteLoadingTs = Date.now();
+  loadingBroadcastActive = false;
+  updateLoadingIndicator();
   try {
     localStorage.setItem(POLL_LEADER_KEY, JSON.stringify({ id: POLL_CLIENT_ID, ts: Date.now() }));
   } catch (_) {}
@@ -866,6 +1013,10 @@ function handleLeaderStorage(value){
   const isSelf = rec.id === POLL_CLIENT_ID;
   POLL_IS_LEADER = isSelf;
   if (isSelf) {
+    remoteLoading = false;
+    remoteLoadingTs = Date.now();
+    loadingBroadcastActive = false;
+    updateLoadingIndicator();
     startLeaderHeartbeat();
     return;
   }
@@ -961,6 +1112,11 @@ function handlePollMessage(msg){
   if (!msg || typeof msg !== 'object') return;
   if (msg.from === POLL_CLIENT_ID) return;
 
+  if (msg.type === 'loading') {
+    handleLoadingMessage(msg);
+    return;
+  }
+
   if (msg.type === 'sync') {
     const state = desiredStreamState();
     if (!state) return;
@@ -1027,6 +1183,7 @@ async function performPoll(forceCold = false){
   const url = `${API}/sync?${params.toString()}`;
 
   POLL_BUSY = true;
+  beginLoading({ broadcast: true });
   try {
     const resp = await fetch(url, { credentials: 'include', headers });
     const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
@@ -1097,6 +1254,7 @@ async function performPoll(forceCold = false){
     POLL_RETRY_HINT.set(key, fallback);
   } finally {
     POLL_BUSY = false;
+    endLoading({ broadcast: true });
     scheduleStreamReconnect();
   }
 }
@@ -3243,6 +3401,7 @@ if (document.visibilityState === 'hidden') {
 }
 
 document.addEventListener('visibilitychange', () => {
+  updateLoadingIndicator();
   if (document.visibilityState === 'hidden') {
     POLL_HIDDEN_SINCE = Date.now();
     suspendStream();
@@ -3577,6 +3736,7 @@ pubForm.addEventListener('submit', async (e)=>{
 
   const pending = appendPendingMessage(txt);
 
+  beginLoading();
   try{
     const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
@@ -3600,6 +3760,8 @@ pubForm.addEventListener('submit', async (e)=>{
   }catch(_){
     pending?.classList.remove('pending'); pending?.classList.add('error');
     showToast('Tekniskt fel');
+  } finally {
+    endLoading();
   }
 });
 
@@ -3727,14 +3889,19 @@ async function uploadImage(file){
   fd.append('csrf_token', CSRF);
   fd.append('file', file, file.name || 'upload.jpg');
 
-  const r  = await fetch(API + '/upload', { method:'POST', body: fd, credentials:'include', headers:h });
-  const js = await r.json().catch(()=>({}));
-  if (!r.ok || !js.ok) {
-    const msg = js.err || 'Uppladdning misslyckades';
-    showToast(msg);
-    throw new Error(msg);
+  beginLoading();
+  try {
+    const r  = await fetch(API + '/upload', { method:'POST', body: fd, credentials:'include', headers:h });
+    const js = await r.json().catch(()=>({}));
+    if (!r.ok || !js.ok) {
+      const msg = js.err || 'Uppladdning misslyckades';
+      showToast(msg);
+      throw new Error(msg);
+    }
+    return js.url;
+  } finally {
+    endLoading();
   }
-  return js.url;
 }
   async function sendImageMessage(url){
     const fd = new FormData();
@@ -3743,11 +3910,16 @@ async function uploadImage(file){
     fd.append('image_url', url);
     if (currentDM) fd.append('recipient_id', String(currentDM));
     else fd.append('room', currentRoom);
-    const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (!r.ok || !js.ok) { showToast(js.cause || js.err || 'Kunde inte skicka bild'); return false; }
-    if (js.deduped) { showToast('Spam - Duplicerad bild avvisades.'); return false; }
-    return true;
+    beginLoading();
+    try {
+      const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
+      const js = await r.json().catch(()=>({}));
+      if (!r.ok || !js.ok) { showToast(js.cause || js.err || 'Kunde inte skicka bild'); return false; }
+      if (js.deduped) { showToast('Spam - Duplicerad bild avvisades.'); return false; }
+      return true;
+    } finally {
+      endLoading();
+    }
   }
 
 // Upload picker

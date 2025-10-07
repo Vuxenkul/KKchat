@@ -674,7 +674,56 @@ html, body { margin: 0; height: 100%; }
   min-height: 0;
 }
 
-#kkchat-root .msgwrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: auto !important; }
+#kkchat-root .msgwrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: auto !important; position: relative; }
+
+#kkchat-root .loading-status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(env(safe-area-inset-bottom) + var(--kb-offset, 0px) + 72px);
+  display: none;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 8;
+}
+
+#kkchat-root .loading-status[hidden] {
+  display: none !important;
+}
+
+#kkchat-root .loading-status[data-active="1"] {
+  display: flex;
+}
+
+#kkchat-root .loading-status .loading-pill {
+  background: rgba(17, 24, 39, 0.9);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+#kkchat-root .loading-status .loading-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 2px solid rgba(148, 163, 184, 0.35);
+  border-top-color: var(--brand);
+  animation: kkchat-spin 0.9s linear infinite;
+}
+
+#kkchat-root .loading-status .loading-text {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+@keyframes kkchat-spin {
+  to { transform: rotate(360deg); }
+}
 
 #kkchat-root .list {
   border-left: 4px solid white;
