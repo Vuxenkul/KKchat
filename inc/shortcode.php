@@ -807,7 +807,9 @@ function playNotifOnce() {
     }
     applyBlurClass();
 
-  const ROOM_CACHE = new Map();          
+  const ROOM_CACHE = new Map();
+  const PREFETCH_PENDING = new Map();
+  let warmIdleTimeout = null;
   const FIRST_LOAD_LIMIT = 60;          
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
@@ -1034,6 +1036,7 @@ async function prefetchRoom(slug){
     const params = new URLSearchParams({
       public:'1', room: slug, since: String(since), limit:'250', lp:'0', timeout:'0'
     });
+    params.set('_wpnonce', REST_NONCE);
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
     if (!Array.isArray(items) || items.length === 0) return;
@@ -1056,6 +1059,7 @@ async function prefetchDM(userId){
     const params = new URLSearchParams({
       to: String(userId), since: String(since), limit:'250', lp:'0', timeout:'0'
     });
+    params.set('_wpnonce', REST_NONCE);
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
     if (!Array.isArray(items) || items.length === 0) return;
@@ -1077,6 +1081,48 @@ async function prefetchDM(userId){
     if (currentDM) return cacheKeyForDM(currentDM);
     return cacheKeyForRoom(currentRoom);
   }
+
+  function queuePrefetch(state, opts = {}){
+    if (!state) return null;
+
+    const { onlyIfMissing = false } = opts;
+    const key = state.kind === 'dm'
+      ? cacheKeyForDM(state.to)
+      : cacheKeyForRoom(state.room);
+
+    if (state.kind === 'dm') {
+      const id = Number(state.to);
+      if (!Number.isFinite(id) || isBlocked(id)) return null;
+      if (onlyIfMissing && Number(currentDM) === id) {
+        return PREFETCH_PENDING.get(key) || Promise.resolve();
+      }
+    } else {
+      const slug = state.room;
+      if (!slug) return null;
+      if (onlyIfMissing && !currentDM && currentRoom === slug) {
+        return PREFETCH_PENDING.get(key) || Promise.resolve();
+      }
+    }
+
+    if (onlyIfMissing && ROOM_CACHE.has(key)) {
+      return PREFETCH_PENDING.get(key) || Promise.resolve();
+    }
+
+    if (PREFETCH_PENDING.has(key)) {
+      return PREFETCH_PENDING.get(key);
+    }
+
+    const fetcher = state.kind === 'dm' ? prefetchDM : prefetchRoom;
+    const arg = state.kind === 'dm' ? state.to : state.room;
+
+    const job = fetcher(arg)
+      .catch(() => {})
+      .finally(() => { PREFETCH_PENDING.delete(key); });
+
+    PREFETCH_PENDING.set(key, job);
+    return job;
+  }
+
 function applyCache(key){
   const cached = ROOM_CACHE.get(key);
   if (cached){
@@ -1108,6 +1154,114 @@ function applyCache(key){
   pubList.dataset.last = '-1';
   return false;
 }
+
+function hydrateFromPrefetch(state){
+  if (!state) return;
+
+  const key = state.kind === 'dm'
+    ? cacheKeyForDM(state.to)
+    : cacheKeyForRoom(state.room);
+
+  const job = queuePrefetch(state);
+  job
+    ?.then(() => {
+      const active = desiredStreamState();
+      if (!active) return;
+      if (state.kind === 'dm') {
+        if (active.kind !== 'dm' || Number(active.to) !== Number(state.to)) return;
+      } else {
+        if (active.kind !== 'room' || active.room !== state.room) return;
+      }
+
+      if (applyCache(key)) {
+        markVisible(pubList);
+      }
+    })
+    .catch(() => {});
+}
+
+function scheduleNearestWarm(){
+  if (warmIdleTimeout) return;
+  warmIdleTimeout = setTimeout(() => {
+    warmIdleTimeout = null;
+    try {
+      const roomCandidates = ROOMS
+        .filter(r => JOINED.has(r.slug) && r.allowed && r.slug !== currentRoom);
+      if (roomCandidates.length) {
+        const sorted = roomCandidates.slice().sort((a, b) => {
+          const unreadA = ROOM_UNREAD[a.slug] || 0;
+          const unreadB = ROOM_UNREAD[b.slug] || 0;
+          return unreadB - unreadA;
+        });
+        const next = sorted.find(r => (ROOM_UNREAD[r.slug] || 0) > 0) || sorted[0];
+        if (next) {
+          queuePrefetch({ kind: 'room', room: next.slug }, { onlyIfMissing: true });
+        }
+      }
+
+      const dmCandidates = [...ACTIVE_DMS]
+        .filter(id => Number(id) !== Number(currentDM) && !isBlocked(id));
+      if (dmCandidates.length) {
+        dmCandidates.sort((a, b) => {
+          const unreadA = UNREAD_PER[a] || 0;
+          const unreadB = UNREAD_PER[b] || 0;
+          return unreadB - unreadA;
+        });
+        const nextDm = dmCandidates.find(id => (UNREAD_PER[id] || 0) > 0) ?? dmCandidates[0];
+        if (Number.isFinite(Number(nextDm))) {
+          queuePrefetch({ kind: 'dm', to: Number(nextDm) }, { onlyIfMissing: true });
+        }
+      }
+    } catch (_) {}
+  }, 180);
+}
+
+function warmPrefetchFromElement(target){
+  if (!(target instanceof Element)) return;
+
+  const roomNode = target.closest('[data-room]');
+  if (roomNode) {
+    const slug = roomNode.getAttribute('data-room');
+    if (slug && JOINED.has(slug)) {
+      queuePrefetch({ kind: 'room', room: slug }, { onlyIfMissing: true });
+    }
+  }
+
+  const dmNode = target.closest('[data-dm]');
+  if (dmNode) {
+    const val = dmNode.getAttribute('data-dm');
+    const id = Number(val);
+    if (Number.isFinite(id) && !isBlocked(id)) {
+      queuePrefetch({ kind: 'dm', to: id }, { onlyIfMissing: true });
+    }
+  }
+
+  const openBtn = target.closest('[data-open]');
+  if (openBtn) {
+    const val = openBtn.getAttribute('data-open');
+    const id = Number(val);
+    if (Number.isFinite(id) && !isBlocked(id)) {
+      queuePrefetch({ kind: 'dm', to: id }, { onlyIfMissing: true });
+    }
+  }
+}
+
+function attachWarmListeners(root){
+  if (!root) return;
+  const handler = (e) => {
+    if (e.target instanceof Element) {
+      warmPrefetchFromElement(e.target);
+    }
+  };
+  root.addEventListener('mouseover', handler);
+  root.addEventListener('focusin', handler);
+  root.addEventListener('touchstart', handler, { passive: true });
+}
+
+attachWarmListeners(roomTabs);
+attachWarmListeners(roomsListEl);
+attachWarmListeners(dmSideListEl);
+attachWarmListeners(userListEl);
 
   function stashActive(){
   try{
@@ -2040,7 +2194,7 @@ function applySyncPayload(js){
       if (js && js.rooms_unread_delta) {
         for (const [slug, delta] of Object.entries(js.rooms_unread_delta)) {
           if ((+delta || 0) > 0 && slug !== currentRoom) {
-            prefetchRoom(slug);
+            queuePrefetch({ kind: 'room', room: slug });
           }
         }
       }
@@ -2049,7 +2203,7 @@ function applySyncPayload(js){
         for (const [uid, delta] of Object.entries(js.dms_unread_delta)) {
           const id = Number(uid);
           if ((+delta || 0) > 0 && id !== Number(currentDM)) {
-            prefetchDM(id);
+            queuePrefetch({ kind: 'dm', to: id });
           }
         }
       }
@@ -2117,6 +2271,7 @@ let currentDM = null;
     }).join('');
     roomsListEl.innerHTML = rows || '<div class="user"><div class="user-main"><b>Inga rum</b></div></div>';
     updateLeftCounts();
+    scheduleNearestWarm();
   }
 
   function renderDMSidebar(){
@@ -2136,9 +2291,10 @@ let currentDM = null;
             <button class="modbtn" data-close="${id}" title="Stäng">🗑️</button>
           </div>
         </div>`;
-      }).join('') || '<div class="user"><div class="user-main"><b>Inga privata chattar</b></div></div>';
+    }).join('') || '<div class="user"><div class="user-main"><b>Inga privata chattar</b></div></div>';
     dmSideListEl.innerHTML = rows;
     updateLeftCounts();
+    scheduleNearestWarm();
   }
 
   function closeDM(id){
@@ -2446,6 +2602,7 @@ function renderRoomTabs(){
     </div>`;
 
   roomTabs.innerHTML = roomBtns + dmBtns + controls;
+  scheduleNearestWarm();
 }
 
   function setComposerAccess(){
@@ -2568,17 +2725,20 @@ roomTabs.addEventListener('click', async e => {
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
-const cacheHit = applyCache(cacheKeyForRoom(slug));
-setComposerAccess();
-showView('vPublic');
+  const cacheKey = cacheKeyForRoom(slug);
+  const cacheHit = applyCache(cacheKey);
+  setComposerAccess();
+  showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-}
-  // (No else branch — fetch happens immediately below)
+  if (cacheHit) {
+    markVisible(pubList);
+  } else {
+    hydrateFromPrefetch({ kind: 'room', room: slug });
+  }
 
-  await pollActive();
+  const syncPromise = pollActive().catch(()=>{});
   openStream();
+  await syncPromise;
 });
 
 document.addEventListener('click', e => {
@@ -2685,17 +2845,21 @@ roomsListEl?.addEventListener('click', async (e) => {
             muteFor(1200);
         stopStream();
         currentRoom = next;
-        const cacheHit = applyCache(cacheKeyForRoom(currentRoom));
+        const cacheKey = cacheKeyForRoom(currentRoom);
+        const cacheHit = applyCache(cacheKey);
         setComposerAccess();
         showView('vPublic');
 
         if (cacheHit) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
+        } else {
+          hydrateFromPrefetch({ kind: 'room', room: currentRoom });
         }
 
-        await pollActive();
+        const syncPromise = pollActive().catch(()=>{});
         openStream();
+        await syncPromise;
       }
     }
 
@@ -2911,21 +3075,22 @@ async function openDM(id) {
   userListEl.querySelector(`.openbtn[data-dm="${currentDM}"]`)?.setAttribute('aria-current', 'true');
 
   // 2) render from cache immediately
-const cacheHit = applyCache(cacheKeyForDM(currentDM));
+  const cacheKey = cacheKeyForDM(currentDM);
+  const cacheHit = applyCache(cacheKey);
 
-setComposerAccess();
-showView('vPublic');
+  setComposerAccess();
+  showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-} else {
-  // If you prefer to keep your existing cold-load path, you can omit this else.
-  // (You already have a cold-load branch elsewhere in openDM.)
-}
+  if (cacheHit) {
+    markVisible(pubList);
+  } else {
+    hydrateFromPrefetch({ kind: 'dm', to: currentDM });
+  }
 
 
-  await pollActive();
+  const syncPromise = pollActive().catch(()=>{});
   openStream();
+  await syncPromise;
 
 
 
@@ -3956,8 +4121,9 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      await pollActive();              // single, awaited warm-up poll
+      const syncPromise = pollActive().catch(()=>{});              // single, awaited warm-up poll
       openStream();
+      await syncPromise;
     }
   } catch (e) {
     // optionally log e
