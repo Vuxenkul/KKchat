@@ -3947,11 +3947,16 @@ async function refreshUsersAndUnread(){
 
 async function init(){
   try{
-    await refreshBlocked();
-    await loadRooms();
-    await refreshUsersAndUnread();
+    await Promise.all([
+      refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); }),
+      loadRooms().catch(e => { console.warn('loadRooms failed', e); })
+    ]);
+
     renderDMSidebar();
     renderRoomTabs();
+
+    const unreadPromise = refreshUsersAndUnread()
+      .catch(e => { console.warn('refreshUsersAndUnread failed', e); });
 
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
@@ -3959,6 +3964,8 @@ async function init(){
       await pollActive();              // single, awaited warm-up poll
       openStream();
     }
+
+    await unreadPromise;
   } catch (e) {
     // optionally log e
   }
