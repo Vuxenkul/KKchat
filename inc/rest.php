@@ -156,9 +156,6 @@ add_action('rest_api_init', function () {
       if ($limit <= 0) { $limit = 200; }
       $limit = max(1, min($limit, 200));
 
-      $timeout = max(5, min(25, (int) ($req->get_param('timeout') ?? 7)));
-      $do_lp   = ((string) $req->get_param('lp') === '1') && ($since >= 0);
-
       return [
         'tables'          => $t,
         'me'              => $me,
@@ -170,77 +167,7 @@ add_action('rest_api_init', function () {
         'peer'            => $peer,
         'only_public'     => $onlyPub,
         'limit'           => $limit,
-        'timeout'         => $timeout,
-        'long_poll'       => $do_lp,
       ];
-    }
-  }
-
-  if (!function_exists('kkchat_sync_wait_for_changes')) {
-    function kkchat_sync_wait_for_changes(array $ctx, int $timeout): void {
-      if (empty($ctx['long_poll'])) { return; }
-
-      $since = (int) ($ctx['since'] ?? -1);
-      if ($since < 0) { return; }
-
-      global $wpdb; $t = kkchat_tables();
-
-      $onlyPub = !empty($ctx['only_public']);
-      $room    = (string) ($ctx['room'] ?? 'general');
-      $me      = (int) ($ctx['me'] ?? 0);
-      $peer    = $ctx['peer'] !== null ? (int) $ctx['peer'] : null;
-
-      $checkNew = function () use ($wpdb, $t, $since, $onlyPub, $room, $me, $peer) {
-        if ($onlyPub) {
-          return (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COALESCE(MAX(id),0)
-               FROM {$t['messages']}
-              WHERE recipient_id IS NULL
-                AND room = %s
-                AND hidden_at IS NULL
-                AND id > %d",
-            $room,
-            $since
-          ));
-        }
-
-        if ($peer) {
-          return (int) $wpdb->get_var($wpdb->prepare(
-            "SELECT COALESCE(MAX(id),0)
-               FROM {$t['messages']}
-              WHERE id > %d
-                AND hidden_at IS NULL
-                AND ((sender_id = %d AND recipient_id = %d) OR
-                     (sender_id = %d AND recipient_id = %d))",
-            $since, $me, $peer, $peer, $me
-          ));
-        }
-
-        return (int) $wpdb->get_var($wpdb->prepare(
-          "SELECT COALESCE(MAX(id),0)
-             FROM {$t['messages']}
-            WHERE id > %d
-              AND hidden_at IS NULL
-              AND (recipient_id = %d OR sender_id = %d)",
-          $since, $me, $me
-        ));
-      };
-
-      $deadline = time() + max(1, $timeout);
-
-      if ($checkNew() === 0) {
-        $sleepUs = (int) apply_filters('kkchat_longpoll_sleep_us', 1800000);
-        if ($sleepUs < 200000) { $sleepUs = 200000; }
-
-        while (time() < $deadline) {
-          kkchat_wpdb_close_connection();
-          usleep($sleepUs);
-          kkchat_wpdb_reconnect_if_needed();
-          if ($checkNew() > 0) { break; }
-        }
-
-        kkchat_wpdb_reconnect_if_needed();
-      }
     }
   }
 
@@ -610,6 +537,96 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_sync_max_cursor')) {
+    function kkchat_sync_max_cursor(array $payload, int $current): int {
+      $max = $current;
+      foreach (($payload['messages'] ?? []) as $msg) {
+        $mid = isset($msg['id']) ? (int) $msg['id'] : null;
+        if ($mid !== null) {
+          $max = max($max, $mid);
+        }
+      }
+      return $max;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_retry_after_hint')) {
+    function kkchat_sync_retry_after_hint(array $payload, array $ctx, bool $hasChanges): int {
+      $fast = (int) apply_filters('kkchat_sync_retry_after_fast', 3, $ctx, $payload, $hasChanges);
+      if ($fast <= 0) { $fast = 3; }
+
+      $idle = (int) apply_filters('kkchat_sync_retry_after_idle', 12, $ctx, $payload, $hasChanges);
+      if ($idle <= 0) { $idle = 12; }
+
+      $hint = $hasChanges ? $fast : $idle;
+      return max(1, $hint);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_format_events')) {
+    function kkchat_sync_format_events(array $payload, bool $initial): array {
+      $event = [
+        'type'          => $initial ? 'snapshot' : 'delta',
+        'messages'      => array_values($payload['messages'] ?? []),
+        'unread'        => $payload['unread'] ?? new stdClass(),
+        'presence'      => $payload['presence'] ?? [],
+        'mention_bumps' => $payload['mention_bumps'] ?? new stdClass(),
+      ];
+
+      return [$event];
+    }
+  }
+
+  if (!function_exists('kkchat_sync_view_key')) {
+    function kkchat_sync_view_key(array $ctx): string {
+      $peer = $ctx['peer'] ?? null;
+      if ($peer !== null) {
+        return 'dm-' . (int) $peer;
+      }
+
+      $room = (string) ($ctx['room'] ?? 'general');
+      if ($room === '') { $room = 'general'; }
+      return 'room-' . $room;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_build_etag')) {
+    function kkchat_sync_build_etag(array $ctx, int $cursor): string {
+      $key = kkchat_sync_view_key($ctx);
+      return sprintf('W/"%s-%d"', $key, max(-1, $cursor));
+    }
+  }
+
+  if (!function_exists('kkchat_sync_rate_guard')) {
+    function kkchat_sync_rate_guard(int $userId): int {
+      if ($userId <= 0) { return 0; }
+
+      $bucket = 'kkchat';
+      $now    = microtime(true);
+
+      if (function_exists('wp_cache_get') && function_exists('wp_cache_set')) {
+        $banKey = 'sync:penalty:' . $userId;
+        $ban    = wp_cache_get($banKey, $bucket);
+        if (is_array($ban) && !empty($ban['until']) && $ban['until'] > $now) {
+          return (int) ceil($ban['until'] - $now);
+        }
+
+        $lastKey = 'sync:last:' . $userId;
+        $last    = wp_cache_get($lastKey, $bucket);
+        wp_cache_set($lastKey, $now, $bucket, 30);
+
+        if (is_numeric($last) && ($now - (float) $last) < 0.9) {
+          $penalty = max(2, (int) apply_filters('kkchat_sync_rate_penalty', 6));
+          $until   = $now + $penalty;
+          wp_cache_set($banKey, ['until' => $until], $bucket, $penalty);
+          return $penalty;
+        }
+      }
+
+      return 0;
+    }
+  }
+
   /* =========================================================
    *                     AUTH
    * ========================================================= */
@@ -935,68 +952,67 @@ register_rest_route($ns, '/sync', [
   'methods'  => 'GET',
   'callback' => function (WP_REST_Request $req) {
     $ctx = kkchat_sync_build_context($req);
-    kkchat_sync_wait_for_changes($ctx, (int) ($ctx['timeout'] ?? 7));
+
+    $penalty = kkchat_sync_rate_guard((int) ($ctx['me'] ?? 0));
+    if ($penalty > 0) {
+      $resp = new WP_REST_Response(['err' => 'rate_limited'], 429);
+      $resp->header('Retry-After', (string) $penalty);
+      return $resp;
+    }
+
     $payload = kkchat_sync_build_payload($ctx);
-    kkchat_json($payload);
-  },
-  'permission_callback' => '__return_true',
-]);
+    $since   = (int) ($ctx['since'] ?? -1);
+    $cursor  = kkchat_sync_max_cursor($payload, $since);
+    $hasChanges = ($since < 0) ? true : ($cursor > $since);
 
-register_rest_route($ns, '/stream', [
-  'methods'  => 'GET',
-  'callback' => function (WP_REST_Request $req) {
-    $ctx = kkchat_sync_build_context($req);
+    $retryAfter = kkchat_sync_retry_after_hint($payload, $ctx, $hasChanges);
+    $etag       = kkchat_sync_build_etag($ctx, $cursor);
 
-    if (!headers_sent()) {
-      header('Content-Type: text/event-stream; charset=UTF-8');
-      header('Cache-Control: no-cache, no-transform');
-      header('X-Accel-Buffering: no');
+    $headers = [
+      'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+      'Pragma'        => 'no-cache',
+    ];
+
+    if ($retryAfter > 0) {
+      $headers['Retry-After'] = (string) $retryAfter;
+    }
+    if ($etag !== '') {
+      $headers['ETag'] = $etag;
     }
 
-    if (function_exists('apache_setenv')) { @apache_setenv('no-gzip', '1'); }
-    @ini_set('zlib.output_compression', '0');
-    while (ob_get_level() > 0) { @ob_end_flush(); }
-    @ob_implicit_flush(1);
-    echo ":connected\n\n";
-    @flush();
+    $ifNoneMatch = isset($_SERVER['HTTP_IF_NONE_MATCH']) ? trim((string) $_SERVER['HTTP_IF_NONE_MATCH']) : '';
 
-    ignore_user_abort(true);
-
-    $timeout   = (int) ($ctx['timeout'] ?? 7);
-    $cursor    = (int) ($ctx['since'] ?? -1);
-    $firstLoop = true;
-
-    while (!connection_aborted()) {
-      $loopCtx = $ctx;
-      $loopCtx['since'] = $cursor;
-      $loopCtx['long_poll'] = ($cursor >= 0);
-
-      if (!$firstLoop && $loopCtx['long_poll']) {
-        kkchat_sync_wait_for_changes($loopCtx, $timeout);
-      } elseif (!$firstLoop) {
-        usleep(250000);
-      }
-
-      $payload = kkchat_sync_build_payload($loopCtx);
-
-      $maxId = $cursor;
-      foreach (($payload['messages'] ?? []) as $msg) {
-        $mid = isset($msg['id']) ? (int) $msg['id'] : null;
-        if ($mid !== null) { $maxId = max($maxId, $mid); }
-      }
-      $cursor = $maxId;
-
-      $json = wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-      if ($json === false) { $json = '{}'; }
-
-      echo "event: sync\n";
-      echo "data: {$json}\n\n";
-      @flush();
-
-      $firstLoop = false;
+    if (!$hasChanges && $etag !== '' && $ifNoneMatch !== '' && $ifNoneMatch === $etag) {
+      $resp = new WP_REST_Response(null, 304);
+      foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
+      return $resp;
     }
 
-    exit;
+    if (!$hasChanges) {
+      $resp = new WP_REST_Response(null, 204);
+      foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
+      return $resp;
+    }
+
+    $events = kkchat_sync_format_events($payload, $since < 0);
+
+    $data = [
+      'now'        => (int) ($payload['now'] ?? time()),
+      'next'       => $cursor,
+      'retryAfter' => $retryAfter,
+      'events'     => $events,
+    ];
+
+    unset($payload['now']);
+    foreach ($payload as $k => $v) {
+      if (!array_key_exists($k, $data)) {
+        $data[$k] = $v;
+      }
+    }
+
+    $resp = new WP_REST_Response($data, 200);
+    foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
+    return $resp;
   },
   'permission_callback' => '__return_true',
 ]);

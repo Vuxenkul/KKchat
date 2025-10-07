@@ -647,11 +647,51 @@ function hasMediaDevices(){
 }
 
 
-const STREAM_RETRY_MS = 2500;
-let STREAM = null;
-let STREAM_ID = 0;
-let STREAM_TIMER = null;
-let STREAM_SUSPENDED = false;
+const POLL_CLIENT_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const POLL_CHANNEL_NAME = 'kkchat-sync-v1';
+const POLL_LEADER_KEY   = 'kkchat:poll:leader';
+const POLL_SYNC_KEY     = 'kkchat:poll:last';
+const POLL_POKE_KEY     = 'kkchat:poll:poke';
+const POLL_HEARTBEAT_MS = 4000;
+const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
+
+let POLL_TIMER = null;
+let POLL_BUSY = false;
+let POLL_SUSPENDED = false;
+let POLL_IS_LEADER = false;
+let POLL_HEARTBEAT_TIMER = null;
+let POLL_HOT_UNTIL = 0;
+let POLL_LAST_EVENT_AT = 0;
+
+const POLL_ETAGS = new Map();
+const POLL_RETRY_HINT = new Map();
+
+const POLL_BROADCAST = (typeof BroadcastChannel === 'function') ? new BroadcastChannel(POLL_CHANNEL_NAME) : null;
+if (POLL_BROADCAST) {
+  try {
+    POLL_BROADCAST.addEventListener('message', (ev) => {
+      handlePollMessage(ev?.data);
+    });
+  } catch (_) {}
+}
+
+window.addEventListener('storage', (ev) => {
+  if (ev.key === POLL_LEADER_KEY) {
+    handleLeaderStorage(ev.newValue);
+    return;
+  }
+  if (ev.key === POLL_SYNC_KEY) {
+    if (ev.newValue) {
+      try { handlePollMessage(JSON.parse(ev.newValue)); } catch (_) {}
+    }
+    return;
+  }
+  if (ev.key === POLL_POKE_KEY) {
+    if (ev.newValue) {
+      try { handlePollMessage(JSON.parse(ev.newValue)); } catch (_) {}
+    }
+  }
+});
 
 function desiredStreamState(){
   if (currentDM) { return { kind: 'dm', to: Number(currentDM) }; }
@@ -665,7 +705,6 @@ function computeStreamParams(state){
   const isCold = last < 0;
   params.set('since', String(last));
   params.set('limit', isCold ? String(FIRST_LOAD_LIMIT) : '250');
-  params.set('timeout', '25');
   params.set('_wpnonce', REST_NONCE);
   if (state.kind === 'dm') {
     params.set('to', String(state.to));
@@ -676,91 +715,380 @@ function computeStreamParams(state){
   return params;
 }
 
+function pollContextKey(state){
+  if (!state) return 'none';
+  return state.kind === 'dm' ? `dm:${state.to}` : `room:${state.room}`;
+}
+
 function stopStream(){
-  if (STREAM) {
-    try { STREAM.close(); } catch(_) {}
-  }
-  STREAM = null;
-  STREAM_ID++;
-  if (STREAM_TIMER) {
-    clearTimeout(STREAM_TIMER);
-    STREAM_TIMER = null;
+  if (POLL_TIMER) {
+    clearTimeout(POLL_TIMER);
+    POLL_TIMER = null;
   }
 }
 
-function scheduleStreamReconnect(delay = STREAM_RETRY_MS){
-  if (STREAM_SUSPENDED) return;
-  if (STREAM_TIMER) return;
-  if (!desiredStreamState()) return;
-  STREAM_TIMER = setTimeout(() => {
-    STREAM_TIMER = null;
-    openStream();
-  }, delay);
+function scheduleStreamReconnect(delay){
+  const state = desiredStreamState();
+  if (!state) return;
+  if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
+
+  if (POLL_TIMER) {
+    clearTimeout(POLL_TIMER);
+    POLL_TIMER = null;
+  }
+
+  let wait = delay;
+  if (wait == null) {
+    const hint = POLL_RETRY_HINT.get(pollContextKey(state));
+    wait = computePollDelay(hint);
+  }
+
+  const jitter = 0.8 + Math.random() * 0.4;
+  wait = Math.max(500, Math.round(wait * jitter));
+
+  POLL_TIMER = setTimeout(() => {
+    POLL_TIMER = null;
+    performPoll();
+  }, wait);
 }
 
-function openStream(){
-  if (STREAM_SUSPENDED) return;
-  if (typeof EventSource !== 'function') return;
+function openStream(forceCold = false){
+  if (POLL_SUSPENDED) return;
   const state = desiredStreamState();
   if (!state) return;
 
-  const params = computeStreamParams(state);
-  const url = `${API}/stream?${params.toString()}`;
+  ensureLeader(false);
+  if (!POLL_IS_LEADER) { return; }
 
-  stopStream();
-
-  let source;
-  try {
-    source = new EventSource(url, { withCredentials: true });
-  } catch (_) {
-    try { window.__kkPollHealthy = false; } catch(_) {}
-    scheduleStreamReconnect();
-    maybePollActiveFallback();
-    return;
+  if (forceCold) {
+    POLL_ETAGS.delete(pollContextKey(state));
   }
 
-  const id = ++STREAM_ID;
-  const context = { ...state };
-  STREAM = source;
-
-  source.onopen = () => { try { window.__kkPollHealthy = true; } catch(_) {}; };
-
-  source.addEventListener('sync', ev => {
-    if (STREAM_ID !== id) return;
-    try { window.__kkPollHealthy = true; } catch(_) {}
-    let payload;
-    try { payload = JSON.parse(ev.data); } catch(_) { return; }
-    if (payload && Number.isFinite(+payload.now)) {
-      LAST_SERVER_NOW = +payload.now;
-    } else {
-      LAST_SERVER_NOW = Math.floor(Date.now()/1000);
-    }
-    handleStreamSync(payload, context);
-  });
-
-  source.onerror = () => {
-    try { window.__kkPollHealthy = false; } catch(_) {}
-    stopStream();
-    scheduleStreamReconnect();
-    maybePollActiveFallback();
-  };
+  stopStream();
+  performPoll(forceCold).catch(()=>{});
 }
 
 function suspendStream(){
-  STREAM_SUSPENDED = true;
+  POLL_SUSPENDED = true;
   stopStream();
 }
 
 function resumeStream(){
-  if (!STREAM_SUSPENDED) return;
-  STREAM_SUSPENDED = false;
+  if (!POLL_SUSPENDED) return;
+  POLL_SUSPENDED = false;
   openStream();
 }
 
 function restartStream(){
   stopStream();
-  if (!STREAM_SUSPENDED) {
-    openStream();
+  if (!POLL_SUSPENDED) {
+    openStream(true);
+  }
+}
+
+function readLeaderRecord(){
+  try {
+    const raw = localStorage.getItem(POLL_LEADER_KEY);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec || typeof rec.id !== 'string') return null;
+    return rec;
+  } catch (_) {
+    return null;
+  }
+}
+
+function leaderExpired(rec){
+  if (!rec) return true;
+  const ts = Number(rec.ts || 0);
+  if (!Number.isFinite(ts)) return true;
+  return Date.now() - ts > POLL_LEADER_TTL_MS;
+}
+
+function becomeLeader(){
+  POLL_IS_LEADER = true;
+  try {
+    localStorage.setItem(POLL_LEADER_KEY, JSON.stringify({ id: POLL_CLIENT_ID, ts: Date.now() }));
+  } catch (_) {}
+  startLeaderHeartbeat();
+  scheduleStreamReconnect(0);
+}
+
+function ensureLeader(force = false){
+  const rec = readLeaderRecord();
+  if (force || !rec || leaderExpired(rec) || rec.id === POLL_CLIENT_ID) {
+    becomeLeader();
+    return true;
+  }
+
+  POLL_IS_LEADER = rec.id === POLL_CLIENT_ID;
+  if (POLL_IS_LEADER) {
+    startLeaderHeartbeat();
+  } else {
+    stopLeaderHeartbeat();
+    stopStream();
+  }
+  return POLL_IS_LEADER;
+}
+
+function startLeaderHeartbeat(){
+  if (POLL_HEARTBEAT_TIMER) return;
+  POLL_HEARTBEAT_TIMER = setInterval(() => {
+    if (!POLL_IS_LEADER) {
+      stopLeaderHeartbeat();
+      return;
+    }
+    try {
+      localStorage.setItem(POLL_LEADER_KEY, JSON.stringify({ id: POLL_CLIENT_ID, ts: Date.now() }));
+    } catch (_) {}
+  }, POLL_HEARTBEAT_MS);
+}
+
+function stopLeaderHeartbeat(){
+  if (POLL_HEARTBEAT_TIMER) {
+    clearInterval(POLL_HEARTBEAT_TIMER);
+    POLL_HEARTBEAT_TIMER = null;
+  }
+}
+
+function handleLeaderStorage(value){
+  let rec = null;
+  if (value) {
+    try { rec = JSON.parse(value); } catch (_) { rec = null; }
+  }
+
+  if (!rec || leaderExpired(rec)) {
+    ensureLeader(false);
+    return;
+  }
+
+  const isSelf = rec.id === POLL_CLIENT_ID;
+  POLL_IS_LEADER = isSelf;
+  if (isSelf) {
+    startLeaderHeartbeat();
+    return;
+  }
+
+  stopLeaderHeartbeat();
+  stopStream();
+}
+
+function computePollDelay(hintMs){
+  const now = Date.now();
+  let base;
+  if (document.visibilityState === 'hidden') {
+    base = 45000;
+  } else if (now < POLL_HOT_UNTIL) {
+    base = 2500;
+  } else if (now - POLL_LAST_EVENT_AT < 120000) {
+    base = 12000;
+  } else {
+    base = 15000;
+  }
+
+  const conn = navigator.connection?.effectiveType || '';
+  if (/slow-2g|2g/i.test(conn)) {
+    base += 20000;
+  } else if (/3g/i.test(conn)) {
+    base += 10000;
+  }
+
+  if (hintMs != null && Number.isFinite(hintMs)) {
+    base = Math.max(base, hintMs);
+  }
+
+  return base;
+}
+
+function parseRetryAfter(header){
+  if (!header) return null;
+  const num = Number(header);
+  if (Number.isFinite(num) && num >= 0) return num;
+  return null;
+}
+
+function broadcastSync(state, payload, meta){
+  const message = {
+    type: 'sync',
+    from: POLL_CLIENT_ID,
+    key: pollContextKey(state),
+    state,
+    data: payload,
+    meta: meta || {},
+    ts: Date.now()
+  };
+
+  if (POLL_BROADCAST) {
+    try { POLL_BROADCAST.postMessage(message); } catch (_) {}
+  }
+
+  try {
+    localStorage.setItem(POLL_SYNC_KEY, JSON.stringify(message));
+    localStorage.removeItem(POLL_SYNC_KEY);
+  } catch (_) {}
+}
+
+
+function requestLeaderSync(forceCold = false){
+  const state = desiredStreamState();
+  if (!state) return;
+  const message = {
+    type: 'poke',
+    from: POLL_CLIENT_ID,
+    key: pollContextKey(state),
+    forceCold: !!forceCold,
+    ts: Date.now()
+  };
+  if (POLL_BROADCAST) {
+    try { POLL_BROADCAST.postMessage(message); } catch (_) {}
+  }
+  try {
+    localStorage.setItem(POLL_POKE_KEY, JSON.stringify(message));
+    localStorage.removeItem(POLL_POKE_KEY);
+  } catch (_) {}
+}
+
+function handlePollMessage(msg){
+  if (!msg || typeof msg !== 'object') return;
+  if (msg.from === POLL_CLIENT_ID) return;
+
+  if (msg.type === 'sync') {
+    const state = desiredStreamState();
+    if (!state) return;
+    if (msg.key && msg.key !== pollContextKey(state)) return;
+    const data = msg.data;
+    if (!data) return;
+    if (data && Number.isFinite(+data.now)) {
+      LAST_SERVER_NOW = +data.now;
+    } else {
+      LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
+    }
+    handleStreamSync(data, msg.state || state);
+    const next = Number(data.next ?? NaN);
+    if (Number.isFinite(next)) {
+      pubList.dataset.last = String(Math.max(+pubList.dataset.last || -1, next));
+    }
+    return;
+  }
+
+  if (msg.type === 'poke') {
+    if (!POLL_IS_LEADER) return;
+    const state = desiredStreamState();
+    if (!state) return;
+    if (msg.key && msg.key !== pollContextKey(state)) return;
+    const forceCold = !!msg.forceCold;
+    if (forceCold) {
+      POLL_ETAGS.delete(pollContextKey(state));
+    }
+    stopStream();
+    performPoll(forceCold).catch(()=>{});
+  }
+}
+
+async function performPoll(forceCold = false){
+  if (POLL_BUSY || POLL_SUSPENDED) return;
+
+  const state = desiredStreamState();
+  if (!state) {
+    stopStream();
+    return;
+  }
+
+  if (!POLL_IS_LEADER) {
+    return;
+  }
+
+  const key = pollContextKey(state);
+  const params = computeStreamParams(state);
+  if (forceCold) {
+    params.set('since', '-1');
+    params.set('limit', String(FIRST_LOAD_LIMIT));
+    POLL_ETAGS.delete(key);
+  }
+
+  const headers = new Headers(h);
+  headers.set('Accept', 'application/json');
+  headers.set('Cache-Control', 'no-cache');
+
+  const etag = POLL_ETAGS.get(key);
+  if (etag) {
+    headers.set('If-None-Match', etag);
+  }
+
+  const url = `${API}/sync?${params.toString()}`;
+
+  POLL_BUSY = true;
+  try {
+    const resp = await fetch(url, { credentials: 'include', headers });
+    const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
+
+    if (resp.status === 204 || resp.status === 304) {
+      if (retryHeader != null) {
+        POLL_RETRY_HINT.set(key, retryHeader * 1000);
+      }
+      scheduleStreamReconnect(retryHeader != null ? retryHeader * 1000 : undefined);
+      return;
+    }
+
+    if (resp.status === 429) {
+      if (retryHeader != null) {
+        POLL_RETRY_HINT.set(key, retryHeader * 1000);
+        scheduleStreamReconnect(retryHeader * 1000);
+      } else {
+        scheduleStreamReconnect(15000);
+      }
+      return;
+    }
+
+    if (!resp.ok) {
+      throw new Error(`sync ${resp.status}`);
+    }
+
+    const payload = await resp.json();
+    const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
+    const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
+    if (retryMs != null) {
+      POLL_RETRY_HINT.set(key, retryMs);
+    }
+
+    const headerEtag = resp.headers.get('ETag');
+    if (headerEtag) {
+      POLL_ETAGS.set(key, headerEtag);
+    }
+
+    if (payload && Number.isFinite(+payload.now)) {
+      LAST_SERVER_NOW = +payload.now;
+    } else {
+      LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
+    }
+
+    handleStreamSync(payload, state);
+
+    const next = Number(payload?.next ?? NaN);
+    if (Number.isFinite(next)) {
+      pubList.dataset.last = String(Math.max(+pubList.dataset.last || -1, next));
+    }
+
+    let hadMessages = false;
+    if (Array.isArray(payload?.events)) {
+      hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
+    } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
+      hadMessages = true;
+    }
+
+    if (hadMessages) {
+      POLL_LAST_EVENT_AT = Date.now();
+      POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 60000;
+    }
+
+    broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
+  } catch (err) {
+    console.warn('sync poll failed', err);
+    const fallback = Math.max(8000, (POLL_RETRY_HINT.get(key) || 8000) * 1.5);
+    POLL_RETRY_HINT.set(key, fallback);
+  } finally {
+    POLL_BUSY = false;
+    scheduleStreamReconnect();
   }
 }
 
@@ -1032,7 +1360,7 @@ async function prefetchRoom(slug){
     const since  = cached ? (Number(cached.last) || -1) : -1;
 
     const params = new URLSearchParams({
-      public:'1', room: slug, since: String(since), limit:'250', lp:'0', timeout:'0'
+      public:'1', room: slug, since: String(since), limit:'250'
     });
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
@@ -1054,7 +1382,7 @@ async function prefetchDM(userId){
     const since  = cached ? (Number(cached.last) || -1) : -1;
 
     const params = new URLSearchParams({
-      to: String(userId), since: String(since), limit:'250', lp:'0', timeout:'0'
+      to: String(userId), since: String(since), limit:'250'
     });
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
@@ -1920,6 +2248,49 @@ function kkAnyPassiveMentionBump(js){
 
 
 function applySyncPayload(js){
+  if (js && Array.isArray(js.events)) {
+    let mergedMessages = [];
+    let mergedUnread = null;
+    let mergedPresence = null;
+    let mergedMention = null;
+
+    js.events.forEach(ev => {
+      if (!ev || typeof ev !== 'object') return;
+      if (Array.isArray(ev.messages) && ev.messages.length) {
+        mergedMessages = mergedMessages.concat(ev.messages);
+      }
+      if (ev.unread && typeof ev.unread === 'object') {
+        mergedUnread = ev.unread;
+      }
+      if (Array.isArray(ev.presence)) {
+        mergedPresence = ev.presence;
+      }
+      if (ev.mention_bumps && typeof ev.mention_bumps === 'object') {
+        mergedMention = { ...(mergedMention || {}), ...ev.mention_bumps };
+      }
+    });
+
+    if (mergedMessages.length) {
+      const existing = Array.isArray(js.messages) ? js.messages : [];
+      if (!existing.length) {
+        js.messages = mergedMessages;
+      } else {
+        const seen = new Set(existing.map(m => Number(m?.id)));
+        const additions = mergedMessages.filter(m => !seen.has(Number(m?.id)));
+        js.messages = existing.concat(additions);
+      }
+    }
+    if (mergedUnread) {
+      js.unread = mergedUnread;
+    }
+    if (mergedPresence) {
+      js.presence = mergedPresence;
+    }
+    if (mergedMention) {
+      js.mention_bumps = { ...(js.mention_bumps || {}), ...mergedMention };
+    }
+  }
+
 
   // --- helper: play mention sound with throttling fallback ---
   function playMentionOnce(){
@@ -2849,19 +3220,19 @@ async function pollActive(forceCold = false){
   const state = desiredStreamState();
   if (!state) return;
 
-  const params = computeStreamParams(state);
   if (forceCold) {
-    params.set('since', '-1');
-    params.set('limit', String(FIRST_LOAD_LIMIT));
+    ensureLeader(true);
+  } else {
+    ensureLeader(false);
   }
-  params.set('lp', '0');
-  params.set('timeout', '0');
+
+  if (!POLL_IS_LEADER) {
+    requestLeaderSync(forceCold);
+    return;
+  }
 
   try {
-    const js = await fetchJSON(`${API}/sync?${params.toString()}`);
-    if (js && Number.isFinite(+js.now)) { LAST_SERVER_NOW = +js.now; }
-    else { LAST_SERVER_NOW = Math.floor(Date.now()/1000); }
-    handleStreamSync(js, state);
+    await performPoll(forceCold);
   } catch(_) {}
 }
 
@@ -3522,7 +3893,6 @@ jumpBtn.addEventListener('click', ()=>{
   window.addEventListener('online', touch);
 
   let pingTimer = null;
-  window.__kkPollHealthy = typeof EventSource === 'function';
 
   let pollFallbackTimer = null;
   let pollFallbackBusy  = false;
@@ -3531,11 +3901,6 @@ jumpBtn.addEventListener('click', ()=>{
     if (pollFallbackBusy) return;
     if (document.visibilityState === 'hidden') return;
 
-    const sseSupported = typeof EventSource === 'function';
-    const healthy      = sseSupported ? window.__kkPollHealthy !== false : false;
-
-    if (healthy && STREAM) return;
-
     pollFallbackBusy = true;
     pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
   }
@@ -3543,10 +3908,7 @@ jumpBtn.addEventListener('click', ()=>{
   function ensurePollFallback(){
     if (pollFallbackTimer) return;
     pollFallbackTimer = setInterval(maybePollActiveFallback, 20000);
-
-    if (!window.__kkPollHealthy || typeof EventSource !== 'function') {
-      setTimeout(maybePollActiveFallback, 1000);
-    }
+    setTimeout(maybePollActiveFallback, 1000);
   }
 
   ensurePollFallback();
@@ -3554,10 +3916,11 @@ jumpBtn.addEventListener('click', ()=>{
   function schedulePingFallback(){
     clearInterval(pingTimer);
     pingTimer = setInterval(()=>{
-      // Only ping if tab is hidden or long-poll recently errored
-      if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
       touch();
-      maybePollActiveFallback();
+      if (document.visibilityState === 'hidden') return;
+      if (POLL_IS_LEADER) {
+        maybePollActiveFallback();
+      }
     }, 120000); // 2 minutes
   }
 
@@ -3923,27 +4286,8 @@ window.addEventListener('beforeunload', beaconPing, { capture: true });
 window.addEventListener('freeze', beaconPing, { capture: true });
 
 async function refreshUsersAndUnread(){
-  try{
-    const since = +pubList?.dataset.last || -1;
-    const params = new URLSearchParams();
-
-    if (currentDM) {
-      params.set('to', String(currentDM));
-    } else {
-      params.set('public', '1');
-      params.set('room', currentRoom);
-    }
-
-    // We only need presence + unread; this call does NOT long-poll
-    params.set('since', String(since));
-    params.set('limit', '1');
-    params.set('lp', '0');
-    params.set('timeout', '0');
-
-    const js = await fetchJSON(`${API}/sync?${params.toString()}`);
-
-    // let the existing pipeline update presence/unread + sounds + badges
-    applySyncPayload(js); // already calls renderUsers/Rooms/DMs/Tabs/Counts
+  try {
+    await pollActive();
   } catch(_){}
 }
 
