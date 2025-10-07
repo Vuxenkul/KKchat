@@ -2865,6 +2865,29 @@ async function pollActive(forceCold = false){
   } catch(_) {}
 }
 
+async function longPollActive(forceCold = false){
+  const state = desiredStreamState();
+  if (!state) return;
+
+  const params = computeStreamParams(state);
+  if (forceCold) {
+    params.set('since', '-1');
+    params.set('limit', String(FIRST_LOAD_LIMIT));
+  }
+  params.set('lp', '1');
+  params.set('timeout', '25');
+
+  try {
+    const js = await fetchJSON(`${API}/sync?${params.toString()}`);
+    if (js && Number.isFinite(+js.now)) { LAST_SERVER_NOW = +js.now; }
+    else { LAST_SERVER_NOW = Math.floor(Date.now()/1000); }
+    handleStreamSync(js, state);
+  } catch (err) {
+    await new Promise(resolve => setTimeout(resolve, 750));
+    throw err;
+  }
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     suspendStream();
@@ -3530,6 +3553,7 @@ jumpBtn.addEventListener('click', ()=>{
   function maybePollActiveFallback(){
     if (pollFallbackBusy) return;
     if (document.visibilityState === 'hidden') return;
+    if (STREAM_SUSPENDED) return;
 
     const sseSupported = typeof EventSource === 'function';
     const healthy      = sseSupported ? window.__kkPollHealthy !== false : false;
@@ -3537,7 +3561,15 @@ jumpBtn.addEventListener('click', ()=>{
     if (healthy && STREAM) return;
 
     pollFallbackBusy = true;
-    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
+    const useLong = !sseSupported || (!STREAM && !healthy);
+    const runner = useLong ? longPollActive : pollActive;
+
+    runner().catch(()=>{}).finally(()=>{
+      pollFallbackBusy = false;
+      if (useLong && (!STREAM || window.__kkPollHealthy === false)) {
+        setTimeout(maybePollActiveFallback, 150);
+      }
+    });
   }
 
   function ensurePollFallback(){
