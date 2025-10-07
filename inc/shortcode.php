@@ -2150,10 +2150,10 @@ if (currentDM === id){
     muteFor(1200);
   stopStream();
   currentDM = null;
-  applyCache(activeCacheKey());
+  const cacheHit = applyCache(activeCacheKey());
   setComposerAccess();
   showView('vPublic');
-  pollActive().catch(()=>{});
+  pollActive(!cacheHit).catch(()=>{});
   openStream();
 }
     renderDMSidebar();
@@ -2577,7 +2577,7 @@ if (cacheHit) {
 }
   // (No else branch — fetch happens immediately below)
 
-  const syncPromise = pollActive().catch(()=>{});
+  const syncPromise = pollActive(!cacheHit).catch(()=>{});
   openStream();
   await syncPromise;
 });
@@ -2926,7 +2926,7 @@ if (cacheHit) {
 }
 
 
-  const syncPromise = pollActive().catch(()=>{});
+  const syncPromise = pollActive(!cacheHit).catch(()=>{});
   openStream();
   await syncPromise;
 
