@@ -393,6 +393,9 @@ f.addEventListener('submit', async (ev)=>{
   const toast   = $('#kk-toast');
   const jumpBtn = $('#kk-jumpBottom');
   const loadingStatus = document.getElementById('kk-loadingStatus');
+  const loadingTextEl = loadingStatus ? loadingStatus.querySelector('.loading-text') : null;
+  const LOADING_DEFAULT_TEXT = loadingTextEl ? loadingTextEl.textContent : '';
+  const LOADING_NOTICE_TEXT = 'Inga nya meddelanden';
 
   const userListEl = $('#kk-userList');
   const userSearch = $('#kk-uSearch');
@@ -686,6 +689,7 @@ let loadingHidePending = false;
 let remoteLoading = false;
 let remoteLoadingTs = 0;
 let loadingBroadcastActive = false;
+let loadingNoticeTimer = null;
 
 function wantLoadingVisible(){
   if (!loadingStatus) return false;
@@ -703,6 +707,9 @@ function finishHide(){
   loadingHidePending = false;
   delete loadingStatus.dataset.active;
   loadingStatus.hidden = true;
+  if (loadingTextEl && !loadingNoticeTimer) {
+    loadingTextEl.textContent = LOADING_DEFAULT_TEXT;
+  }
 }
 
 function showLoadingIndicator(){
@@ -789,6 +796,34 @@ function endLoading(options){
     }
   }
   updateLoadingIndicator();
+}
+
+function showLoadingNotice(text, duration = 1000){
+  if (!loadingStatus || !loadingTextEl) return Promise.resolve();
+  if (loadingShowTimer) {
+    clearTimeout(loadingShowTimer);
+    loadingShowTimer = null;
+  }
+  if (loadingMinTimer) {
+    clearTimeout(loadingMinTimer);
+    loadingMinTimer = null;
+  }
+  if (loadingNoticeTimer) {
+    clearTimeout(loadingNoticeTimer);
+    loadingNoticeTimer = null;
+  }
+  loadingHidePending = false;
+  loadingActive = true;
+  loadingStatus.hidden = false;
+  loadingStatus.dataset.active = '1';
+  loadingTextEl.textContent = text;
+  return new Promise((resolve) => {
+    loadingNoticeTimer = setTimeout(() => {
+      loadingNoticeTimer = null;
+      loadingTextEl.textContent = LOADING_DEFAULT_TEXT;
+      resolve();
+    }, Math.max(0, duration));
+  });
 }
 
 function applyRemoteLoading(on, ts){
@@ -1184,11 +1219,13 @@ async function performPoll(forceCold = false){
 
   POLL_BUSY = true;
   beginLoading({ broadcast: true });
+  let showNoNewMessages = false;
   try {
     const resp = await fetch(url, { credentials: 'include', headers });
     const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
 
     if (resp.status === 204 || resp.status === 304) {
+      showNoNewMessages = true;
       if (retryHeader != null) {
         POLL_RETRY_HINT.set(key, retryHeader * 1000);
       }
@@ -1245,6 +1282,8 @@ async function performPoll(forceCold = false){
     if (hadMessages) {
       POLL_LAST_EVENT_AT = Date.now();
       POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 60000;
+    } else {
+      showNoNewMessages = true;
     }
 
     broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
@@ -1254,6 +1293,11 @@ async function performPoll(forceCold = false){
     POLL_RETRY_HINT.set(key, fallback);
   } finally {
     POLL_BUSY = false;
+    if (showNoNewMessages) {
+      try {
+        await showLoadingNotice(LOADING_NOTICE_TEXT, 1000);
+      } catch (_) {}
+    }
     endLoading({ broadcast: true });
     scheduleStreamReconnect();
   }
