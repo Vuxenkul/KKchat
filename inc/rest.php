@@ -590,6 +590,60 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_sync_versions_enabled')) {
+    function kkchat_sync_versions_enabled(): bool {
+      return kkchat_sync_cache_available();
+    }
+  }
+
+  if (!function_exists('kkchat_sync_bump_views')) {
+    function kkchat_sync_bump_views(array $viewKeys, ?int $floor = null): void {
+      if (empty($viewKeys) || !kkchat_sync_versions_enabled()) {
+        return;
+      }
+
+      foreach ($viewKeys as $viewKey) {
+        $viewKey = (string) $viewKey;
+        if ($viewKey === '') { continue; }
+
+        kkchat_sync_version_bump('view:' . $viewKey, $floor);
+        if ($floor !== null && $floor > 0) {
+          kkchat_sync_view_cursor_set($viewKey, $floor);
+        }
+      }
+    }
+  }
+
+  if (!function_exists('kkchat_sync_note_message_event')) {
+    function kkchat_sync_note_message_event(int $messageId, array $ctx): void {
+      if ($messageId <= 0) { return; }
+
+      $floor = max(0, $messageId);
+
+      kkchat_sync_version_bump('global', $floor);
+
+      $views = [];
+      if (!empty($ctx['room'])) {
+        $views[] = 'room-' . (string) $ctx['room'];
+      }
+      if (!empty($ctx['dm'])) {
+        foreach ((array) $ctx['dm'] as $dmKey) {
+          $views[] = 'dm-' . (int) $dmKey;
+        }
+      }
+
+      kkchat_sync_bump_views($views, $floor);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_idle_retry_after')) {
+    function kkchat_sync_idle_retry_after(array $ctx): int {
+      $idle = (int) apply_filters('kkchat_sync_retry_after_idle', 12, $ctx, [], false);
+      if ($idle <= 0) { $idle = 12; }
+      return max(1, $idle);
+    }
+  }
+
   if (!function_exists('kkchat_sync_build_etag')) {
     function kkchat_sync_build_etag(array $ctx, int $cursor): string {
       $key = kkchat_sync_view_key($ctx);
@@ -951,54 +1005,117 @@ function kk_computeMentionBumps(PDO $db, array $authUser, array $perRoom, array 
 register_rest_route($ns, '/sync', [
   'methods'  => 'GET',
   'callback' => function (WP_REST_Request $req) {
-    $ctx = kkchat_sync_build_context($req);
+    kkchat_require_login();
+    kkchat_assert_not_blocked_or_fail();
+    nocache_headers();
 
-    $penalty = kkchat_sync_rate_guard((int) ($ctx['me'] ?? 0));
+    $userId = kkchat_current_user_id();
+    $penalty = kkchat_sync_rate_guard((int) $userId);
     if ($penalty > 0) {
       $resp = new WP_REST_Response(['err' => 'rate_limited'], 429);
       $resp->header('Retry-After', (string) $penalty);
+      kkchat_close_session_if_open();
       return $resp;
     }
 
-    $payload = kkchat_sync_build_payload($ctx);
-    $since   = (int) ($ctx['since'] ?? -1);
-    $cursor  = kkchat_sync_max_cursor($payload, $since);
-    $hasChanges = ($since < 0) ? true : ($cursor > $since);
+    $clientSince = max(-1, (int) $req->get_param('since'));
+    $roomParam   = kkchat_sanitize_room_slug((string) $req->get_param('room'));
+    if ($roomParam === '') { $roomParam = 'general'; }
+    $peerParam   = $req->get_param('to') !== null ? (int) $req->get_param('to') : null;
+    $onlyPub     = $req->get_param('public') !== null;
 
-    $retryAfter = kkchat_sync_retry_after_hint($payload, $ctx, $hasChanges);
-    $etag       = kkchat_sync_build_etag($ctx, $cursor);
+    $limit = (int) $req->get_param('limit');
+    if ($limit <= 0) { $limit = 200; }
+    $limit = max(1, min($limit, 200));
+
+    $viewKey   = $peerParam !== null ? ('dm-' . $peerParam) : ('room-' . $roomParam);
+    $snapshot  = kkchat_sync_version_snapshot($viewKey);
+    $versionsEnabled = !empty($snapshot['enabled']);
+    $currentVersion  = (int) ($snapshot['version'] ?? 0);
+    $cursorHint      = (int) ($snapshot['cursor'] ?? 0);
+    $userCursor      = $versionsEnabled ? kkchat_sync_user_cursor_get((int) $userId, $viewKey) : null;
 
     $headers = [
       'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
       'Pragma'        => 'no-cache',
     ];
 
-    if ($retryAfter > 0) {
-      $headers['Retry-After'] = (string) $retryAfter;
-    }
+    $idleCtx = [
+      'peer'        => $peerParam,
+      'room'        => $roomParam,
+      'since'       => $clientSince,
+      'only_public' => $onlyPub,
+      'limit'       => $limit,
+    ];
+    $headers['Retry-After'] = (string) kkchat_sync_idle_retry_after($idleCtx);
+
+    $etagBaseCtx = [
+      'peer' => $peerParam,
+      'room' => $roomParam,
+    ];
+    $etagCursor = $versionsEnabled ? $currentVersion : max(-1, $clientSince);
+    $etag = kkchat_sync_build_etag($etagBaseCtx, $etagCursor);
     if ($etag !== '') {
       $headers['ETag'] = $etag;
     }
 
     $ifNoneMatch = isset($_SERVER['HTTP_IF_NONE_MATCH']) ? trim((string) $_SERVER['HTTP_IF_NONE_MATCH']) : '';
 
-    if (!$hasChanges && $etag !== '' && $ifNoneMatch !== '' && $ifNoneMatch === $etag) {
-      $resp = new WP_REST_Response(null, 304);
+    if ($versionsEnabled && $clientSince >= 0 && $clientSince >= $currentVersion) {
+      kkchat_close_session_if_open();
+      $status = ($etag !== '' && $ifNoneMatch === $etag) ? 304 : 204;
+      $resp = new WP_REST_Response(null, $status);
       foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
       return $resp;
+    }
+
+    $ctx = kkchat_sync_build_context($req);
+    if ($versionsEnabled && $userCursor !== null && $userCursor >= 0) {
+      $ctx['since'] = $userCursor;
+    } elseif ($cursorHint > 0 && isset($ctx['since']) && (int) $ctx['since'] > $cursorHint) {
+      $ctx['since'] = $cursorHint;
+    }
+
+    $payload = kkchat_sync_build_payload($ctx);
+    $sinceForCursor = (int) ($ctx['since'] ?? -1);
+    $cursor = kkchat_sync_max_cursor($payload, $sinceForCursor);
+
+    if ($cursor > 0) {
+      kkchat_sync_view_cursor_set($viewKey, $cursor);
+    }
+
+    if ($versionsEnabled && $cursor >= 0) {
+      kkchat_sync_user_cursor_set((int) $userId, $viewKey, $cursor);
+    }
+
+    $snapshotAfter = kkchat_sync_version_snapshot($viewKey);
+    $finalVersion = $versionsEnabled ? max((int) ($snapshotAfter['version'] ?? 0), $cursor) : $cursor;
+
+    $hasChanges = ($clientSince < 0) ? true : ($finalVersion > $clientSince);
+
+    $retryAfter = kkchat_sync_retry_after_hint($payload, $ctx, $hasChanges);
+    if ($retryAfter > 0) {
+      $headers['Retry-After'] = (string) $retryAfter;
+    }
+
+    $etag = kkchat_sync_build_etag($ctx, $finalVersion);
+    if ($etag !== '') {
+      $headers['ETag'] = $etag;
     }
 
     if (!$hasChanges) {
-      $resp = new WP_REST_Response(null, 204);
+      $status = ($etag !== '' && $ifNoneMatch === $etag) ? 304 : 204;
+      $resp = new WP_REST_Response(null, $status);
       foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
       return $resp;
     }
 
-    $events = kkchat_sync_format_events($payload, $since < 0);
+    $events = kkchat_sync_format_events($payload, $clientSince < 0);
 
     $data = [
       'now'        => (int) ($payload['now'] ?? time()),
-      'next'       => $cursor,
+      'next'       => $finalVersion,
+      'cursor'     => $cursor,
       'retryAfter' => $retryAfter,
       'events'     => $events,
     ];
@@ -1665,6 +1782,16 @@ register_rest_route($ns, '/fetch', [
 
       $mid = (int)$wpdb->insert_id;
 
+      if ($recipient !== null) {
+        kkchat_sync_note_message_event($mid, [
+          'dm' => [$recipient, $me_id],
+        ]);
+      } else {
+        kkchat_sync_note_message_event($mid, [
+          'room' => $room,
+        ]);
+      }
+
     // Write a short-lived preview so admins see the last sent message (room or DM).
     // It expires via the existing 8–10s cleanup in /users, /sync and /ping.
     if ($kind === 'chat') {
@@ -1792,6 +1919,8 @@ register_rest_route($ns, '/reads/mark', [
     // ✅ Now it's safe to release the session lock
     kkchat_close_session_if_open();
 
+    kkchat_sync_version_bump('global');
+
     return kkchat_json(['ok' => true]);
   },
   'permission_callback' => '__return_true',
@@ -1842,6 +1971,12 @@ register_rest_route($ns, '/reads/mark', [
         $wpdb->query($wpdb->prepare(
           "UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL WHERE id=%d", $me
         ));
+        kkchat_sync_version_bump('global');
+        if ($typing_room !== null) {
+          kkchat_sync_bump_views(['room-' . $typing_room]);
+        } elseif ($typing_to !== null) {
+          kkchat_sync_bump_views(['dm-' . (int) $typing_to, 'dm-' . (int) $me]);
+        }
         return kkchat_json(['ok'=>true]);
       }
 
@@ -1867,6 +2002,14 @@ register_rest_route($ns, '/reads/mark', [
       $args[] = $me;
 
       $wpdb->query($wpdb->prepare($sql, ...$args));
+
+      kkchat_sync_version_bump('global');
+      if ($typing_room !== null) {
+        kkchat_sync_bump_views(['room-' . $typing_room]);
+      }
+      if ($typing_to !== null) {
+        kkchat_sync_bump_views(['dm-' . (int) $typing_to, 'dm-' . (int) $me]);
+      }
 
       kkchat_json(['ok'=>true]);
     },

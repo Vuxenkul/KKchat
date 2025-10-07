@@ -225,6 +225,131 @@ function kkchat_sanitize_room_slug(string $s): string {
 /* ------------------------------
  * Auth/session helpers
  * ------------------------------ */
+function kkchat_sync_cache_group(): string {
+  return 'kkchat';
+}
+
+function kkchat_sync_cache_available(): bool {
+  return function_exists('wp_cache_get')
+    && function_exists('wp_cache_set')
+    && function_exists('wp_using_ext_object_cache')
+    && wp_using_ext_object_cache();
+}
+
+function kkchat_sync_version_get(string $scope): int {
+  if (!kkchat_sync_cache_available()) {
+    return 0;
+  }
+
+  $key   = 'sync:ver:' . $scope;
+  $group = kkchat_sync_cache_group();
+  $val   = wp_cache_get($key, $group);
+
+  return is_numeric($val) ? (int) $val : 0;
+}
+
+function kkchat_sync_version_set(string $scope, int $value, int $ttl = 3600): void {
+  if (!kkchat_sync_cache_available()) {
+    return;
+  }
+
+  $key   = 'sync:ver:' . $scope;
+  $group = kkchat_sync_cache_group();
+  wp_cache_set($key, $value, $group, $ttl);
+}
+
+function kkchat_sync_version_bump(string $scope, ?int $floor = null): int {
+  if (!kkchat_sync_cache_available()) {
+    return 0;
+  }
+
+  $current = kkchat_sync_version_get($scope);
+  $next    = $current + 1;
+
+  if ($floor !== null && $next < $floor) {
+    $next = $floor;
+  }
+
+  $seedFloor = (int) ceil(microtime(true) * 1000);
+  if ($next < $seedFloor) {
+    $next = $seedFloor;
+  }
+
+  kkchat_sync_version_set($scope, $next);
+  return $next;
+}
+
+function kkchat_sync_view_cursor_key(string $viewKey): string {
+  return 'sync:cursor:' . $viewKey;
+}
+
+function kkchat_sync_view_cursor_get(string $viewKey): int {
+  if (!kkchat_sync_cache_available()) {
+    return 0;
+  }
+
+  $val = wp_cache_get(kkchat_sync_view_cursor_key($viewKey), kkchat_sync_cache_group());
+  return is_numeric($val) ? (int) $val : 0;
+}
+
+function kkchat_sync_view_cursor_set(string $viewKey, int $cursor, int $ttl = 3600): void {
+  if (!kkchat_sync_cache_available() || $cursor <= 0) {
+    return;
+  }
+
+  wp_cache_set(kkchat_sync_view_cursor_key($viewKey), $cursor, kkchat_sync_cache_group(), $ttl);
+}
+
+function kkchat_sync_user_cursor_key(int $userId, string $viewKey): string {
+  return sprintf('sync:user:%d:%s', max(0, $userId), $viewKey);
+}
+
+function kkchat_sync_user_cursor_get(int $userId, string $viewKey): ?int {
+  if (!kkchat_sync_cache_available() || $userId <= 0) {
+    return null;
+  }
+
+  $val = wp_cache_get(kkchat_sync_user_cursor_key($userId, $viewKey), kkchat_sync_cache_group());
+  if (!is_numeric($val)) {
+    return null;
+  }
+
+  $intVal = (int) $val;
+  return $intVal >= 0 ? $intVal : null;
+}
+
+function kkchat_sync_user_cursor_set(int $userId, string $viewKey, int $cursor, int $ttl = 900): void {
+  if (!kkchat_sync_cache_available() || $userId <= 0 || $cursor < 0) {
+    return;
+  }
+
+  wp_cache_set(kkchat_sync_user_cursor_key($userId, $viewKey), $cursor, kkchat_sync_cache_group(), $ttl);
+}
+
+function kkchat_sync_version_snapshot(string $viewKey): array {
+  if (!kkchat_sync_cache_available()) {
+    return [
+      'enabled' => false,
+      'global'  => 0,
+      'view'    => 0,
+      'version' => 0,
+      'cursor'  => 0,
+    ];
+  }
+
+  $global = kkchat_sync_version_get('global');
+  $view   = kkchat_sync_version_get('view:' . $viewKey);
+  $cursor = kkchat_sync_view_cursor_get($viewKey);
+
+  return [
+    'enabled' => true,
+    'global'  => $global,
+    'view'    => $view,
+    'version' => max($global, $view),
+    'cursor'  => $cursor,
+  ];
+}
+
 function kkchat_logout_session(bool $regenerate_id = true): void {
   global $wpdb; $t = kkchat_tables();
 
@@ -242,6 +367,8 @@ function kkchat_logout_session(bool $regenerate_id = true): void {
   if ($regenerate_id && function_exists('session_regenerate_id')) {
     @session_regenerate_id(true);
   }
+
+  kkchat_sync_version_bump('global');
 }
 
 function kkchat_require_login() {
@@ -318,6 +445,10 @@ function kkchat_touch_active_user(): int {
   if ($id > 0) $_SESSION['kkchat_user_id'] = $id;
 
   $_SESSION['kkchat_last_active_at'] = $now;
+
+  if ($id > 0) {
+    kkchat_sync_version_bump('global');
+  }
 
   return $id;
 }
