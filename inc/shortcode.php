@@ -662,6 +662,7 @@ let POLL_IS_LEADER = false;
 let POLL_HEARTBEAT_TIMER = null;
 let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
+let POLL_HIDDEN_SINCE = 0;
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
@@ -876,14 +877,22 @@ function handleLeaderStorage(value){
 function computePollDelay(hintMs){
   const now = Date.now();
   let base;
-  if (document.visibilityState === 'hidden') {
+  const hiddenFor = document.visibilityState === 'hidden'
+    ? (POLL_HIDDEN_SINCE ? now - POLL_HIDDEN_SINCE : 0)
+    : 0;
+
+  if (hiddenFor >= 60000) {
     base = 45000;
-  } else if (now < POLL_HOT_UNTIL) {
-    base = 2500;
-  } else if (now - POLL_LAST_EVENT_AT < 120000) {
-    base = 12000;
-  } else {
-    base = 15000;
+  }
+
+  if (base == null) {
+    if (now < POLL_HOT_UNTIL) {
+      base = 2500;
+    } else if (now - POLL_LAST_EVENT_AT < 120000) {
+      base = 12000;
+    } else {
+      base = 15000;
+    }
   }
 
   const conn = navigator.connection?.effectiveType || '';
@@ -3229,10 +3238,16 @@ async function pollActive(forceCold = false){
   } catch(_) {}
 }
 
+if (document.visibilityState === 'hidden') {
+  POLL_HIDDEN_SINCE = Date.now();
+}
+
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
+    POLL_HIDDEN_SINCE = Date.now();
     suspendStream();
   } else {
+    POLL_HIDDEN_SINCE = 0;
     resumeStream();
     pollActive().catch(()=>{});
   }
