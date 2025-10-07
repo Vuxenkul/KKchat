@@ -251,13 +251,32 @@ function kkchat_require_login() {
 
   $ttl = (int) kkchat_user_ttl();
   if ($ttl > 0) {
+    $now         = time();
     $last_active = (int) ($_SESSION['kkchat_last_active_at'] ?? 0);
-    if ($last_active > 0 && (time() - $last_active) > $ttl) {
-      kkchat_logout_session();
-      if (function_exists('kkchat_close_session_if_open')) {
-        kkchat_close_session_if_open();
+    if ($last_active > 0 && ($now - $last_active) > $ttl) {
+      $uid      = kkchat_current_user_id();
+      $dbFresh  = false;
+
+      if ($uid > 0) {
+        global $wpdb; $t = kkchat_tables();
+        $db_last = (int) $wpdb->get_var($wpdb->prepare(
+          "SELECT last_seen FROM {$t['users']} WHERE id = %d LIMIT 1",
+          $uid
+        ));
+
+        if ($db_last > $now - $ttl) {
+          $_SESSION['kkchat_last_active_at'] = $db_last;
+          $dbFresh = true;
+        }
       }
-      kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
+
+      if (!$dbFresh) {
+        kkchat_logout_session();
+        if (function_exists('kkchat_close_session_if_open')) {
+          kkchat_close_session_if_open();
+        }
+        kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
+      }
     }
   }
 
