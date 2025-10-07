@@ -128,6 +128,36 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_rooms_payload_for_current_user')) {
+    function kkchat_rooms_payload_for_current_user(): array {
+      global $wpdb; $t = kkchat_tables();
+
+      $rows = $wpdb->get_results(
+        "SELECT slug, title, member_only, sort FROM {$t['rooms']} ORDER BY sort ASC, title ASC",
+        ARRAY_A
+      ) ?: [];
+
+      $guest = kkchat_is_guest();
+      $out   = [];
+
+      foreach ($rows as $r) {
+        $slug = (string) ($r['slug'] ?? '');
+        if ($slug === '') { continue; }
+
+        $member_only = ((int) ($r['member_only'] ?? 0) === 1);
+
+        $out[] = [
+          'slug'        => $slug,
+          'title'       => (string) ($r['title'] ?? ''),
+          'member_only' => $member_only,
+          'allowed'     => $guest ? !$member_only : true,
+        ];
+      }
+
+      return $out;
+    }
+  }
+
   if (!function_exists('kkchat_sync_build_context')) {
     function kkchat_sync_build_context(WP_REST_Request $req): array {
       kkchat_require_login();
@@ -1254,28 +1284,7 @@ register_rest_route($ns, '/rooms', [
     // Release the PHP session lock ASAP
     kkchat_close_session_if_open();
 
-    global $wpdb;
-    $t = kkchat_tables();
-
-    // Simple read-only query
-    $rows = $wpdb->get_results(
-      "SELECT slug, title, member_only, sort
-         FROM {$t['rooms']}
-        ORDER BY sort ASC, title ASC",
-      ARRAY_A
-    );
-
-    $guest = kkchat_is_guest();
-
-    $out = array_map(function ($r) use ($guest) {
-      $mo = ((int)$r['member_only'] === 1);
-      return [
-        'slug'        => (string)$r['slug'],
-        'title'       => (string)$r['title'],
-        'member_only' => $mo,
-        'allowed'     => $guest ? !$mo : true,
-      ];
-    }, $rows ?? []);
+    $out = kkchat_rooms_payload_for_current_user();
 
     return kkchat_json($out);
   },

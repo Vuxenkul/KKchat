@@ -24,7 +24,101 @@ add_shortcode('kkchat', function () {
     $mention_audio = esc_url($plugin_root_url . 'assets/mention.mp3');
         $report_audio  = esc_url($plugin_root_url . 'assets/report.mp3'); // NEW file
 
-    
+  $bootstrap = null;
+  if (
+    $me_logged &&
+    function_exists('kkchat_sync_build_payload') &&
+    function_exists('kkchat_sync_max_cursor') &&
+    function_exists('kkchat_sync_retry_after_hint') &&
+    function_exists('kkchat_sync_format_events') &&
+    function_exists('kkchat_sync_view_key') &&
+    function_exists('kkchat_sync_build_etag') &&
+    function_exists('kkchat_rooms_payload_for_current_user')
+  ) {
+    try {
+      if (function_exists('kkchat_touch_active_user')) {
+        kkchat_touch_active_user();
+      }
+
+      $rooms_payload = kkchat_rooms_payload_for_current_user();
+
+      $default_room = 'lobby';
+      if (!empty($rooms_payload)) {
+        $has_allowed = [];
+        foreach ($rooms_payload as $room_row) {
+          $slug = (string) ($room_row['slug'] ?? '');
+          if ($slug === '') { continue; }
+          if (!empty($room_row['allowed'])) {
+            if ($slug === 'lobby') {
+              $default_room = $slug;
+              break;
+            }
+            $has_allowed[] = $slug;
+          }
+        }
+
+        if ($default_room === 'lobby') {
+          if (!empty($has_allowed)) {
+            $default_room = (string) $has_allowed[0];
+          } elseif (!empty($rooms_payload[0]['slug'])) {
+            $default_room = (string) $rooms_payload[0]['slug'];
+          }
+        }
+      }
+
+      if ($default_room === '') { $default_room = 'lobby'; }
+
+      $first_limit = (int) apply_filters('kkchat_first_load_limit', 30);
+      if ($first_limit <= 0) { $first_limit = 30; }
+
+      $ctx = [
+        'me'              => $me_id,
+        'guest'           => kkchat_is_guest() ? 1 : 0,
+        'is_admin_viewer' => $is_admin ? 1 : 0,
+        'since_pub'       => isset($_SESSION['kkchat_seen_at_public']) ? (int) $_SESSION['kkchat_seen_at_public'] : 0,
+        'since'           => -1,
+        'room'            => $default_room,
+        'peer'            => null,
+        'only_public'     => 1,
+        'limit'           => $first_limit,
+      ];
+
+      $payload = kkchat_sync_build_payload($ctx);
+      $cursor  = kkchat_sync_max_cursor($payload, -1);
+      $retry   = kkchat_sync_retry_after_hint($payload, $ctx, true);
+
+      $data = [
+        'now'        => (int) ($payload['now'] ?? time()),
+        'next'       => $cursor,
+        'retryAfter' => $retry,
+        'events'     => kkchat_sync_format_events($payload, true),
+      ];
+
+      unset($payload['now']);
+      foreach ($payload as $k => $v) {
+        if (!array_key_exists($k, $data)) {
+          $data[$k] = $v;
+        }
+      }
+
+      $etag = kkchat_sync_build_etag($ctx, $cursor);
+      if ($etag !== '') {
+        $data['etag'] = $etag;
+      }
+
+      $bootstrap = [
+        'rooms'          => array_values($rooms_payload),
+        'defaultRoom'    => $default_room,
+        'sync'           => $data,
+        'sync_view'      => kkchat_sync_view_key($ctx),
+        'blocked_ids'    => array_values(array_map('intval', kkchat_blocked_ids($me_id))),
+        'firstLoadLimit' => $first_limit,
+      ];
+    } catch (Throwable $e) {
+      $bootstrap = null;
+    }
+  }
+
   wp_enqueue_style('kkchat');
   ob_start(); ?>
 
@@ -158,6 +252,11 @@ f.addEventListener('submit', async (ev)=>{
     })();
     </script>
   <?php else: ?>
+    <?php if (!empty($bootstrap)): ?>
+      <script>
+        window.__kkchat_bootstrap = <?= wp_json_encode($bootstrap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
+      </script>
+    <?php endif; ?>
     <header class="header">
       <div class="h-left"><div class="title">KKchatten Beta 0.8.3 </div></div>
       <div>
@@ -379,6 +478,18 @@ f.addEventListener('submit', async (ev)=>{
   const OPEN_DM_USER = <?= $open_dm ?>;
   const IS_ADMIN = <?= $is_admin ? 'true' : 'false' ?>;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
+
+  const BOOT_DATA = window.__kkchat_bootstrap || null;
+  let BOOT_ROOMS = Array.isArray(BOOT_DATA?.rooms) ? BOOT_DATA.rooms : null;
+  let BOOT_BLOCKED = Array.isArray(BOOT_DATA?.blocked_ids) ? BOOT_DATA.blocked_ids : null;
+  let BOOT_SYNC = BOOT_DATA?.sync || null;
+  let BOOT_SYNC_VIEW = typeof BOOT_DATA?.sync_view === 'string' ? BOOT_DATA.sync_view : null;
+  const BOOT_DEFAULT_ROOM = (BOOT_DATA && typeof BOOT_DATA.defaultRoom === 'string' && BOOT_DATA.defaultRoom)
+    ? BOOT_DATA.defaultRoom
+    : 'lobby';
+  if (BOOT_DATA) {
+    delete window.__kkchat_bootstrap;
+  }
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -1145,7 +1256,13 @@ function playNotifOnce() {
     applyBlurClass();
 
   const ROOM_CACHE = new Map();          
-  const FIRST_LOAD_LIMIT = 30;          
+  const FIRST_LOAD_LIMIT = (() => {
+    const raw = Number(BOOT_DATA?.firstLoadLimit);
+    if (Number.isFinite(raw) && raw > 0) {
+      return Math.max(1, Math.floor(raw));
+    }
+    return 30;
+  })();
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
 
@@ -1323,7 +1440,10 @@ async function doLogout(){
   }
   let ACTIVE_DMS = loadDMActive();
 
-  let BLOCKED = new Set();
+  let BOOT_BLOCKED_LIST = Array.isArray(BOOT_BLOCKED)
+    ? BOOT_BLOCKED.map(id => Number(id)).filter(Number.isFinite)
+    : null;
+  let BLOCKED = new Set(BOOT_BLOCKED_LIST || []);
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
   
   function msgToHTML(m){
@@ -1460,23 +1580,34 @@ function applyCache(key){
   }catch(_){}
 }
 
+  function applyBlockedList(rawIds){
+    const ids = Array.isArray(rawIds) ? rawIds : [];
+    BLOCKED = new Set(ids.map(id => Number(id)).filter(Number.isFinite));
+
+    if (currentDM && isBlocked(currentDM)) {
+          muteFor(1200);
+      currentDM = null;
+      applyCache(activeCacheKey());
+      setComposerAccess();
+      showView('vPublic');
+    }
+
+    [...ACTIVE_DMS].forEach(id => { if (isBlocked(id)) ACTIVE_DMS.delete(id); });
+    saveDMActive(ACTIVE_DMS);
+    renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
+  }
+
   async function refreshBlocked(){
     try{
-      const js = await fetchJSON(API + '/block/list');
-      const ids = (js?.ids || js?.blocked_ids || []);
-      BLOCKED = new Set((Array.isArray(ids)?ids:[]).map(Number));
-
-      if (currentDM && isBlocked(currentDM)) {
-            muteFor(1200);     
-        currentDM = null;
-        applyCache(activeCacheKey());
-        setComposerAccess();
-        showView('vPublic');
+      if (BOOT_BLOCKED_LIST) {
+        applyBlockedList(BOOT_BLOCKED_LIST);
+        BOOT_BLOCKED_LIST = null;
+        return;
       }
 
-      [...ACTIVE_DMS].forEach(id => { if (isBlocked(id)) ACTIVE_DMS.delete(id); });
-      saveDMActive(ACTIVE_DMS);
-      renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
+      const js = await fetchJSON(API + '/block/list');
+      const ids = js?.ids ?? js?.blocked_ids ?? [];
+      applyBlockedList(ids);
     }catch(_){}
   }
 
@@ -2445,8 +2576,10 @@ function applySyncPayload(js){
 }
 
 
-let ROOMS = [];
-let currentRoom = 'lobby';
+let ROOMS = Array.isArray(BOOT_ROOMS) ? BOOT_ROOMS.map(r => ({ ...r })) : [];
+let ROOMS_PRELOADED = Array.isArray(BOOT_ROOMS);
+BOOT_ROOMS = null;
+let currentRoom = BOOT_DEFAULT_ROOM;
 let currentDM = null;
 
   function defaultRoomSlug(){
@@ -3082,8 +3215,13 @@ roomsListEl?.addEventListener('click', async (e) => {
 
 
   async function loadRooms(){
-    const rs = await fetchJSON(API+'/rooms');
-    ROOMS = Array.isArray(rs) ? rs : [];
+    if (!ROOMS_PRELOADED) {
+      const rs = await fetchJSON(API + '/rooms');
+      ROOMS = Array.isArray(rs) ? rs : [];
+    } else {
+      ROOMS_PRELOADED = false;
+    }
+
     ensureJoinedBaseline();
 
     if (!ROOMS.find(r=>r.slug===currentRoom) || !JOINED.has(currentRoom)){
@@ -3218,6 +3356,79 @@ function handleStreamSync(js, context){
   }
 }
 
+function applyBootstrapSync(state, opts = {}){
+  if (!BOOT_SYNC) return false;
+  if (!state) return false;
+  if (!pubList) { BOOT_SYNC = null; BOOT_SYNC_VIEW = null; return false; }
+
+  const key = pollContextKey(state);
+  if (BOOT_SYNC_VIEW && BOOT_SYNC_VIEW !== key) {
+    return false;
+  }
+
+  const payload = BOOT_SYNC;
+  let retryMs = null;
+
+  try {
+    if (payload && Number.isFinite(+payload.now)) {
+      LAST_SERVER_NOW = +payload.now;
+    } else {
+      LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
+    }
+
+    handleStreamSync(payload, state);
+
+    const next = Number(payload?.next ?? NaN);
+    if (Number.isFinite(next)) {
+      const current = Number(pubList.dataset.last);
+      const prev = Number.isFinite(current) ? current : -1;
+      pubList.dataset.last = String(Math.max(prev, next));
+    } else if (Array.isArray(payload?.messages)) {
+      const current = Number(pubList.dataset.last);
+      const prev = Number.isFinite(current) ? current : -1;
+      const maxId = payload.messages.reduce((mx, m) => Math.max(mx, Number(m?.id) || -1), prev);
+      if (maxId >= 0) {
+        pubList.dataset.last = String(maxId);
+      }
+    }
+
+    const etag = typeof payload?.etag === 'string' ? payload.etag : null;
+    if (etag) {
+      POLL_ETAGS.set(key, etag);
+    }
+
+    const retry = Number(payload?.retryAfter || 0);
+    if (retry > 0) {
+      retryMs = retry * 1000;
+      POLL_RETRY_HINT.set(key, retryMs);
+    }
+
+    const hadMessages = Array.isArray(payload?.events)
+      ? payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0)
+      : (Array.isArray(payload?.messages) && payload.messages.length > 0);
+
+    if (hadMessages) {
+      POLL_LAST_EVENT_AT = Date.now();
+      POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 60000;
+    }
+
+    if (opts.isLeader) {
+      broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
+    }
+  } catch (err) {
+    console.warn('bootstrap sync failed', err);
+  } finally {
+    BOOT_SYNC = null;
+    BOOT_SYNC_VIEW = null;
+  }
+
+  if (opts.isLeader) {
+    scheduleStreamReconnect(retryMs ?? undefined);
+  }
+
+  return true;
+}
+
 async function pollActive(forceCold = false){
   const state = desiredStreamState();
   if (!state) return;
@@ -3228,7 +3439,19 @@ async function pollActive(forceCold = false){
     ensureLeader(false);
   }
 
-  if (!POLL_IS_LEADER) {
+  const isLeaderNow = POLL_IS_LEADER;
+
+  if (BOOT_SYNC) {
+    const applied = applyBootstrapSync(state, { isLeader: isLeaderNow });
+    if (applied) {
+      if (!isLeaderNow) {
+        requestLeaderSync(forceCold);
+      }
+      return;
+    }
+  }
+
+  if (!isLeaderNow) {
     requestLeaderSync(forceCold);
     return;
   }
