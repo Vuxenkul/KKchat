@@ -652,6 +652,60 @@ let STREAM = null;
 let STREAM_ID = 0;
 let STREAM_TIMER = null;
 let STREAM_SUSPENDED = false;
+let STREAM_FALLBACK = null;
+
+function stopStreamFallback(){
+  if (!STREAM_FALLBACK) return;
+  STREAM_FALLBACK.active = false;
+  try { STREAM_FALLBACK.controller?.abort(); } catch(_) {}
+}
+
+function startStreamFallback(){
+  if (STREAM_SUSPENDED) return;
+  if (STREAM_FALLBACK?.active) return;
+  if (!desiredStreamState()) return;
+
+  const token = { active: true, controller: null };
+  STREAM_FALLBACK = token;
+
+  const run = async () => {
+    while (token.active) {
+      if (STREAM_SUSPENDED) break;
+      const state = desiredStreamState();
+      if (!state) break;
+
+      const params = computeStreamParams(state);
+      params.set('lp', '1');
+
+      const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+      token.controller = ctrl;
+
+      try {
+        const js = await fetchJSON(`${API}/sync?${params.toString()}`, ctrl ? { signal: ctrl.signal } : {});
+        if (!token.active) break;
+        if (js && Number.isFinite(+js.now)) {
+          LAST_SERVER_NOW = +js.now;
+        } else {
+          LAST_SERVER_NOW = Math.floor(Date.now()/1000);
+        }
+        handleStreamSync(js, state);
+      } catch (err) {
+        if (!token.active) break;
+        if (err?.name === 'AbortError') { continue; }
+        await new Promise(res => setTimeout(res, STREAM_RETRY_MS));
+      } finally {
+        token.controller = null;
+      }
+    }
+
+    if (STREAM_FALLBACK === token) {
+      STREAM_FALLBACK = null;
+    }
+  };
+
+  try { window.__kkPollHealthy = false; } catch(_) {}
+  run();
+}
 
 function desiredStreamState(){
   if (currentDM) { return { kind: 'dm', to: Number(currentDM) }; }
@@ -677,6 +731,7 @@ function computeStreamParams(state){
 }
 
 function stopStream(){
+  stopStreamFallback();
   if (STREAM) {
     try { STREAM.close(); } catch(_) {}
   }
@@ -690,6 +745,7 @@ function stopStream(){
 
 function scheduleStreamReconnect(delay = STREAM_RETRY_MS){
   if (STREAM_SUSPENDED) return;
+  if (typeof EventSource !== 'function') return;
   if (STREAM_TIMER) return;
   if (!desiredStreamState()) return;
   STREAM_TIMER = setTimeout(() => {
@@ -700,13 +756,18 @@ function scheduleStreamReconnect(delay = STREAM_RETRY_MS){
 
 function openStream(){
   if (STREAM_SUSPENDED) return;
-  if (typeof EventSource !== 'function') return;
   const state = desiredStreamState();
   if (!state) return;
+
+  if (typeof EventSource !== 'function') {
+    startStreamFallback();
+    return;
+  }
 
   const params = computeStreamParams(state);
   const url = `${API}/stream?${params.toString()}`;
 
+  stopStreamFallback();
   stopStream();
 
   let source;
@@ -714,8 +775,9 @@ function openStream(){
     source = new EventSource(url, { withCredentials: true });
   } catch (_) {
     try { window.__kkPollHealthy = false; } catch(_) {}
+    startStreamFallback();
     scheduleStreamReconnect();
-    maybePollActiveFallback();
+    pollActive().catch(()=>{});
     return;
   }
 
@@ -723,11 +785,15 @@ function openStream(){
   const context = { ...state };
   STREAM = source;
 
-  source.onopen = () => { try { window.__kkPollHealthy = true; } catch(_) {}; };
+  source.onopen = () => {
+    try { window.__kkPollHealthy = true; } catch(_) {}
+    stopStreamFallback();
+  };
 
   source.addEventListener('sync', ev => {
     if (STREAM_ID !== id) return;
     try { window.__kkPollHealthy = true; } catch(_) {}
+    stopStreamFallback();
     let payload;
     try { payload = JSON.parse(ev.data); } catch(_) { return; }
     if (payload && Number.isFinite(+payload.now)) {
@@ -741,8 +807,9 @@ function openStream(){
   source.onerror = () => {
     try { window.__kkPollHealthy = false; } catch(_) {}
     stopStream();
+    startStreamFallback();
     scheduleStreamReconnect();
-    maybePollActiveFallback();
+    pollActive().catch(()=>{});
   };
 }
 
@@ -1148,8 +1215,17 @@ function applyCache(key){
       await doLogout();
     });
 
-  async function fetchJSON(url){
-    const r=await fetch(url,{credentials:'include',cache:'no-cache', headers:h});
+  async function fetchJSON(url, opts = {}){
+    const init = {
+      credentials: 'include',
+      cache: 'no-cache',
+      headers: h,
+      ...opts,
+    };
+    if (opts.headers) {
+      init.headers = { ...h, ...opts.headers };
+    }
+    const r=await fetch(url, init);
     if(!r.ok){
       let js={}; try{ js = await r.json(); }catch(_){}
       if (js.err === 'kicked' || js.err === 'ip_banned') {
@@ -3524,32 +3600,17 @@ jumpBtn.addEventListener('click', ()=>{
   let pingTimer = null;
   window.__kkPollHealthy = typeof EventSource === 'function';
 
-  let pollFallbackTimer = null;
-  let pollFallbackBusy  = false;
-
-  function maybePollActiveFallback(){
-    if (pollFallbackBusy) return;
+  function ensureFallbackLoop(){
     if (document.visibilityState === 'hidden') return;
-
-    const sseSupported = typeof EventSource === 'function';
-    const healthy      = sseSupported ? window.__kkPollHealthy !== false : false;
-
-    if (healthy && STREAM) return;
-
-    pollFallbackBusy = true;
-    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
-  }
-
-  function ensurePollFallback(){
-    if (pollFallbackTimer) return;
-    pollFallbackTimer = setInterval(maybePollActiveFallback, 20000);
-
-    if (!window.__kkPollHealthy || typeof EventSource !== 'function') {
-      setTimeout(maybePollActiveFallback, 1000);
+    if (STREAM_SUSPENDED) return;
+    if (typeof EventSource !== 'function' || window.__kkPollHealthy === false) {
+      startStreamFallback();
     }
   }
 
-  ensurePollFallback();
+  if (!window.__kkPollHealthy) {
+    startStreamFallback();
+  }
 
   function schedulePingFallback(){
     clearInterval(pingTimer);
@@ -3557,14 +3618,28 @@ jumpBtn.addEventListener('click', ()=>{
       // Only ping if tab is hidden or long-poll recently errored
       if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
       touch();
-      maybePollActiveFallback();
+      ensureFallbackLoop();
+      if (typeof EventSource === 'function' && window.__kkPollHealthy === false) {
+        scheduleStreamReconnect();
+      }
     }, 120000); // 2 minutes
   }
 
   schedulePingFallback();
-  document.addEventListener('visibilitychange', schedulePingFallback);
-  window.addEventListener('online', schedulePingFallback);
-  window.addEventListener('focus', schedulePingFallback);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      ensureFallbackLoop();
+    }
+    schedulePingFallback();
+  });
+  window.addEventListener('online', () => {
+    ensureFallbackLoop();
+    schedulePingFallback();
+  });
+  window.addEventListener('focus', () => {
+    ensureFallbackLoop();
+    schedulePingFallback();
+  });
 
 })();
 
