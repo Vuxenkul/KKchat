@@ -652,60 +652,7 @@ let STREAM = null;
 let STREAM_ID = 0;
 let STREAM_TIMER = null;
 let STREAM_SUSPENDED = false;
-let STREAM_FALLBACK = null;
-
-function stopStreamFallback(){
-  if (!STREAM_FALLBACK) return;
-  STREAM_FALLBACK.active = false;
-  try { STREAM_FALLBACK.controller?.abort(); } catch(_) {}
-}
-
-function startStreamFallback(){
-  if (STREAM_SUSPENDED) return;
-  if (STREAM_FALLBACK?.active) return;
-  if (!desiredStreamState()) return;
-
-  const token = { active: true, controller: null };
-  STREAM_FALLBACK = token;
-
-  const run = async () => {
-    while (token.active) {
-      if (STREAM_SUSPENDED) break;
-      const state = desiredStreamState();
-      if (!state) break;
-
-      const params = computeStreamParams(state);
-      params.set('lp', '1');
-
-      const ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
-      token.controller = ctrl;
-
-      try {
-        const js = await fetchJSON(`${API}/sync?${params.toString()}`, ctrl ? { signal: ctrl.signal } : {});
-        if (!token.active) break;
-        if (js && Number.isFinite(+js.now)) {
-          LAST_SERVER_NOW = +js.now;
-        } else {
-          LAST_SERVER_NOW = Math.floor(Date.now()/1000);
-        }
-        handleStreamSync(js, state);
-      } catch (err) {
-        if (!token.active) break;
-        if (err?.name === 'AbortError') { continue; }
-        await new Promise(res => setTimeout(res, STREAM_RETRY_MS));
-      } finally {
-        token.controller = null;
-      }
-    }
-
-    if (STREAM_FALLBACK === token) {
-      STREAM_FALLBACK = null;
-    }
-  };
-
-  try { window.__kkPollHealthy = false; } catch(_) {}
-  run();
-}
+const SYNC_WAITERS = new Set();
 
 function desiredStreamState(){
   if (currentDM) { return { kind: 'dm', to: Number(currentDM) }; }
@@ -731,7 +678,6 @@ function computeStreamParams(state){
 }
 
 function stopStream(){
-  stopStreamFallback();
   if (STREAM) {
     try { STREAM.close(); } catch(_) {}
   }
@@ -758,26 +704,18 @@ function openStream(){
   if (STREAM_SUSPENDED) return;
   const state = desiredStreamState();
   if (!state) return;
-
-  if (typeof EventSource !== 'function') {
-    startStreamFallback();
-    return;
-  }
+  if (typeof EventSource !== 'function') return;
 
   const params = computeStreamParams(state);
   const url = `${API}/stream?${params.toString()}`;
 
-  stopStreamFallback();
   stopStream();
 
   let source;
   try {
     source = new EventSource(url, { withCredentials: true });
   } catch (_) {
-    try { window.__kkPollHealthy = false; } catch(_) {}
-    startStreamFallback();
     scheduleStreamReconnect();
-    pollActive().catch(()=>{});
     return;
   }
 
@@ -785,15 +723,8 @@ function openStream(){
   const context = { ...state };
   STREAM = source;
 
-  source.onopen = () => {
-    try { window.__kkPollHealthy = true; } catch(_) {}
-    stopStreamFallback();
-  };
-
   source.addEventListener('sync', ev => {
     if (STREAM_ID !== id) return;
-    try { window.__kkPollHealthy = true; } catch(_) {}
-    stopStreamFallback();
     let payload;
     try { payload = JSON.parse(ev.data); } catch(_) { return; }
     if (payload && Number.isFinite(+payload.now)) {
@@ -805,11 +736,8 @@ function openStream(){
   });
 
   source.onerror = () => {
-    try { window.__kkPollHealthy = false; } catch(_) {}
     stopStream();
-    startStreamFallback();
     scheduleStreamReconnect();
-    pollActive().catch(()=>{});
   };
 }
 
@@ -2229,7 +2157,6 @@ if (currentDM === id){
   applyCache(activeCacheKey());
   setComposerAccess();
   showView('vPublic');
-  pollActive().catch(()=>{});
   openStream();
 }
     renderDMSidebar();
@@ -2653,7 +2580,7 @@ if (cacheHit) {
 }
   // (No else branch — fetch happens immediately below)
 
-  const syncPromise = pollActive().catch(()=>{});
+  const syncPromise = waitForNextSync();
   openStream();
   await syncPromise;
 });
@@ -2771,7 +2698,7 @@ roomsListEl?.addEventListener('click', async (e) => {
           markVisible(pubList);
         }
 
-        const syncPromise = pollActive().catch(()=>{});
+        const syncPromise = waitForNextSync();
         openStream();
         await syncPromise;
       }
@@ -2839,6 +2766,15 @@ function didAppendNew(payload, prevLast) {
     if (Number.isFinite(id) && id > prevLast) return true;
   }
   return false;
+}
+
+function resolveSyncWaiters(){
+  if (!SYNC_WAITERS.size) return;
+  const waiters = Array.from(SYNC_WAITERS);
+  SYNC_WAITERS.clear();
+  for (const waiter of waiters) {
+    try { waiter(); } catch(_) {}
+  }
 }
 
 function handleStreamSync(js, context){
@@ -2919,26 +2855,37 @@ function handleStreamSync(js, context){
       html: pubList.innerHTML
     });
   }
+
+  resolveSyncWaiters();
 }
 
-async function pollActive(forceCold = false){
-  const state = desiredStreamState();
-  if (!state) return;
+function waitForNextSync(options = {}){
+  const cfg = (options && typeof options === 'object') ? options : {};
+  const forceCold = !!cfg.forceCold;
 
-  const params = computeStreamParams(state);
   if (forceCold) {
-    params.set('since', '-1');
-    params.set('limit', String(FIRST_LOAD_LIMIT));
+    pubList.dataset.last = '-1';
+    restartStream();
+  } else if (!STREAM && !STREAM_SUSPENDED) {
+    openStream();
   }
-  params.set('lp', '0');
-  params.set('timeout', '0');
 
-  try {
-    const js = await fetchJSON(`${API}/sync?${params.toString()}`);
-    if (js && Number.isFinite(+js.now)) { LAST_SERVER_NOW = +js.now; }
-    else { LAST_SERVER_NOW = Math.floor(Date.now()/1000); }
-    handleStreamSync(js, state);
-  } catch(_) {}
+  return new Promise(resolve => {
+    let done = false;
+    let timer;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      if (timer) { clearTimeout(timer); }
+      SYNC_WAITERS.delete(finish);
+      resolve();
+    };
+
+    SYNC_WAITERS.add(finish);
+    timer = setTimeout(() => {
+      finish();
+    }, 5000);
+  });
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -2946,12 +2893,12 @@ document.addEventListener('visibilitychange', () => {
     suspendStream();
   } else {
     resumeStream();
-    pollActive().catch(()=>{});
+    waitForNextSync().catch(()=>{});
   }
 });
 
-window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => { restartStream(); waitForNextSync().catch(()=>{}); });
+window.addEventListener('online', () => { restartStream(); waitForNextSync().catch(()=>{}); });
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -3002,7 +2949,7 @@ if (cacheHit) {
 }
 
 
-  const syncPromise = pollActive().catch(()=>{});
+  const syncPromise = waitForNextSync();
   openStream();
   await syncPromise;
 
@@ -3193,7 +3140,7 @@ async function takeWebcamPhoto(){
     const url = await uploadImage(file);
 
     const ok = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) { await waitForNextSync(); showToast('Bild skickad'); }
   } catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   } finally {
@@ -3293,7 +3240,7 @@ pubForm.addEventListener('submit', async (e)=>{
     pubForm.reset();
     pending?.remove();
 
-    await pollActive();
+    await waitForNextSync();
   }catch(_){
     pending?.classList.remove('pending'); pending?.classList.add('error');
     showToast('Tekniskt fel');
@@ -3459,7 +3406,7 @@ pubImgInp?.addEventListener('change', async ()=>{
     showToast('Laddar bild…');
     const url = await uploadImage(small);
     const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) { await waitForNextSync(); showToast('Bild skickad'); }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -3492,7 +3439,7 @@ pubCamInp?.addEventListener('change', async ()=>{
     showToast('Laddar bild…');
     const url = await uploadImage(small);
     const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) { await waitForNextSync(); showToast('Bild skickad'); }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -3596,51 +3543,6 @@ jumpBtn.addEventListener('click', ()=>{
   document.addEventListener('visibilitychange', () => { if (!document.hidden) touch(); });
   window.addEventListener('focus',  touch);
   window.addEventListener('online', touch);
-
-  let pingTimer = null;
-  window.__kkPollHealthy = typeof EventSource === 'function';
-
-  function ensureFallbackLoop(){
-    if (document.visibilityState === 'hidden') return;
-    if (STREAM_SUSPENDED) return;
-    if (typeof EventSource !== 'function' || window.__kkPollHealthy === false) {
-      startStreamFallback();
-    }
-  }
-
-  if (!window.__kkPollHealthy) {
-    startStreamFallback();
-  }
-
-  function schedulePingFallback(){
-    clearInterval(pingTimer);
-    pingTimer = setInterval(()=>{
-      // Only ping if tab is hidden or long-poll recently errored
-      if (document.visibilityState === 'visible' && window.__kkPollHealthy) return;
-      touch();
-      ensureFallbackLoop();
-      if (typeof EventSource === 'function' && window.__kkPollHealthy === false) {
-        scheduleStreamReconnect();
-      }
-    }, 120000); // 2 minutes
-  }
-
-  schedulePingFallback();
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) {
-      ensureFallbackLoop();
-    }
-    schedulePingFallback();
-  });
-  window.addEventListener('online', () => {
-    ensureFallbackLoop();
-    schedulePingFallback();
-  });
-  window.addEventListener('focus', () => {
-    ensureFallbackLoop();
-    schedulePingFallback();
-  });
-
 })();
 
   let LOG_USER_ID = null;
@@ -4037,8 +3939,9 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      const syncPromise = pollActive().catch(()=>{});              // single, awaited warm-up poll
+      const syncPromise = waitForNextSync();              // single, awaited warm-up sync
       openStream();
+      await syncPromise;
     }
         await unreadPromise;
   } catch (e) {
