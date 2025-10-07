@@ -1034,6 +1034,7 @@ async function prefetchRoom(slug){
     const params = new URLSearchParams({
       public:'1', room: slug, since: String(since), limit:'250', lp:'0', timeout:'0'
     });
+    params.set('_wpnonce', REST_NONCE);
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
     if (!Array.isArray(items) || items.length === 0) return;
@@ -1056,6 +1057,7 @@ async function prefetchDM(userId){
     const params = new URLSearchParams({
       to: String(userId), since: String(since), limit:'250', lp:'0', timeout:'0'
     });
+    params.set('_wpnonce', REST_NONCE);
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
     if (!Array.isArray(items) || items.length === 0) return;
@@ -1107,6 +1109,31 @@ function applyCache(key){
   pubList.innerHTML = '';
   pubList.dataset.last = '-1';
   return false;
+}
+
+function hydrateFromPrefetch(state){
+  if (!state) return;
+
+  const key = state.kind === 'dm'
+    ? cacheKeyForDM(state.to)
+    : cacheKeyForRoom(state.room);
+
+  const fetcher = state.kind === 'dm' ? prefetchDM : prefetchRoom;
+  fetcher(state.kind === 'dm' ? state.to : state.room)
+    ?.then(() => {
+      const active = desiredStreamState();
+      if (!active) return;
+      if (state.kind === 'dm') {
+        if (active.kind !== 'dm' || Number(active.to) !== Number(state.to)) return;
+      } else {
+        if (active.kind !== 'room' || active.room !== state.room) return;
+      }
+
+      if (applyCache(key)) {
+        markVisible(pubList);
+      }
+    })
+    .catch(() => {});
 }
 
   function stashActive(){
@@ -2568,17 +2595,20 @@ roomTabs.addEventListener('click', async e => {
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
-const cacheHit = applyCache(cacheKeyForRoom(slug));
-setComposerAccess();
-showView('vPublic');
+  const cacheKey = cacheKeyForRoom(slug);
+  const cacheHit = applyCache(cacheKey);
+  setComposerAccess();
+  showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-}
-  // (No else branch — fetch happens immediately below)
+  if (cacheHit) {
+    markVisible(pubList);
+  } else {
+    hydrateFromPrefetch({ kind: 'room', room: slug });
+  }
 
-  await pollActive();
+  const syncPromise = pollActive().catch(()=>{});
   openStream();
+  await syncPromise;
 });
 
 document.addEventListener('click', e => {
@@ -2685,17 +2715,21 @@ roomsListEl?.addEventListener('click', async (e) => {
             muteFor(1200);
         stopStream();
         currentRoom = next;
-        const cacheHit = applyCache(cacheKeyForRoom(currentRoom));
+        const cacheKey = cacheKeyForRoom(currentRoom);
+        const cacheHit = applyCache(cacheKey);
         setComposerAccess();
         showView('vPublic');
 
         if (cacheHit) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
+        } else {
+          hydrateFromPrefetch({ kind: 'room', room: currentRoom });
         }
 
-        await pollActive();
+        const syncPromise = pollActive().catch(()=>{});
         openStream();
+        await syncPromise;
       }
     }
 
@@ -2911,21 +2945,22 @@ async function openDM(id) {
   userListEl.querySelector(`.openbtn[data-dm="${currentDM}"]`)?.setAttribute('aria-current', 'true');
 
   // 2) render from cache immediately
-const cacheHit = applyCache(cacheKeyForDM(currentDM));
+  const cacheKey = cacheKeyForDM(currentDM);
+  const cacheHit = applyCache(cacheKey);
 
-setComposerAccess();
-showView('vPublic');
+  setComposerAccess();
+  showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-} else {
-  // If you prefer to keep your existing cold-load path, you can omit this else.
-  // (You already have a cold-load branch elsewhere in openDM.)
-}
+  if (cacheHit) {
+    markVisible(pubList);
+  } else {
+    hydrateFromPrefetch({ kind: 'dm', to: currentDM });
+  }
 
 
-  await pollActive();
+  const syncPromise = pollActive().catch(()=>{});
   openStream();
+  await syncPromise;
 
 
 
@@ -3956,8 +3991,9 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      await pollActive();              // single, awaited warm-up poll
+      const syncPromise = pollActive().catch(()=>{});              // single, awaited warm-up poll
       openStream();
+      await syncPromise;
     }
   } catch (e) {
     // optionally log e
