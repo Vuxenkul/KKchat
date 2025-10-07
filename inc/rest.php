@@ -600,13 +600,39 @@ add_action('rest_api_init', function () {
         }
       }
 
+      $reports_open   = 0;
+      $reports_max_id = 0;
+      if ($is_admin_viewer) {
+        $reports_open   = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$t['reports']} WHERE status='open'");
+        $reports_max_id = (int) $wpdb->get_var("SELECT COALESCE(MAX(id),0) FROM {$t['reports']}");
+      }
+
       return [
-        'now'           => $now,
-        'unread'        => $unread,
-        'presence'      => $presence,
-        'messages'      => $msgs,
-        'mention_bumps' => (object) $mention_bumps,
+        'now'             => $now,
+        'unread'          => $unread,
+        'presence'        => $presence,
+        'messages'        => $msgs,
+        'mention_bumps'   => (object) $mention_bumps,
+        'reports_open'    => $reports_open,
+        'reports_max_id'  => $reports_max_id,
       ];
+    }
+  }
+
+  if (!function_exists('kkchat_stream_touch_user')) {
+    function kkchat_stream_touch_user(int $uid, ?int $ts = null): void {
+      if ($uid <= 0) { return; }
+
+      global $wpdb; $t = kkchat_tables();
+      $now = $ts ?? time();
+
+      $wpdb->update(
+        $t['users'],
+        ['last_seen' => $now],
+        ['id' => $uid],
+        ['%d'],
+        ['%d']
+      );
     }
   }
 
@@ -965,6 +991,8 @@ register_rest_route($ns, '/stream', [
     $timeout   = (int) ($ctx['timeout'] ?? 7);
     $cursor    = (int) ($ctx['since'] ?? -1);
     $firstLoop = true;
+    $touchEvery = max(20, (int) apply_filters('kkchat_stream_touch_interval', 45));
+    $lastTouch  = time();
 
     while (!connection_aborted()) {
       $loopCtx = $ctx;
@@ -975,6 +1003,12 @@ register_rest_route($ns, '/stream', [
         kkchat_sync_wait_for_changes($loopCtx, $timeout);
       } elseif (!$firstLoop) {
         usleep(250000);
+      }
+
+      $nowTick = time();
+      if (($loopCtx['me'] ?? 0) > 0 && ($nowTick - $lastTouch) >= $touchEvery) {
+        kkchat_stream_touch_user((int) $loopCtx['me'], $nowTick);
+        $lastTouch = $nowTick;
       }
 
       $payload = kkchat_sync_build_payload($loopCtx);

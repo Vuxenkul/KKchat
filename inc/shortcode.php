@@ -687,6 +687,7 @@ function stopStream(){
     clearTimeout(STREAM_TIMER);
     STREAM_TIMER = null;
   }
+  updateKeepAliveStrategy();
 }
 
 function scheduleStreamReconnect(delay = STREAM_RETRY_MS){
@@ -722,6 +723,7 @@ function openStream(){
   const id = ++STREAM_ID;
   const context = { ...state };
   STREAM = source;
+  updateKeepAliveStrategy();
 
   source.addEventListener('sync', ev => {
     if (STREAM_ID !== id) return;
@@ -749,6 +751,7 @@ function suspendStream(){
 function resumeStream(){
   if (!STREAM_SUSPENDED) return;
   STREAM_SUSPENDED = false;
+  updateKeepAliveStrategy();
   openStream();
 }
 
@@ -1951,6 +1954,31 @@ function applySyncPayload(js){
     try { USERS.forEach(u => rememberGender(u.id, u.gender)); } catch(_){}
   }
 
+  if (IS_ADMIN && js) {
+    const hasOpen = Object.prototype.hasOwnProperty.call(js, 'reports_open');
+    const hasMax  = Object.prototype.hasOwnProperty.call(js, 'reports_max_id');
+
+    if (hasOpen || hasMax) {
+      if (hasOpen) {
+        const openCnt = Number(js.reports_open);
+        if (Number.isFinite(openCnt)) {
+          OPEN_REPORTS_COUNT = openCnt;
+          try { updateLeftCounts?.(); } catch(_){}
+        }
+      }
+
+      if (hasMax) {
+        const maxId = Number(js.reports_max_id);
+        if (Number.isFinite(maxId)) {
+          if (LAST_REPORT_MAX_ID > 0 && maxId > LAST_REPORT_MAX_ID) {
+            try { playReportOnce(); } catch(_){}
+          }
+          LAST_REPORT_MAX_ID = Math.max(LAST_REPORT_MAX_ID || 0, maxId);
+        }
+      }
+    }
+  }
+
   if (js && js.unread) {
     const unread = js.unread || {};
 
@@ -2023,6 +2051,18 @@ function applySyncPayload(js){
           try { openDM(Number(first)); } catch(_) {}
         }
       }
+
+      // Prefetch history for sources that just picked up new unread counts
+      roomIncr.forEach(slug => {
+        if (!slug || slug === currentRoom) return;
+        try { prefetchRoom(slug).catch(() => {}); } catch(_) {}
+      });
+
+      dmIncr.forEach(did => {
+        const id = Number(did);
+        if (!Number.isFinite(id) || id === Number(currentDM)) return;
+        try { prefetchDM(id).catch(() => {}); } catch(_) {}
+      });
     }catch(_){}
 
     // ⬇️ Optimistically clear active badge (prevents “stuck” counters).
@@ -2037,27 +2077,6 @@ function applySyncPayload(js){
     // recompute total DM unread after adjustments
     DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
       .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (+v||0)), 0);
-    
-    // ⬇️ Paste this here
-    try{
-      // Prefetch for rooms that gained unread and are not the active view
-      if (js && js.rooms_unread_delta) {
-        for (const [slug, delta] of Object.entries(js.rooms_unread_delta)) {
-          if ((+delta || 0) > 0 && slug !== currentRoom) {
-            prefetchRoom(slug);
-          }
-        }
-      }
-      // Prefetch for DMs that gained unread and are not the active view
-      if (js && js.dms_unread_delta) {
-        for (const [uid, delta] of Object.entries(js.dms_unread_delta)) {
-          const id = Number(uid);
-          if ((+delta || 0) > 0 && id !== Number(currentDM)) {
-            prefetchDM(id);
-          }
-        }
-      }
-    } catch(_){}
     
     // existing renders follow
     renderUsers();
@@ -2571,17 +2590,23 @@ roomTabs.addEventListener('click', async e => {
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
-const cacheHit = applyCache(cacheKeyForRoom(slug));
+const roomKey = cacheKeyForRoom(slug);
+let cacheHit = applyCache(roomKey);
 setComposerAccess();
 showView('vPublic');
+
+const syncPromise = waitForNextSync();
+openStream();
+
+if (!cacheHit) {
+  await prefetchRoom(slug);
+  cacheHit = applyCache(roomKey);
+}
 
 if (cacheHit) {
   markVisible(pubList);
 }
-  // (No else branch — fetch happens immediately below)
 
-  const syncPromise = waitForNextSync();
-  openStream();
   await syncPromise;
 });
 
@@ -2856,6 +2881,7 @@ function handleStreamSync(js, context){
     });
   }
 
+  updateKeepAliveStrategy();
   resolveSyncWaiters();
 }
 
@@ -2936,21 +2962,24 @@ async function openDM(id) {
   userListEl.querySelector(`.openbtn[data-dm="${currentDM}"]`)?.setAttribute('aria-current', 'true');
 
   // 2) render from cache immediately
-const cacheHit = applyCache(cacheKeyForDM(currentDM));
+const dmKey = cacheKeyForDM(currentDM);
+let cacheHit = applyCache(dmKey);
 
 setComposerAccess();
 showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-} else {
-  // If you prefer to keep your existing cold-load path, you can omit this else.
-  // (You already have a cold-load branch elsewhere in openDM.)
+const syncPromise = waitForNextSync();
+openStream();
+
+if (!cacheHit) {
+  await prefetchDM(currentDM);
+  cacheHit = applyCache(dmKey);
 }
 
+if (cacheHit) {
+  markVisible(pubList);
+}
 
-  const syncPromise = waitForNextSync();
-  openStream();
   await syncPromise;
 
 
@@ -3821,12 +3850,21 @@ const PING_JITTER  = 8_000;
 
 let keepAliveTimer = null;
 
+function shouldUseKeepAlivePing(){
+  if (STREAM_SUSPENDED) return true;
+  if (typeof EventSource !== 'function') return true;
+  if (!STREAM) return true;
+  return false;
+}
+
 function scheduleKeepAlive() {
+  if (!shouldUseKeepAlivePing()) return;
   const delay = PING_BASE_MS + Math.floor(Math.random() * PING_JITTER);
   keepAliveTimer = setTimeout(pingOnce, delay);
 }
 
 async function pingOnce() {
+  if (!shouldUseKeepAlivePing()) { stopKeepAlive(); return; }
   try {
     const r  = await fetch(`${PING_URL}?ts=${Date.now()}`, {
       method: 'GET',
@@ -3856,18 +3894,22 @@ async function pingOnce() {
   } catch (_) {
     // ignore transient network errors
   } finally {
-    scheduleKeepAlive();
+    updateKeepAliveStrategy();
   }
-}
-
-function startKeepAlive() {
-  if (!keepAliveTimer) scheduleKeepAlive();
 }
 
 function stopKeepAlive() {
   if (keepAliveTimer) {
     clearTimeout(keepAliveTimer);
     keepAliveTimer = null;
+  }
+}
+
+function updateKeepAliveStrategy(){
+  if (shouldUseKeepAlivePing()) {
+    if (!keepAliveTimer) scheduleKeepAlive();
+  } else {
+    stopKeepAlive();
   }
 }
 
@@ -3888,8 +3930,9 @@ function beaconPing() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     beaconPing();
+    updateKeepAliveStrategy();
   } else {
-    startKeepAlive(); // ensure loop restarts when visible again
+    updateKeepAliveStrategy(); // stop pings if the stream is active
   }
 });
 
@@ -3926,6 +3969,7 @@ async function refreshUsersAndUnread(){
 
 
 async function init(){
+  updateKeepAliveStrategy();
   try{
     await Promise.all([
       refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); }),
