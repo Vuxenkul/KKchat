@@ -730,9 +730,6 @@ const POLL_SYNC_KEY     = 'kkchat:poll:last';
 const POLL_POKE_KEY     = 'kkchat:poll:poke';
 const POLL_HEARTBEAT_MS = 4000;
 const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
-const CROSS_POLL_ROOMS_WHEN_DM_MS = 5000;
-const CROSS_POLL_DMS_WHEN_ROOM_MS = 5000;
-
 let POLL_TIMER = null;
 let POLL_BUSY = false;
 let POLL_SUSPENDED = false;
@@ -741,9 +738,12 @@ let POLL_HEARTBEAT_TIMER = null;
 let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
 let POLL_HIDDEN_SINCE = 0;
-let CROSS_POLL_TIMER = null;
-let CROSS_POLL_DM_CURSOR = -1;
-let CROSS_POLL_READY = false;
+
+const PREFETCH_DELAY_MS = 250;
+const PREFETCH_QUEUE = [];
+const PREFETCH_KEYS = new Set();
+let PREFETCH_TIMER = null;
+let PREFETCH_BUSY = false;
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
@@ -807,7 +807,6 @@ function stopStream(){
     clearTimeout(POLL_TIMER);
     POLL_TIMER = null;
   }
-  cancelCrossPollTimer();
 }
 
 function scheduleStreamReconnect(delay){
@@ -835,109 +834,55 @@ function scheduleStreamReconnect(delay){
   }, wait);
 }
 
-function cancelCrossPollTimer(){
-  if (CROSS_POLL_TIMER) {
-    clearTimeout(CROSS_POLL_TIMER);
-    CROSS_POLL_TIMER = null;
-  }
+function enqueuePrefetch(kind, value){
+  if (value == null) return;
+  const key = `${kind}:${value}`;
+  if (PREFETCH_KEYS.has(key)) return;
+  PREFETCH_KEYS.add(key);
+  PREFETCH_QUEUE.push({ kind, value, key });
+  schedulePrefetchTick();
 }
 
-function scheduleCrossPollTick(){
-  cancelCrossPollTimer();
-  if (!CROSS_POLL_READY) return;
-  if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
-  const state = desiredStreamState();
-  if (!state) return;
-
-  let wait = null;
-  if (state.kind === 'dm') {
-    if (!currentRoom) return;
-    wait = CROSS_POLL_ROOMS_WHEN_DM_MS;
-  } else {
-    if (!hasCrossPollDmTarget()) return;
-    wait = CROSS_POLL_DMS_WHEN_ROOM_MS;
-  }
-
-  if (wait == null) return;
-
-  CROSS_POLL_TIMER = setTimeout(runCrossPollTick, wait);
+function queuePrefetchRoom(slug){
+  const room = String(slug || '').trim();
+  if (!room) return;
+  enqueuePrefetch('room', room);
 }
 
-async function runCrossPollTick(){
-  CROSS_POLL_TIMER = null;
-  if (!POLL_IS_LEADER || POLL_SUSPENDED) { scheduleCrossPollTick(); return; }
-  if (POLL_BUSY) { scheduleCrossPollTick(); return; }
+function queuePrefetchDM(userId){
+  const id = Number(userId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  enqueuePrefetch('dm', id);
+}
 
-  const state = desiredStreamState();
-  if (!state) { scheduleCrossPollTick(); return; }
+function schedulePrefetchTick(){
+  if (PREFETCH_BUSY) return;
+  if (PREFETCH_TIMER) return;
+  if (!PREFETCH_QUEUE.length) return;
+  PREFETCH_TIMER = setTimeout(runPrefetchTick, PREFETCH_DELAY_MS);
+}
 
+async function runPrefetchTick(){
+  if (PREFETCH_BUSY) return;
+  PREFETCH_TIMER = null;
+  const next = PREFETCH_QUEUE.shift();
+  if (!next) return;
+
+  PREFETCH_BUSY = true;
   try {
-    if (state.kind === 'dm') {
-      if (currentRoom) {
-        await prefetchRoom(currentRoom);
-      }
-    } else {
-      const target = nextCrossPollDmTarget();
-      if (target != null) {
-        await prefetchDM(target);
-      }
+    if (next.kind === 'room') {
+      await prefetchRoom(next.value);
+    } else if (next.kind === 'dm') {
+      await prefetchDM(next.value);
     }
   } catch (_) {}
 
-  scheduleCrossPollTick();
-}
+  PREFETCH_KEYS.delete(next.key);
+  PREFETCH_BUSY = false;
 
-function crossPollDmCandidates(){
-  const seen = new Set();
-  const list = [];
-
-  const last = Number(LAST_OPEN_DM);
-  if (Number.isFinite(last) && last > 0 && !isBlocked(last)) {
-    seen.add(last);
-    list.push(last);
+  if (PREFETCH_QUEUE.length) {
+    schedulePrefetchTick();
   }
-
-  try {
-    const per = UNREAD_PER || {};
-    const unreadOrder = Object.keys(per)
-      .map(id => ({ id: Number(id), unread: Number(per[id]) || 0 }))
-      .filter(rec => Number.isFinite(rec.id) && rec.id > 0 && !isBlocked(rec.id))
-      .sort((a, b) => b.unread - a.unread || a.id - b.id);
-    unreadOrder.forEach(rec => {
-      if (!seen.has(rec.id)) {
-        seen.add(rec.id);
-        list.push(rec.id);
-      }
-    });
-  } catch (_) {}
-
-  try {
-    if (ACTIVE_DMS && typeof ACTIVE_DMS.forEach === 'function') {
-      ACTIVE_DMS.forEach(id => {
-        const n = Number(id);
-        if (Number.isFinite(n) && n > 0 && !seen.has(n) && !isBlocked(n)) {
-          seen.add(n);
-          list.push(n);
-        }
-      });
-    }
-  } catch (_) {}
-
-  return list;
-}
-
-function hasCrossPollDmTarget(){
-  return crossPollDmCandidates().length > 0;
-}
-
-function nextCrossPollDmTarget(){
-  const candidates = crossPollDmCandidates();
-  if (!candidates.length) return null;
-  if (CROSS_POLL_DM_CURSOR >= candidates.length || CROSS_POLL_DM_CURSOR < 0) {
-    CROSS_POLL_DM_CURSOR = -1;
-  }
-  CROSS_POLL_DM_CURSOR = (CROSS_POLL_DM_CURSOR + 1) % candidates.length;
-  return candidates[CROSS_POLL_DM_CURSOR];
 }
 
 function openStream(forceCold = false){
@@ -946,7 +891,7 @@ function openStream(forceCold = false){
   if (!state) return;
 
   ensureLeader(false);
-  if (!POLL_IS_LEADER) { cancelCrossPollTimer(); return; }
+  if (!POLL_IS_LEADER) { return; }
 
   if (forceCold) {
     POLL_ETAGS.delete(pollContextKey(state));
@@ -954,7 +899,6 @@ function openStream(forceCold = false){
 
   stopStream();
   performPoll(forceCold).catch(()=>{});
-  scheduleCrossPollTick();
 }
 
 function suspendStream(){
@@ -1286,7 +1230,6 @@ async function performPoll(forceCold = false){
   } finally {
     POLL_BUSY = false;
     scheduleStreamReconnect();
-    scheduleCrossPollTick();
   }
 }
 
@@ -2005,8 +1948,6 @@ function markVisible(listEl){
 
 
   let USERS=[]; let UNREAD_PER={};
-  CROSS_POLL_READY = true;
-  scheduleCrossPollTick();
   let lastPubCounts = 0, lastDMCounts = 0;
   let DM_UNREAD_TOTAL = 0;
   let ROOM_UNREAD = {};              
@@ -2569,12 +2510,12 @@ function applySyncPayload(js){
       try {
         roomIncr
           .filter(slug => slug !== currentRoom)
-          .forEach(slug => prefetchRoom(slug));
+          .forEach(slug => queuePrefetchRoom(slug));
 
         dmIncr
           .map(id => Number(id))
           .filter(id => id !== Number(currentDM))
-          .forEach(id => prefetchDM(id));
+          .forEach(id => queuePrefetchDM(id));
       } catch(_) {}
       // --- ignore muted sources for sound decisions
       const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
