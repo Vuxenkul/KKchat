@@ -3415,10 +3415,8 @@ if (document.visibilityState === 'hidden') {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     POLL_HIDDEN_SINCE = Date.now();
-    suspendStream();
   } else {
     POLL_HIDDEN_SINCE = 0;
-    resumeStream();
     pollActive().catch(()=>{});
   }
 });
@@ -4075,15 +4073,33 @@ jumpBtn.addEventListener('click', ()=>{
 
   let pingTimer = null;
 
-  let pollFallbackTimer = null;
-  let pollFallbackBusy  = false;
+  let pollFallbackTimer   = null;
+  let pollFallbackBusy    = false;
+  let pollFallbackLastRun = 0;
+
+  function currentFallbackDelay(){
+    const state = desiredStreamState();
+    if (!state) return null;
+    const hint = POLL_RETRY_HINT.get(pollContextKey(state));
+    return computePollDelay(hint);
+  }
 
   function maybePollActiveFallback(){
     if (pollFallbackBusy) return;
-    if (document.visibilityState === 'hidden') return;
+
+    const minInterval = currentFallbackDelay();
+    if (minInterval != null) {
+      const now = Date.now();
+      if (now - pollFallbackLastRun < minInterval) {
+        return;
+      }
+    }
 
     pollFallbackBusy = true;
-    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
+    pollActive().catch(()=>{}).finally(()=>{
+      pollFallbackLastRun = Date.now();
+      pollFallbackBusy = false;
+    });
   }
 
   function ensurePollFallback(){
@@ -4098,7 +4114,6 @@ jumpBtn.addEventListener('click', ()=>{
     clearInterval(pingTimer);
     pingTimer = setInterval(()=>{
       touch();
-      if (document.visibilityState === 'hidden') return;
       if (POLL_IS_LEADER) {
         maybePollActiveFallback();
       }
