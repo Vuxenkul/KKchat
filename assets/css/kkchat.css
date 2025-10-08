@@ -880,6 +880,66 @@ html, body { margin: 0; height: 100%; }
   padding: 10px 14px;
   font-weight: 900;
 }
+#kkchat-root .input-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+#kkchat-root .input-actions-toggle {
+  background: none !important;
+  border: 0;
+  padding: 0 !important;
+  font-size: 1.6rem !important;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+}
+#kkchat-root .input-actions.is-open .input-actions-toggle {
+  color: var(--brand);
+}
+#kkchat-root .input-actions-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  z-index: 30;
+}
+#kkchat-root .input-actions.is-open .input-actions-menu {
+  display: flex;
+}
+#kkchat-root .input-actions-item {
+  background: transparent;
+  border: 0;
+  width: 100%;
+  color: #0f172a;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  padding: 8px 10px;
+  border-radius: 8px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+#kkchat-root .input-actions-item:hover,
+#kkchat-root .input-actions-item:focus {
+  background: #f1f5f9;
+  outline: none;
+}
+#kkchat-root .input-actions-item[disabled] {
+  opacity: 0.55;
+  pointer-events: none;
+}
 #kkchat-root .iconbtn {
   background: unset !important;
   padding: 0px !important;

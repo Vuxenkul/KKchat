@@ -286,22 +286,30 @@ f.addEventListener('submit', async (ev)=>{
             <button id="kk-jumpBottom" class="fab" type="button" aria-label="Hoppa till botten">⬇️</button>
             <form id="kk-pubForm" class="inputbar">
               <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($_SESSION['kkchat_csrf']) ?>">
-              <!-- Camera (mobile capture or desktop webcam) -->
-<button type="button" class="iconbtn" id="kk-pubCamBtn" title="Öppna kamera">📷</button>
+              <div class="input-actions" data-attach-root>
+                <button
+                  type="button"
+                  class="iconbtn input-actions-toggle"
+                  id="kk-attachToggle"
+                  data-attach-toggle
+                  title="Fler alternativ"
+                  aria-haspopup="menu"
+                  aria-expanded="false"
+                >➕</button>
+                <div class="input-actions-menu" data-attach-menu hidden role="menu" aria-hidden="true">
+                  <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem">🖼️ Ladda upp bild</button>
+                  <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem">📷 Öppna kamera</button>
+                  <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem">👤 Nämn någon</button>
+                </div>
+              </div>
 
-<!-- Upload from device -->
-<button type="button" class="iconbtn" id="kk-pubUpBtn" title="Ladda upp bild">🖼️</button>
+              <!-- Hidden inputs (one for upload picker, one that hints camera on mobile) -->
+              <input type="file" accept="image/*" id="kk-pubImg" style="display:none">
+              <input type="file" accept="image/*" capture="environment" id="kk-pubCam" style="display:none">
 
-<!-- Mention/tag (existing) -->
-<button type="button" class="iconbtn" id="kk-mentionBtn" title="Nämn någon">👤</button>
-
-<!-- Hidden inputs (one for upload picker, one that hints camera on mobile) -->
-<input type="file" accept="image/*" id="kk-pubImg" style="display:none">
-<input type="file" accept="image/*" capture="environment" id="kk-pubCam" style="display:none">
-
-<textarea name="content" placeholder="Skriv ett meddelande…" autocomplete="off"></textarea>
-<button>💬</button>
-<div id="kk-mentionBox" class="mentionbox" role="listbox" aria-label="Mention suggestions"></div>
+              <textarea name="content" placeholder="Skriv ett meddelande…" autocomplete="off"></textarea>
+              <button>💬</button>
+              <div id="kk-mentionBox" class="mentionbox" role="listbox" aria-label="Mention suggestions"></div>
 
               </form>
           </div>
@@ -546,6 +554,58 @@ const pubCamBtn = document.getElementById('kk-pubCamBtn');
 const pubUpBtn  = document.getElementById('kk-pubUpBtn');
 const pubImgInp = document.getElementById('kk-pubImg');
 const pubCamInp = document.getElementById('kk-pubCam');
+const pubTA     = pubForm?.querySelector('textarea');
+const mentionBtn = document.getElementById('kk-mentionBtn');
+
+const attachRoot   = pubForm?.querySelector('[data-attach-root]');
+const attachToggle = attachRoot?.querySelector('[data-attach-toggle]');
+const attachMenu   = attachRoot?.querySelector('[data-attach-menu]');
+let ATTACH_MENU_OPEN = false;
+
+function setAttachmentMenu(open) {
+  ATTACH_MENU_OPEN = !!open;
+  if (!attachRoot) return;
+
+  attachRoot.classList.toggle('is-open', ATTACH_MENU_OPEN);
+
+  if (attachMenu) {
+    if (ATTACH_MENU_OPEN) attachMenu.removeAttribute('hidden');
+    else attachMenu.setAttribute('hidden', '');
+    attachMenu.setAttribute('aria-hidden', ATTACH_MENU_OPEN ? 'false' : 'true');
+  }
+
+  attachToggle?.setAttribute('aria-expanded', ATTACH_MENU_OPEN ? 'true' : 'false');
+}
+
+function toggleAttachmentMenu() {
+  setAttachmentMenu(!ATTACH_MENU_OPEN);
+}
+
+function closeAttachmentMenu() {
+  setAttachmentMenu(false);
+}
+
+attachToggle?.addEventListener('click', (e) => {
+  if (attachToggle.disabled) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleAttachmentMenu();
+});
+
+document.addEventListener('click', (e) => {
+  if (!ATTACH_MENU_OPEN) return;
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target || !target.closest('[data-attach-root]')) {
+    closeAttachmentMenu();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && ATTACH_MENU_OPEN) {
+    closeAttachmentMenu();
+    attachToggle?.focus();
+  }
+});
 
 // Webcam modal refs
 const camModal  = document.getElementById('kk-camModal');
@@ -2885,9 +2945,16 @@ function renderRoomTabs(){
     const ta = pubForm.querySelector('textarea');
     const btn = pubForm.querySelector('button[type="submit"]');
     const imgB = pubUpBtn;
+    const camB = pubCamBtn;
+    const mentionB = mentionBtn;
+    const toggleB = attachToggle;
 
     if (currentDM){
-      ta.disabled = false; btn.disabled = false; imgB.disabled = false;
+      ta.disabled = false; btn.disabled = false;
+      if (imgB) imgB.disabled = false;
+      if (camB) camB.disabled = false;
+      if (mentionB) mentionB.disabled = false;
+      if (toggleB) toggleB.disabled = false;
       const n = nameById(currentDM);
       ta.placeholder = `Skriv till ${n}…`;
       ta.setAttribute('aria-label', `Skriv privat till ${n}`);
@@ -2896,7 +2963,12 @@ function renderRoomTabs(){
 
     const r = ROOMS.find(x=>x.slug===currentRoom);
     const allowed = r ? !!r.allowed : true;
-    ta.disabled = !allowed; btn.disabled = !allowed; imgB.disabled = !allowed;
+    ta.disabled = !allowed; btn.disabled = !allowed;
+    if (imgB) imgB.disabled = !allowed;
+    if (camB) camB.disabled = !allowed;
+    if (mentionB) mentionB.disabled = !allowed;
+    if (toggleB) toggleB.disabled = !allowed;
+    if (!allowed) closeAttachmentMenu();
     ta.placeholder = allowed ? 'Skriv ett meddelande…' : 'Endast för medlemmar';
     if (!allowed) ta.removeAttribute('aria-label'); else ta.setAttribute('aria-label', 'Skriv ett meddelande');
   }
@@ -3417,37 +3489,34 @@ async function openDM(id) {
   }
 }
 
+mentionBtn?.addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  closeAttachmentMenu();
+  if (!pubTA) return;
 
-    const mentionBtn = document.getElementById('kk-mentionBtn');
+  pubTA.focus();
 
-    mentionBtn?.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();             
-      if (!pubTA) return;
+  const i   = pubTA.selectionStart ?? pubTA.value.length;
+  const txt = pubTA.value || '';
+  const before = txt.slice(0, i);
+  const after  = txt.slice(i);
+  const needsSpace = i > 0 && /\S/.test(before.slice(-1));
+  const insert = (needsSpace ? ' ' : '') + '@';
 
-      pubTA.focus();
+  pubTA.value = before + insert + after;
 
-      const i   = pubTA.selectionStart ?? pubTA.value.length;
-      const txt = pubTA.value || '';
-      const before = txt.slice(0, i);
-      const after  = txt.slice(i);
-      const needsSpace = i > 0 && /\S/.test(before.slice(-1));
-      const insert = (needsSpace ? ' ' : '') + '@';
+  const pos = (before + insert).length;
+  pubTA.setSelectionRange(pos, pos);
 
-      pubTA.value = before + insert + after;
+  const q = (typeof currentMentionQuery === 'function')
+              ? (currentMentionQuery(pubTA.value, pos) ?? '')
+              : '';
+  if (typeof renderMentionBox === 'function') {
+    renderMentionBox(q);
+  }
+});
 
-      const pos = (before + insert).length;
-      pubTA.setSelectionRange(pos, pos);
-
-      const q = (typeof currentMentionQuery === 'function')
-                  ? (currentMentionQuery(pubTA.value, pos) ?? '')
-                  : '';
-      if (typeof renderMentionBox === 'function') {
-        renderMentionBox(q);
-      }
-    });
-
-  const pubTA = pubForm.querySelector('textarea');
 const mentionBox   = document.getElementById('kk-mentionBox');
 const mentionSound = document.getElementById('kk-mentionSound');
 let mentionIndex = -1;
@@ -3851,7 +3920,10 @@ async function uploadImage(file){
   }
 
 // Upload picker
-pubUpBtn?.addEventListener('click', () => pubImgInp?.click());
+pubUpBtn?.addEventListener('click', () => {
+  closeAttachmentMenu();
+  pubImgInp?.click();
+});
 
 pubImgInp?.addEventListener('change', async ()=>{
   const file = pubImgInp.files?.[0]; pubImgInp.value='';
@@ -3871,6 +3943,7 @@ pubImgInp?.addEventListener('change', async ()=>{
 
 // Camera button
 pubCamBtn?.addEventListener('click', async ()=>{
+  closeAttachmentMenu();
   // Prefer native capture on mobile
   if (isMobileLike() && pubCamInp) {
     pubCamInp.click();
