@@ -730,6 +730,8 @@ const POLL_SYNC_KEY     = 'kkchat:poll:last';
 const POLL_POKE_KEY     = 'kkchat:poll:poke';
 const POLL_HEARTBEAT_MS = 4000;
 const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
+const CROSS_POLL_ROOMS_WHEN_DM_MS = 20000;
+const CROSS_POLL_DMS_WHEN_ROOM_MS = 20000;
 
 let POLL_TIMER = null;
 let POLL_BUSY = false;
@@ -739,6 +741,9 @@ let POLL_HEARTBEAT_TIMER = null;
 let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
 let POLL_HIDDEN_SINCE = 0;
+let CROSS_POLL_TIMER = null;
+let CROSS_POLL_DM_CURSOR = -1;
+let CROSS_POLL_READY = false;
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
@@ -802,6 +807,7 @@ function stopStream(){
     clearTimeout(POLL_TIMER);
     POLL_TIMER = null;
   }
+  cancelCrossPollTimer();
 }
 
 function scheduleStreamReconnect(delay){
@@ -829,13 +835,118 @@ function scheduleStreamReconnect(delay){
   }, wait);
 }
 
+function cancelCrossPollTimer(){
+  if (CROSS_POLL_TIMER) {
+    clearTimeout(CROSS_POLL_TIMER);
+    CROSS_POLL_TIMER = null;
+  }
+}
+
+function scheduleCrossPollTick(){
+  cancelCrossPollTimer();
+  if (!CROSS_POLL_READY) return;
+  if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
+  const state = desiredStreamState();
+  if (!state) return;
+
+  let wait = null;
+  if (state.kind === 'dm') {
+    if (!currentRoom) return;
+    wait = CROSS_POLL_ROOMS_WHEN_DM_MS;
+  } else {
+    if (!hasCrossPollDmTarget()) return;
+    wait = CROSS_POLL_DMS_WHEN_ROOM_MS;
+  }
+
+  if (wait == null) return;
+
+  CROSS_POLL_TIMER = setTimeout(runCrossPollTick, wait);
+}
+
+async function runCrossPollTick(){
+  CROSS_POLL_TIMER = null;
+  if (!POLL_IS_LEADER || POLL_SUSPENDED) { scheduleCrossPollTick(); return; }
+  if (POLL_BUSY) { scheduleCrossPollTick(); return; }
+
+  const state = desiredStreamState();
+  if (!state) { scheduleCrossPollTick(); return; }
+
+  try {
+    if (state.kind === 'dm') {
+      if (currentRoom) {
+        await prefetchRoom(currentRoom);
+      }
+    } else {
+      const target = nextCrossPollDmTarget();
+      if (target != null) {
+        await prefetchDM(target);
+      }
+    }
+  } catch (_) {}
+
+  scheduleCrossPollTick();
+}
+
+function crossPollDmCandidates(){
+  const seen = new Set();
+  const list = [];
+
+  const last = Number(LAST_OPEN_DM);
+  if (Number.isFinite(last) && last > 0 && !isBlocked(last)) {
+    seen.add(last);
+    list.push(last);
+  }
+
+  try {
+    const per = UNREAD_PER || {};
+    const unreadOrder = Object.keys(per)
+      .map(id => ({ id: Number(id), unread: Number(per[id]) || 0 }))
+      .filter(rec => Number.isFinite(rec.id) && rec.id > 0 && !isBlocked(rec.id))
+      .sort((a, b) => b.unread - a.unread || a.id - b.id);
+    unreadOrder.forEach(rec => {
+      if (!seen.has(rec.id)) {
+        seen.add(rec.id);
+        list.push(rec.id);
+      }
+    });
+  } catch (_) {}
+
+  try {
+    if (ACTIVE_DMS && typeof ACTIVE_DMS.forEach === 'function') {
+      ACTIVE_DMS.forEach(id => {
+        const n = Number(id);
+        if (Number.isFinite(n) && n > 0 && !seen.has(n) && !isBlocked(n)) {
+          seen.add(n);
+          list.push(n);
+        }
+      });
+    }
+  } catch (_) {}
+
+  return list;
+}
+
+function hasCrossPollDmTarget(){
+  return crossPollDmCandidates().length > 0;
+}
+
+function nextCrossPollDmTarget(){
+  const candidates = crossPollDmCandidates();
+  if (!candidates.length) return null;
+  if (CROSS_POLL_DM_CURSOR >= candidates.length || CROSS_POLL_DM_CURSOR < 0) {
+    CROSS_POLL_DM_CURSOR = -1;
+  }
+  CROSS_POLL_DM_CURSOR = (CROSS_POLL_DM_CURSOR + 1) % candidates.length;
+  return candidates[CROSS_POLL_DM_CURSOR];
+}
+
 function openStream(forceCold = false){
   if (POLL_SUSPENDED) return;
   const state = desiredStreamState();
   if (!state) return;
 
   ensureLeader(false);
-  if (!POLL_IS_LEADER) { return; }
+  if (!POLL_IS_LEADER) { cancelCrossPollTimer(); return; }
 
   if (forceCold) {
     POLL_ETAGS.delete(pollContextKey(state));
@@ -843,6 +954,7 @@ function openStream(forceCold = false){
 
   stopStream();
   performPoll(forceCold).catch(()=>{});
+  scheduleCrossPollTick();
 }
 
 function suspendStream(){
@@ -1174,6 +1286,7 @@ async function performPoll(forceCold = false){
   } finally {
     POLL_BUSY = false;
     scheduleStreamReconnect();
+    scheduleCrossPollTick();
   }
 }
 
@@ -1892,6 +2005,8 @@ function markVisible(listEl){
 
 
   let USERS=[]; let UNREAD_PER={};
+  CROSS_POLL_READY = true;
+  scheduleCrossPollTick();
   let lastPubCounts = 0, lastDMCounts = 0;
   let DM_UNREAD_TOTAL = 0;
   let ROOM_UNREAD = {};              
@@ -2548,6 +2663,7 @@ function applySyncPayload(js){
 let ROOMS = [];
 let currentRoom = 'lobby';
 let currentDM = null;
+let LAST_OPEN_DM = null;
 
   function defaultRoomSlug(){
 
@@ -3444,6 +3560,7 @@ async function openDM(id) {
 
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
+  LAST_OPEN_DM = currentDM;
   UNREAD_PER[currentDM] = 0;
 
   // Recompute total DM unread so the left badge updates immediately
