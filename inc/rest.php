@@ -341,6 +341,161 @@ add_action('rest_api_init', function () {
         'rooms'   => (object) $perRoom,
       ];
 
+      // --- Watermarks payload for client-side unread math -----------------
+      $roomTotals = [];
+      $roomReads  = [];
+
+      $paramsRoomTotals = [$me, $since_pub, $guest];
+      $blkRoomTotals = '';
+      if ($blocked) {
+        $blkRoomTotals = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsRoomTotals[] = (int) $bid; }
+      }
+
+      $sqlRoomTotals =
+        "SELECT m.room AS slug, COUNT(*) AS inbound_total, MAX(m.id) AS latest_id
+           FROM {$t['messages']} m
+      LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+          WHERE m.recipient_id IS NULL
+            AND m.sender_id <> %d
+            AND rr.slug IS NOT NULL
+            AND m.created_at > %d
+            AND (%d = 0 OR rr.member_only = 0)
+            AND m.hidden_at IS NULL
+            $blkRoomTotals
+       GROUP BY m.room";
+
+      $rowsRoomTotals = $wpdb->get_results($wpdb->prepare($sqlRoomTotals, ...$paramsRoomTotals), ARRAY_A) ?: [];
+      foreach ($rowsRoomTotals as $row) {
+        $slug = (string) ($row['slug'] ?? '');
+        if ($slug === '') { continue; }
+        $roomTotals[$slug] = [
+          'inbound_total' => (int) ($row['inbound_total'] ?? 0),
+          'latest_id'     => (int) ($row['latest_id'] ?? 0),
+        ];
+      }
+
+      $paramsRoomReads = [$me, $me, $since_pub, $guest];
+      $blkRoomReads = '';
+      if ($blocked) {
+        $blkRoomReads = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsRoomReads[] = (int) $bid; }
+      }
+
+      $sqlRoomReads =
+        "SELECT m.room AS slug, COUNT(*) AS read_total, MAX(m.id) AS last_read_id
+           FROM {$t['reads']} r
+      INNER JOIN {$t['messages']} m ON m.id = r.message_id
+      LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+          WHERE r.user_id = %d
+            AND m.recipient_id IS NULL
+            AND m.sender_id <> %d
+            AND rr.slug IS NOT NULL
+            AND m.created_at > %d
+            AND (%d = 0 OR rr.member_only = 0)
+            AND m.hidden_at IS NULL
+            $blkRoomReads
+       GROUP BY m.room";
+
+      $rowsRoomReads = $wpdb->get_results($wpdb->prepare($sqlRoomReads, ...$paramsRoomReads), ARRAY_A) ?: [];
+      foreach ($rowsRoomReads as $row) {
+        $slug = (string) ($row['slug'] ?? '');
+        if ($slug === '') { continue; }
+        $roomReads[$slug] = [
+          'read_total'   => (int) ($row['read_total'] ?? 0),
+          'last_read_id' => (int) ($row['last_read_id'] ?? 0),
+        ];
+      }
+
+      $dmTotals = [];
+      $paramsDmTotals = [$me];
+      $blkDmTotals = '';
+      if ($blocked) {
+        $blkDmTotals = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsDmTotals[] = (int) $bid; }
+      }
+
+      $sqlDmTotals =
+        "SELECT m.sender_id AS peer, COUNT(*) AS inbound_total, MAX(m.id) AS latest_id
+           FROM {$t['messages']} m
+          WHERE m.recipient_id = %d
+            AND m.hidden_at IS NULL
+            $blkDmTotals
+       GROUP BY m.sender_id";
+
+      $rowsDmTotals = $wpdb->get_results($wpdb->prepare($sqlDmTotals, ...$paramsDmTotals), ARRAY_A) ?: [];
+      foreach ($rowsDmTotals as $row) {
+        $peer = (int) ($row['peer'] ?? 0);
+        if ($peer <= 0) { continue; }
+        $dmTotals[$peer] = [
+          'inbound_total' => (int) ($row['inbound_total'] ?? 0),
+          'latest_id'     => (int) ($row['latest_id'] ?? 0),
+        ];
+      }
+
+      $dmReads = [];
+      $paramsDmReads = [$me, $me];
+      $blkDmReads = '';
+      if ($blocked) {
+        $blkDmReads = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+        foreach ($blocked as $bid) { $paramsDmReads[] = (int) $bid; }
+      }
+
+      $sqlDmReads =
+        "SELECT m.sender_id AS peer, COUNT(*) AS read_total, MAX(m.id) AS last_read_id
+           FROM {$t['reads']} r
+      INNER JOIN {$t['messages']} m ON m.id = r.message_id
+          WHERE r.user_id = %d
+            AND m.recipient_id = %d
+            AND m.hidden_at IS NULL
+            $blkDmReads
+       GROUP BY m.sender_id";
+
+      $rowsDmReads = $wpdb->get_results($wpdb->prepare($sqlDmReads, ...$paramsDmReads), ARRAY_A) ?: [];
+      foreach ($rowsDmReads as $row) {
+        $peer = (int) ($row['peer'] ?? 0);
+        if ($peer <= 0) { continue; }
+        $dmReads[$peer] = [
+          'read_total'   => (int) ($row['read_total'] ?? 0),
+          'last_read_id' => (int) ($row['last_read_id'] ?? 0),
+        ];
+      }
+
+      $watermarksRooms = [];
+      $roomKeys = array_unique(array_merge(array_keys($roomTotals), array_keys($roomReads)));
+      foreach ($roomKeys as $slug) {
+        $tot = $roomTotals[$slug] ?? ['inbound_total' => 0, 'latest_id' => 0];
+        $read = $roomReads[$slug] ?? ['read_total' => 0, 'last_read_id' => 0];
+        $inbound = max(0, (int) ($tot['inbound_total'] ?? 0));
+        $readCount = min($inbound, max(0, (int) ($read['read_total'] ?? 0)));
+        $watermarksRooms[$slug] = (object) [
+          'inbound_total' => $inbound,
+          'read_total'    => $readCount,
+          'latest_id'     => max(0, (int) ($tot['latest_id'] ?? 0)),
+          'last_read_id'  => max(0, (int) ($read['last_read_id'] ?? 0)),
+        ];
+      }
+
+      $watermarksDms = [];
+      $dmKeys = array_unique(array_merge(array_keys($dmTotals), array_keys($dmReads)));
+      foreach ($dmKeys as $peer) {
+        $tot = $dmTotals[$peer] ?? ['inbound_total' => 0, 'latest_id' => 0];
+        $read = $dmReads[$peer] ?? ['read_total' => 0, 'last_read_id' => 0];
+        $inbound = max(0, (int) ($tot['inbound_total'] ?? 0));
+        $readCount = min($inbound, max(0, (int) ($read['read_total'] ?? 0)));
+        $watermarksDms[$peer] = (object) [
+          'inbound_total' => $inbound,
+          'read_total'    => $readCount,
+          'latest_id'     => max(0, (int) ($tot['latest_id'] ?? 0)),
+          'last_read_id'  => max(0, (int) ($read['last_read_id'] ?? 0)),
+        ];
+      }
+
+      $watermarks = [
+        'rooms' => (object) $watermarksRooms,
+        'dms'   => (object) $watermarksDms,
+      ];
+
       $msgs = [];
       $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
       if ($onlyPub) {
@@ -530,6 +685,7 @@ add_action('rest_api_init', function () {
       return [
         'now'           => $now,
         'unread'        => $unread,
+        'watermarks'    => $watermarks,
         'presence'      => $presence,
         'messages'      => $msgs,
         'mention_bumps' => (object) $mention_bumps,
@@ -569,6 +725,7 @@ add_action('rest_api_init', function () {
         'type'          => $initial ? 'snapshot' : 'delta',
         'messages'      => array_values($payload['messages'] ?? []),
         'unread'        => $payload['unread'] ?? new stdClass(),
+        'watermarks'    => $payload['watermarks'] ?? new stdClass(),
         'presence'      => $payload['presence'] ?? [],
         'mention_bumps' => $payload['mention_bumps'] ?? new stdClass(),
       ];

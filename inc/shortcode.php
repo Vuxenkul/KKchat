@@ -626,6 +626,9 @@ const camFlip   = document.getElementById('kk-camFlip');
 
   const h = {'X-WP-Nonce': REST_NONCE};
 
+  const WATERMARKS = { rooms: {}, dms: {} };
+  let MENTION_BUMPS = {};
+
   let redirectingToLogin = false;
   async function maybeRedirectToLogin(response){
     if (!response || redirectingToLogin) return;
@@ -1898,7 +1901,9 @@ const queueMark = (() => {
     if (!currentDM) {
       // Optimistically clear unread for the active room
       if (currentRoom) {
-        ROOM_UNREAD[currentRoom] = 0;
+        markRoomWatermarkRead(currentRoom);
+        clearMentionForRoom(currentRoom);
+        syncUnreadStateFromWatermarks();
         renderRoomTabs();
         updateLeftCounts?.();
       }
@@ -1910,7 +1915,8 @@ const queueMark = (() => {
     // DM path
     // Optimistically clear unread for this DM
     if (currentDM != null) {
-      UNREAD_PER[currentDM] = 0;
+      markDmWatermarkRead(currentDM);
+      syncUnreadStateFromWatermarks();
       renderDMSidebar();
       renderRoomTabs();
       updateLeftCounts?.();
@@ -2404,11 +2410,241 @@ function kkIsActiveSource(slugOrDmKey){
 }
 
 function kkAnyPassiveMentionBump(js){
-  const bumps = js.mention_bumps || {};
+  const bumps = (js && js.mention_bumps)
+    ? js.mention_bumps
+    : (MENTION_BUMPS || {});
   for (const [key, val] of Object.entries(bumps)) {
     if (val && !kkIsActiveSource(key)) return true;
   }
   return false;
+}
+
+function normalizeWatermarkEntry(data){
+  if (!data || typeof data !== 'object') return null;
+  const inbound = Math.max(0, Number(data.inbound_total ?? data.total ?? 0));
+  const readRaw = Math.max(0, Number(data.read_total ?? data.read ?? 0));
+  const latestRaw = Math.max(0, Number(data.latest_id ?? data.latest ?? 0));
+  const lastReadRaw = Math.max(0, Number(data.last_read_id ?? data.last_read ?? 0));
+
+  const read = Math.min(inbound, readRaw);
+  const latest = Math.max(latestRaw, lastReadRaw);
+  const lastRead = Math.min(lastReadRaw, latest);
+
+  return {
+    inbound_total: inbound,
+    read_total: read,
+    latest_id: latest,
+    last_read_id: lastRead,
+  };
+}
+
+function mergeWatermarkObjects(base, addition){
+  const out = { rooms: {}, dms: {} };
+  const apply = (src) => {
+    if (!src || typeof src !== 'object') return;
+
+    if (src.rooms && typeof src.rooms === 'object') {
+      Object.entries(src.rooms).forEach(([slug, raw]) => {
+        if (!slug) return;
+        if (raw == null) {
+          delete out.rooms[slug];
+          return;
+        }
+        const entry = normalizeWatermarkEntry(raw);
+        if (!entry) return;
+        out.rooms[slug] = { ...(out.rooms[slug] || {}), ...entry };
+      });
+    }
+
+    if (src.dms && typeof src.dms === 'object') {
+      Object.entries(src.dms).forEach(([id, raw]) => {
+        const key = String(id);
+        if (!key) return;
+        if (raw == null) {
+          delete out.dms[key];
+          return;
+        }
+        const entry = normalizeWatermarkEntry(raw);
+        if (!entry) return;
+        out.dms[key] = { ...(out.dms[key] || {}), ...entry };
+      });
+    }
+  };
+
+  apply(base);
+  apply(addition);
+
+  return out;
+}
+
+function resetWatermarks(){
+  WATERMARKS.rooms = {};
+  WATERMARKS.dms = {};
+}
+
+function mergeWatermarkIntoState(raw){
+  if (!raw || typeof raw !== 'object') return;
+
+  if (raw.rooms && typeof raw.rooms === 'object') {
+    Object.entries(raw.rooms).forEach(([slug, value]) => {
+      if (!slug) return;
+      if (value == null) {
+        delete WATERMARKS.rooms[slug];
+        return;
+      }
+      const entry = normalizeWatermarkEntry(value);
+      if (!entry) {
+        delete WATERMARKS.rooms[slug];
+        return;
+      }
+      WATERMARKS.rooms[slug] = entry;
+    });
+  }
+
+  if (raw.dms && typeof raw.dms === 'object') {
+    Object.entries(raw.dms).forEach(([id, value]) => {
+      const key = String(id);
+      if (!key) return;
+      if (value == null) {
+        delete WATERMARKS.dms[key];
+        return;
+      }
+      const entry = normalizeWatermarkEntry(value);
+      if (!entry) {
+        delete WATERMARKS.dms[key];
+        return;
+      }
+      WATERMARKS.dms[key] = entry;
+    });
+  }
+}
+
+function computeUnreadSnapshot(){
+  const rooms = {};
+  let totPub = 0;
+  Object.entries(WATERMARKS.rooms).forEach(([slug, info]) => {
+    if (!slug) return;
+    const inbound = Math.max(0, Number(info?.inbound_total ?? 0));
+    const read = Math.max(0, Number(info?.read_total ?? 0));
+    const unread = Math.max(0, inbound - read);
+    rooms[slug] = unread;
+    totPub += unread;
+  });
+
+  const per = {};
+  let totPriv = 0;
+  Object.entries(WATERMARKS.dms).forEach(([id, info]) => {
+    const key = String(id);
+    const inbound = Math.max(0, Number(info?.inbound_total ?? 0));
+    const read = Math.max(0, Number(info?.read_total ?? 0));
+    let unread = Math.max(0, inbound - read);
+    if (isBlocked(Number(key))) {
+      unread = 0;
+    } else {
+      totPriv += unread;
+    }
+    per[key] = unread;
+  });
+
+  return { rooms, per, totPub, totPriv };
+}
+
+function snapshotToUnreadPayload(snapshot){
+  return {
+    totPriv: snapshot.totPriv,
+    totPub: snapshot.totPub,
+    per: snapshot.per,
+    rooms: snapshot.rooms,
+  };
+}
+
+function syncUnreadStateFromWatermarks(){
+  const snapshot = computeUnreadSnapshot();
+  UNREAD_PER = snapshot.per;
+  ROOM_UNREAD = snapshot.rooms;
+  try {
+    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
+      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
+  } catch (_) {
+    DM_UNREAD_TOTAL = 0;
+  }
+  return snapshotToUnreadPayload(snapshot);
+}
+
+function ensureRoomWatermark(slug){
+  if (!slug) return null;
+  if (!WATERMARKS.rooms[slug]) {
+    WATERMARKS.rooms[slug] = {
+      inbound_total: 0,
+      read_total: 0,
+      latest_id: 0,
+      last_read_id: 0,
+    };
+  }
+  return WATERMARKS.rooms[slug];
+}
+
+function ensureDmWatermark(id){
+  const key = String(id);
+  if (!key) return null;
+  if (!WATERMARKS.dms[key]) {
+    WATERMARKS.dms[key] = {
+      inbound_total: 0,
+      read_total: 0,
+      latest_id: 0,
+      last_read_id: 0,
+    };
+  }
+  return WATERMARKS.dms[key];
+}
+
+function markRoomWatermarkRead(slug){
+  const entry = ensureRoomWatermark(slug);
+  if (!entry) return;
+  entry.read_total = Math.max(entry.read_total || 0, entry.inbound_total || 0);
+  entry.last_read_id = Math.max(entry.last_read_id || 0, entry.latest_id || 0);
+}
+
+function markDmWatermarkRead(id){
+  const entry = ensureDmWatermark(id);
+  if (!entry) return;
+  entry.read_total = Math.max(entry.read_total || 0, entry.inbound_total || 0);
+  entry.last_read_id = Math.max(entry.last_read_id || 0, entry.latest_id || 0);
+}
+
+function clearMentionForRoom(slug){
+  if (!slug) return;
+  delete MENTION_BUMPS[slug];
+}
+
+function mergeMentionPayload(raw){
+  if (!raw || typeof raw !== 'object') return;
+  Object.entries(raw).forEach(([slug, flag]) => {
+    if (!slug) return;
+    if (flag) MENTION_BUMPS[slug] = true;
+    else delete MENTION_BUMPS[slug];
+  });
+}
+
+function updateMentionsFromMessages(messages){
+  if (!Array.isArray(messages) || !messages.length) return;
+  const meId = Number(ME_ID);
+  messages.forEach(msg => {
+    if (!msg || typeof msg !== 'object') return;
+    const slug = msg.recipient_id ? '' : String(msg.room || '');
+    if (!slug) return;
+    const sender = Number(msg.sender_id || 0);
+    if (!sender || sender === meId || isBlocked(sender)) return;
+    const info = WATERMARKS.rooms[slug];
+    const lastRead = Number(info?.last_read_id || 0);
+    const mid = Number(msg.id || 0);
+    if (mid && lastRead && mid <= lastRead) return;
+    const text = String(msg.content || '');
+    if (!text) return;
+    if (!textMentionsName(text, ME_NM)) return;
+    if (currentDM == null && currentRoom === slug) return;
+    MENTION_BUMPS[slug] = true;
+  });
 }
 
 
@@ -2418,6 +2654,7 @@ function applySyncPayload(js){
     let mergedUnread = null;
     let mergedPresence = null;
     let mergedMention = null;
+    let mergedWatermarks = null;
 
     js.events.forEach(ev => {
       if (!ev || typeof ev !== 'object') return;
@@ -2426,6 +2663,9 @@ function applySyncPayload(js){
       }
       if (ev.unread && typeof ev.unread === 'object') {
         mergedUnread = ev.unread;
+      }
+      if (ev.watermarks && typeof ev.watermarks === 'object') {
+        mergedWatermarks = mergeWatermarkObjects(mergedWatermarks, ev.watermarks);
       }
       if (Array.isArray(ev.presence)) {
         mergedPresence = ev.presence;
@@ -2448,12 +2688,35 @@ function applySyncPayload(js){
     if (mergedUnread) {
       js.unread = mergedUnread;
     }
+    if (mergedWatermarks) {
+      js.watermarks = mergeWatermarkObjects(js.watermarks || null, mergedWatermarks);
+    }
     if (mergedPresence) {
       js.presence = mergedPresence;
     }
     if (mergedMention) {
       js.mention_bumps = { ...(js.mention_bumps || {}), ...mergedMention };
     }
+  }
+
+
+  if (js && js.watermarks && typeof js.watermarks === 'object') {
+    resetWatermarks();
+    mergeWatermarkIntoState(js.watermarks);
+    const snapshot = computeUnreadSnapshot();
+    js.unread = snapshotToUnreadPayload(snapshot);
+  }
+
+  if (js && js.mention_bumps && typeof js.mention_bumps === 'object') {
+    mergeMentionPayload(js.mention_bumps);
+  }
+
+  if (js && Array.isArray(js.messages) && js.messages.length) {
+    updateMentionsFromMessages(js.messages);
+  }
+
+  if (js) {
+    js.mention_bumps = { ...MENTION_BUMPS };
   }
 
 
@@ -2496,6 +2759,13 @@ function applySyncPayload(js){
 
     // zero out blocked users in DM counts
     Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) UNREAD_PER[k] = 0; });
+
+    try {
+      DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
+        .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
+    } catch (_) {
+      DM_UNREAD_TOTAL = 0;
+    }
 
     // 🔔 Notification logic:
     try{
@@ -2572,18 +2842,19 @@ function applySyncPayload(js){
     // ⬇️ Optimistically clear active badge (prevents “stuck” counters).
     if (document.visibilityState === 'visible') {
       if (currentDM != null) {
-        UNREAD_PER[currentDM] = 0;
+        markDmWatermarkRead(currentDM);
+        syncUnreadStateFromWatermarks();
       } else if (currentRoom) {
-        ROOM_UNREAD[currentRoom] = 0;
+        markRoomWatermarkRead(currentRoom);
+        clearMentionForRoom(currentRoom);
+        syncUnreadStateFromWatermarks();
       }
     }
 
-    // recompute total DM unread after adjustments
-    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (+v||0)), 0);
-    
+    if (js) {
+      js.mention_bumps = { ...MENTION_BUMPS };
+    }
 
-    
     // existing renders follow
     renderUsers();
     renderRoomsSidebar();
@@ -3147,8 +3418,11 @@ roomTabs.addEventListener('click', async e => {
   stashActive();
   currentDM = null;
   currentRoom = slug;
-  ROOM_UNREAD[slug] = 0;
+  markRoomWatermarkRead(slug);
+  clearMentionForRoom(slug);
+  syncUnreadStateFromWatermarks();
   renderRoomTabs();
+  updateLeftCounts?.();
 
   const cacheHit = applyCache(cacheKeyForRoom(slug));
   setComposerAccess();
@@ -3502,13 +3776,8 @@ async function openDM(id) {
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
   LAST_OPEN_DM = currentDM;
-  UNREAD_PER[currentDM] = 0;
-
-  // Recompute total DM unread so the left badge updates immediately
-  try {
-    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
-  } catch (_) {}
+  markDmWatermarkRead(currentDM);
+  syncUnreadStateFromWatermarks();
 
   // Now render UI that depends on currentDM
   renderDMSidebar();
