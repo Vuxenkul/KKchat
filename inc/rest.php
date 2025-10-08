@@ -256,89 +256,11 @@ add_action('rest_api_init', function () {
 
       $blocked = kkchat_blocked_ids($me);
 
-      $params = [$me, $me];
-      $blkClause = '';
-      if ($blocked) {
-        $blkClause = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $params[] = (int) $bid; }
-      }
-      $sqlPriv =
-        "SELECT COUNT(*) FROM {$t['messages']} m
-         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-         WHERE m.recipient_id = %d
-           AND r.user_id IS NULL
-           AND m.hidden_at IS NULL
-         $blkClause";
-      $totPriv = (int) $wpdb->get_var($wpdb->prepare($sqlPriv, ...$params));
-
-      $paramsPub = [$me, $me, $since_pub, $guest];
-      $blkClausePub = '';
-      if ($blocked) {
-        $blkClausePub = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $paramsPub[] = (int) $bid; }
-      }
-      $sqlPub =
-        "SELECT COUNT(*) FROM {$t['messages']} m
-         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-         LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-         WHERE m.recipient_id IS NULL
-           AND m.sender_id <> %d
-           AND r.user_id IS NULL
-           AND rr.slug IS NOT NULL
-           AND m.created_at > %d
-           AND (%d = 0 OR rr.member_only = 0)
-           AND m.hidden_at IS NULL
-           $blkClausePub";
-      $totPub = (int) $wpdb->get_var($wpdb->prepare($sqlPub, ...$paramsPub));
-
-      $paramsPer = [$me, $me];
-      $blkPer = '';
-      if ($blocked) {
-        $blkPer = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $paramsPer[] = (int) $bid; }
-      }
-      $sqlPer =
-        "SELECT m.sender_id, COUNT(*) AS c
-           FROM {$t['messages']} m
-     LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-          WHERE m.recipient_id = %d
-            AND r.user_id IS NULL
-            AND m.hidden_at IS NULL
-            $blkPer
-       GROUP BY m.sender_id";
-      $per = [];
-      $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
-      foreach ($rowsPer as $r) { $per[(int) $r['sender_id']] = (int) $r['c']; }
-
-      $paramsRoom = [$me, $me, $since_pub, $guest];
-      $blkRoom = '';
-      if ($blocked) {
-        $blkRoom = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $paramsRoom[] = (int) $bid; }
-      }
-      $sqlRoom =
-        "SELECT m.room AS slug, COUNT(*) AS c
-           FROM {$t['messages']} m
-     LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-     LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-          WHERE m.recipient_id IS NULL
-            AND m.sender_id <> %d
-            AND r.user_id IS NULL
-            AND rr.slug IS NOT NULL
-            AND m.created_at > %d
-            AND (%d = 0 OR rr.member_only = 0)
-            AND m.hidden_at IS NULL
-            $blkRoom
-       GROUP BY m.room";
-      $perRoom = [];
-      $rowsRoom = $wpdb->get_results($wpdb->prepare($sqlRoom, ...$paramsRoom), ARRAY_A) ?: [];
-      foreach ($rowsRoom as $r) { $perRoom[$r['slug']] = (int) $r['c']; }
-
       $unread = [
-        'totPriv' => $totPriv,
-        'totPub'  => $totPub,
-        'per'     => (object) $per,
-        'rooms'   => (object) $perRoom,
+        'totPriv' => 0,
+        'totPub'  => 0,
+        'per'     => (object) [],
+        'rooms'   => (object) [],
       ];
 
       $msgs = [];
@@ -430,18 +352,6 @@ add_action('rest_api_init', function () {
         }
 
         if (!empty($rows)) {
-          $ids = array_map(fn($r) => (int) $r['id'], $rows);
-          $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-          $read_rows = $wpdb->get_results(
-            $wpdb->prepare("SELECT message_id, user_id FROM {$t['reads']} WHERE message_id IN ($placeholders)", ...$ids),
-            ARRAY_A
-          ) ?: [];
-          $read_map = [];
-          foreach ($read_rows as $rr) {
-            $mid = (int) $rr['message_id'];
-            $uid = (int) $rr['user_id'];
-            $read_map[$mid][] = $uid;
-          }
           foreach ($rows as $r) {
             $mid = (int) $r['id'];
             $msgs[] = [
@@ -454,75 +364,7 @@ add_action('rest_api_init', function () {
               'recipient_id'   => isset($r['recipient_id']) ? (int) $r['recipient_id'] : null,
               'recipient_name' => $r['recipient_name'] ?: null,
               'content'        => $r['content'],
-              'read_by'        => isset($read_map[$mid]) ? array_values(array_map('intval', $read_map[$mid])) : [],
             ];
-          }
-        }
-      }
-
-      $urow = $wpdb->get_row($wpdb->prepare(
-        "SELECT name, wp_username FROM {$t['users']} WHERE id = %d LIMIT 1", $me
-      ), ARRAY_A);
-      $dispName = trim((string) ($urow['name'] ?? '')) ?: ('User' . $me);
-      $wpUser   = trim((string) ($urow['wp_username'] ?? ''));
-      $parts    = array_filter([preg_quote($dispName, '/'), $wpUser !== '' ? preg_quote($wpUser, '/') : null]);
-      $nameAlt  = implode('|', $parts);
-      $mentionRe = $nameAlt !== '' ? "/(^|[^\\w])@(?:{$nameAlt})(?=$|\\W)/i" : null;
-
-      $mention_bumps = [];
-      if ($mentionRe && !empty($perRoom)) {
-        $mentionSlugs = [];
-        foreach ($perRoom as $slug => $count) {
-          if ((int) $count > 0) {
-            $mentionSlugs[] = (string) $slug;
-          }
-        }
-
-        if ($mentionSlugs) {
-          $paramsMB = [$me, $since_pub, $guest];
-          if ($blocked) {
-            foreach ($blocked as $bid) { $paramsMB[] = (int) $bid; }
-            $blkList = implode(',', array_fill(0, count($blocked), '%d'));
-            $blkSql  = " AND m.sender_id NOT IN ($blkList)";
-          } else {
-            $blkSql = '';
-          }
-          $inClause = implode(',', array_fill(0, count($mentionSlugs), '%s'));
-          foreach ($mentionSlugs as $slug) { $paramsMB[] = $slug; }
-
-          $sqlMB =
-            "SELECT m.room, m.content
-               FROM {$t['messages']} m
-          LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-          LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-              WHERE m.recipient_id IS NULL
-                AND m.sender_id <> %d
-                AND r.user_id IS NULL
-                AND rr.slug IS NOT NULL
-                AND m.created_at > %d
-                AND (%d = 0 OR rr.member_only = 0)
-                AND m.hidden_at IS NULL
-                $blkSql
-                AND m.room IN ($inClause)
-           ORDER BY m.id DESC
-              LIMIT 300";
-          $rowsMB = $wpdb->get_results($wpdb->prepare($sqlMB, ...$paramsMB), ARRAY_A) ?: [];
-
-          $grouped = [];
-          foreach ($rowsMB as $rowMB) {
-            $slug = (string) ($rowMB['slug'] ?? ($rowMB['room'] ?? ''));
-            if ($slug === '') { continue; }
-            if (!isset($grouped[$slug])) { $grouped[$slug] = []; }
-            if (count($grouped[$slug]) >= 30) { continue; }
-            $grouped[$slug][] = (string) ($rowMB['content'] ?? '');
-          }
-
-          foreach ($mentionSlugs as $slug) {
-            $hit = false;
-            foreach ($grouped[$slug] ?? [] as $content) {
-              if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
-            }
-            $mention_bumps[$slug] = $hit ? true : false;
           }
         }
       }
@@ -532,7 +374,7 @@ add_action('rest_api_init', function () {
         'unread'        => $unread,
         'presence'      => $presence,
         'messages'      => $msgs,
-        'mention_bumps' => (object) $mention_bumps,
+        'mention_bumps' => new stdClass(),
       ];
     }
   }

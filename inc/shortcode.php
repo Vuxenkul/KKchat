@@ -679,40 +679,11 @@ let _lastPublicSeenSent = 0;
  *   csrf_token
  *   ids[] = <messageId> (repeat for each id)
  */
-// Mark a batch of DM messages as read
-async function markDMSeen(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) return;
-  try {
-    const fd = new FormData()
-    fd.append('csrf_token', CSRF); 
-    for (const id of ids) fd.append('dms[]', String(id));
-    await fetch(`${API}/reads/mark`, {
-      method: 'POST',
-      credentials: 'include',
-      body: fd
-    });
-  } catch (e) {
-    console.warn('reads/mark (DM) failed', e);
-  }
-}
-
-// Advance the public watermark to the server’s “now” from /sync
-// (don’t use Date.now(); keep using LAST_SERVER_NOW)
+// Mark helpers are now no-ops (unread is maintained locally only)
+async function markDMSeen(ids) { void ids; }
 async function markPublicSeen(ts) {
   if (!ts || ts <= _lastPublicSeenSent) return;
   _lastPublicSeenSent = ts;
-  try {
-    const fd = new FormData();
-    fd.append('csrf_token', CSRF); 
-    fd.append('public_since', String(ts));
-    await fetch(`${API}/reads/mark`, {
-      method: 'POST',
-      credentials: 'include',
-      body: fd
-    });
-  } catch (e) {
-    console.warn('reads/mark (public) failed', e);
-  }
 }
 
 function isMobileLike(){
@@ -1887,50 +1858,6 @@ function updateReceipts(el, items /*, isDM */){
 }
 
 
-let pendingMark = []; let markTimer = null;
-// Debounced, batched read-marking — optimistic clear only
-const queueMark = (() => {
-  let pending = [];
-  let t = null;
-
-  return function(ids) {
-    // PUBLIC room path
-    if (!currentDM) {
-      // Optimistically clear unread for the active room
-      if (currentRoom) {
-        ROOM_UNREAD[currentRoom] = 0;
-        renderRoomTabs();
-        updateLeftCounts?.();
-      }
-      // Keep existing behavior: move the public watermark server-side
-      markPublicSeen(LAST_SERVER_NOW);
-      return;
-    }
-
-    // DM path
-    // Optimistically clear unread for this DM
-    if (currentDM != null) {
-      UNREAD_PER[currentDM] = 0;
-      renderDMSidebar();
-      renderRoomTabs();
-      updateLeftCounts?.();
-    }
-
-    // Keep existing debounce/batching + post
-    const add = (ids || []).map(Number).filter(n => n > 0);
-    pending = [...new Set(pending.concat(add))];
-
-    if (t) return;
-    t = setTimeout(() => {
-      const toSend = [...new Set(pending)];
-      pending = [];
-      t = null;
-      if (toSend.length) markDMSeen(toSend);
-    }, 300);
-  };
-})();
-
-
 function markVisible(listEl){
   if (!isVisible(listEl)) return;
   const ids = [];
@@ -1947,13 +1874,240 @@ function markVisible(listEl){
 
 
 
-  let USERS=[]; let UNREAD_PER={};
-  let lastPubCounts = 0, lastDMCounts = 0;
-  let DM_UNREAD_TOTAL = 0;
-  let ROOM_UNREAD = {};              
-let PREV_ROOM_UNREAD = {};         
-let PREV_UNREAD_PER  = {};         
+const DM_UNREAD_KEY         = 'kk_dm_unread_v1';
+const ROOM_UNREAD_KEY       = 'kk_room_unread_v1';
+const DM_LAST_KNOWN_KEY     = 'kk_dm_last_known_v1';
+const DM_LAST_READ_KEY      = 'kk_dm_last_read_v1';
+const ROOM_LAST_KNOWN_KEY   = 'kk_room_last_known_v1';
+const ROOM_LAST_READ_KEY    = 'kk_room_last_read_v1';
+const ROOM_MENTION_KEY      = 'kk_room_mentions_v1';
 
+function loadNumberMap(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out = {};
+    Object.entries(parsed).forEach(([k, v]) => {
+      const num = Number(v);
+      if (Number.isFinite(num) && num > 0) out[k] = num;
+    });
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveNumberMap(key, map) {
+  try {
+    const filtered = {};
+    Object.entries(map || {}).forEach(([k, v]) => {
+      const num = Number(v);
+      if (Number.isFinite(num) && num > 0) filtered[k] = num;
+    });
+    if (Object.keys(filtered).length) {
+      localStorage.setItem(key, JSON.stringify(filtered));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch (_) {}
+}
+
+function loadBoolMap(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out = {};
+    Object.entries(parsed).forEach(([k, v]) => {
+      if (v) out[k] = true;
+    });
+    return out;
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveBoolMap(key, map) {
+  try {
+    const filtered = {};
+    Object.entries(map || {}).forEach(([k, v]) => {
+      if (v) filtered[k] = true;
+    });
+    if (Object.keys(filtered).length) {
+      localStorage.setItem(key, JSON.stringify(filtered));
+    } else {
+      localStorage.removeItem(key);
+    }
+  } catch (_) {}
+}
+
+let USERS = [];
+let UNREAD_PER = loadNumberMap(DM_UNREAD_KEY);
+let ROOM_UNREAD = loadNumberMap(ROOM_UNREAD_KEY);
+let DM_LAST_KNOWN = loadNumberMap(DM_LAST_KNOWN_KEY);
+let DM_LAST_READ = loadNumberMap(DM_LAST_READ_KEY);
+let ROOM_LAST_KNOWN = loadNumberMap(ROOM_LAST_KNOWN_KEY);
+let ROOM_LAST_READ = loadNumberMap(ROOM_LAST_READ_KEY);
+let MENTION_FLAGS = loadBoolMap(ROOM_MENTION_KEY);
+let DM_UNREAD_TOTAL = 0;
+
+Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) delete UNREAD_PER[k]; });
+
+function recomputeDmUnreadTotal() {
+  try {
+    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
+      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
+  } catch (_) {
+    DM_UNREAD_TOTAL = 0;
+  }
+}
+
+function persistUnreadState() {
+  saveNumberMap(DM_UNREAD_KEY, UNREAD_PER);
+  saveNumberMap(ROOM_UNREAD_KEY, ROOM_UNREAD);
+  saveNumberMap(DM_LAST_KNOWN_KEY, DM_LAST_KNOWN);
+  saveNumberMap(DM_LAST_READ_KEY, DM_LAST_READ);
+  saveNumberMap(ROOM_LAST_KNOWN_KEY, ROOM_LAST_KNOWN);
+  saveNumberMap(ROOM_LAST_READ_KEY, ROOM_LAST_READ);
+  saveBoolMap(ROOM_MENTION_KEY, MENTION_FLAGS);
+}
+
+recomputeDmUnreadTotal();
+
+function queueMark(ids) {
+  const nums = (ids || []).map(Number).filter(n => Number.isFinite(n) && n > 0);
+  if (!nums.length) return;
+  const maxSeen = Math.max(...nums);
+
+  if (!currentDM) {
+    if (currentRoom) {
+      delete ROOM_UNREAD[currentRoom];
+      const known = ROOM_LAST_KNOWN[currentRoom] || 0;
+      if (maxSeen > known) ROOM_LAST_KNOWN[currentRoom] = maxSeen;
+      const prevRead = ROOM_LAST_READ[currentRoom] || 0;
+      if (maxSeen > prevRead) ROOM_LAST_READ[currentRoom] = maxSeen;
+      if (MENTION_FLAGS[currentRoom]) delete MENTION_FLAGS[currentRoom];
+      persistUnreadState();
+      renderRoomTabs();
+      updateLeftCounts?.();
+    }
+    return;
+  }
+
+  const dmId = Number(currentDM);
+  if (!Number.isFinite(dmId)) return;
+
+  delete UNREAD_PER[dmId];
+  const known = DM_LAST_KNOWN[dmId] || 0;
+  if (maxSeen > known) DM_LAST_KNOWN[dmId] = maxSeen;
+  const prevRead = DM_LAST_READ[dmId] || 0;
+  if (maxSeen > prevRead) DM_LAST_READ[dmId] = maxSeen;
+
+  persistUnreadState();
+  recomputeDmUnreadTotal();
+  renderDMSidebar();
+  renderRoomTabs();
+  updateLeftCounts?.();
+}
+
+function updateLocalUnreadState(messages) {
+  let changed = false;
+
+  messages.forEach(msg => {
+    if (!msg || typeof msg !== 'object') return;
+    const mid = Number(msg?.id ?? msg?.message_id ?? msg?.msg_id ?? 0);
+    if (!Number.isFinite(mid) || mid <= 0) return;
+
+    const sender = Number(msg?.sender_id ?? msg?.user_id ?? msg?.author_id ?? 0);
+    const recipientRaw = msg?.recipient_id ?? msg?.to ?? null;
+    const recipient = recipientRaw == null ? null : Number(recipientRaw);
+    const roomSlug = msg?.room ?? msg?.room_slug ?? msg?.channel ?? msg?.slug ?? null;
+    const content = String(msg?.content ?? msg?.text ?? msg?.body ?? '');
+
+    if (recipient !== null && recipient !== undefined) {
+      const other = sender === ME_ID ? recipient : sender;
+      if (!Number.isFinite(other) || other <= 0) return;
+      const key = other;
+      const known = DM_LAST_KNOWN[key] || 0;
+      if (mid <= known) {
+        if (sender === ME_ID && mid > (DM_LAST_READ[key] || 0)) {
+          DM_LAST_READ[key] = mid;
+          if (UNREAD_PER[key]) { delete UNREAD_PER[key]; changed = true; }
+        }
+        return;
+      }
+      DM_LAST_KNOWN[key] = mid;
+
+      const isMine = sender === ME_ID;
+      const active = currentDM != null && Number(currentDM) === Number(other);
+
+      if (isMine || active) {
+        if (UNREAD_PER[key]) { delete UNREAD_PER[key]; changed = true; }
+        if (mid > (DM_LAST_READ[key] || 0)) { DM_LAST_READ[key] = mid; changed = true; }
+      } else if (!isBlocked(other) && !isMine) {
+        const prev = UNREAD_PER[key] || 0;
+        UNREAD_PER[key] = prev + 1;
+        changed = true;
+      }
+
+      if (isMine && mid > (DM_LAST_READ[key] || 0)) {
+        DM_LAST_READ[key] = mid;
+        if (UNREAD_PER[key]) { delete UNREAD_PER[key]; }
+        changed = true;
+      }
+
+      return;
+    }
+
+    const slug = typeof roomSlug === 'string' ? roomSlug : '';
+    if (!slug) return;
+    const knownRoom = ROOM_LAST_KNOWN[slug] || 0;
+    if (mid <= knownRoom) {
+      if (sender === ME_ID && mid > (ROOM_LAST_READ[slug] || 0)) {
+        ROOM_LAST_READ[slug] = mid;
+        if (MENTION_FLAGS[slug]) { delete MENTION_FLAGS[slug]; changed = true; }
+      }
+      return;
+    }
+
+    ROOM_LAST_KNOWN[slug] = mid;
+    const isMine = sender === ME_ID;
+    const activeRoom = currentDM == null && currentRoom === slug;
+
+    if (isMine || activeRoom) {
+      if (ROOM_UNREAD[slug]) { delete ROOM_UNREAD[slug]; changed = true; }
+      if (mid > (ROOM_LAST_READ[slug] || 0)) { ROOM_LAST_READ[slug] = mid; changed = true; }
+      if (MENTION_FLAGS[slug]) { delete MENTION_FLAGS[slug]; changed = true; }
+      return;
+    }
+
+    if (isBlocked(sender)) return;
+
+    const prev = ROOM_UNREAD[slug] || 0;
+    ROOM_UNREAD[slug] = prev + 1;
+    changed = true;
+
+    let hit = false;
+    try { hit = textMentionsName(content, ME_NM) && sender !== ME_ID; } catch(_) { hit = false; }
+    if (!hit && ME_NM) {
+      const safe = escapeRegExp(ME_NM);
+      if (safe) {
+        const re = new RegExp(`(^|\\W)@${safe}(?=\\W|$)`, 'i');
+        hit = re.test(content);
+      }
+    }
+
+    if (hit && !MENTION_FLAGS[slug]) {
+      MENTION_FLAGS[slug] = true;
+      changed = true;
+    }
+  });
+
+  return changed;
+}
   function sortUsersForList(){
     return [...USERS].sort((a,b)=>{
       const fa = a.flagged?1:0, fb = b.flagged?1:0;
@@ -2189,7 +2343,12 @@ userListEl.addEventListener('click', async (e)=>{
           showView('vPublic');
         }
 
-        UNREAD_PER[id] = 0;
+        delete UNREAD_PER[id];
+        if (DM_LAST_KNOWN[id] > (DM_LAST_READ[id] || 0)) {
+          DM_LAST_READ[id] = DM_LAST_KNOWN[id];
+        }
+        persistUnreadState();
+        recomputeDmUnreadTotal();
         if (isBlocked(id)) { ACTIVE_DMS.delete(id); saveDMActive(ACTIVE_DMS); }
         renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
         showToast(js.now_blocked ? 'Användare blockerad' : 'Användare avblockerad');
@@ -2403,58 +2562,92 @@ function kkIsActiveSource(slugOrDmKey){
   return false;
 }
 
-function kkAnyPassiveMentionBump(js){
-  const bumps = js.mention_bumps || {};
-  for (const [key, val] of Object.entries(bumps)) {
-    if (val && !kkIsActiveSource(key)) return true;
-  }
-  return false;
+function kkAnyPassiveMentionBump(){
+  return Object.keys(MENTION_FLAGS || {})
+    .some(slug => MENTION_FLAGS[slug] && !kkIsActiveSource(slug));
 }
 
 
 function applySyncPayload(js){
-  if (js && Array.isArray(js.events)) {
-    let mergedMessages = [];
-    let mergedUnread = null;
-    let mergedPresence = null;
-    let mergedMention = null;
+  const existingList = Array.isArray(js?.messages) ? js.messages : [];
+  let mergedMessages = [];
+  let mergedPresence = null;
 
+  if (js && Array.isArray(js.events)) {
     js.events.forEach(ev => {
       if (!ev || typeof ev !== 'object') return;
       if (Array.isArray(ev.messages) && ev.messages.length) {
         mergedMessages = mergedMessages.concat(ev.messages);
       }
-      if (ev.unread && typeof ev.unread === 'object') {
-        mergedUnread = ev.unread;
-      }
       if (Array.isArray(ev.presence)) {
         mergedPresence = ev.presence;
       }
-      if (ev.mention_bumps && typeof ev.mention_bumps === 'object') {
-        mergedMention = { ...(mergedMention || {}), ...ev.mention_bumps };
-      }
     });
-
-    if (mergedMessages.length) {
-      const existing = Array.isArray(js.messages) ? js.messages : [];
-      if (!existing.length) {
-        js.messages = mergedMessages;
-      } else {
-        const seen = new Set(existing.map(m => Number(m?.id)));
-        const additions = mergedMessages.filter(m => !seen.has(Number(m?.id)));
-        js.messages = existing.concat(additions);
-      }
-    }
-    if (mergedUnread) {
-      js.unread = mergedUnread;
-    }
-    if (mergedPresence) {
-      js.presence = mergedPresence;
-    }
-    if (mergedMention) {
-      js.mention_bumps = { ...(js.mention_bumps || {}), ...mergedMention };
-    }
   }
+
+  if (mergedMessages.length) {
+    const seen = new Set(existingList.map(m => Number(m?.id)));
+    const additions = mergedMessages.filter(m => {
+      const mid = Number(m?.id);
+      if (!Number.isFinite(mid) || seen.has(mid)) return false;
+      seen.add(mid);
+      return true;
+    });
+    if (!existingList.length) {
+      js.messages = mergedMessages;
+    } else if (additions.length) {
+      js.messages = existingList.concat(additions);
+    }
+  } else if (!Array.isArray(js.messages)) {
+    js.messages = [];
+  }
+
+  if (mergedPresence) {
+    js.presence = mergedPresence;
+  }
+
+  const prevRooms = { ...(ROOM_UNREAD || {}) };
+  const prevDMs   = { ...(UNREAD_PER  || {}) };
+  const prevMentions = { ...(MENTION_FLAGS || {}) };
+
+  const candidateMessages = mergedMessages.length
+    ? mergedMessages
+    : (Array.isArray(js.messages) ? js.messages : []);
+
+  const uniqueMessages = [];
+  const seenNew = new Set();
+  candidateMessages.forEach(msg => {
+    if (!msg || typeof msg !== 'object') return;
+    const mid = Number(msg?.id);
+    if (!Number.isFinite(mid) || seenNew.has(mid)) return;
+    seenNew.add(mid);
+    uniqueMessages.push(msg);
+  });
+
+  let stateChanged = false;
+  if (uniqueMessages.length) {
+    stateChanged = updateLocalUnreadState(uniqueMessages) || stateChanged;
+  }
+
+  Object.keys(UNREAD_PER).forEach(k => {
+    const val = Number(UNREAD_PER[k] || 0);
+    if (!Number.isFinite(val) || val <= 0 || isBlocked(+k)) {
+      delete UNREAD_PER[k];
+    }
+  });
+
+  Object.keys(ROOM_UNREAD).forEach(k => {
+    const val = Number(ROOM_UNREAD[k] || 0);
+    if (!Number.isFinite(val) || val <= 0) {
+      delete ROOM_UNREAD[k];
+    }
+  });
+
+  if (stateChanged) {
+    persistUnreadState();
+  }
+
+  recomputeDmUnreadTotal();
 
 
   // --- helper: play mention sound with throttling fallback ---
@@ -2483,115 +2676,63 @@ function applySyncPayload(js){
     try { USERS.forEach(u => rememberGender(u.id, u.gender)); } catch(_){}
   }
 
-  if (js && js.unread) {
-    const unread = js.unread || {};
+  const roomIncr = Object.keys(ROOM_UNREAD)
+    .filter(slug => (ROOM_UNREAD[slug] || 0) > (prevRooms[slug] || 0));
 
-    // keep previous counts for comparison (for sounds)
-    const prevRooms = { ...(ROOM_UNREAD || {}) };
-    const prevDMs   = { ...(UNREAD_PER  || {}) };
+  const dmIncr = Object.keys(UNREAD_PER)
+    .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
 
-    // update to latest counts from server
-    UNREAD_PER  = unread.per   || {};
-    ROOM_UNREAD = unread.rooms || {};
+  try {
+    roomIncr
+      .filter(slug => slug !== currentRoom)
+      .forEach(slug => queuePrefetchRoom(slug));
 
-    // zero out blocked users in DM counts
-    Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) UNREAD_PER[k] = 0; });
+    dmIncr
+      .map(id => Number(id))
+      .filter(id => id !== Number(currentDM))
+      .forEach(id => queuePrefetchDM(id));
+  } catch(_) {}
 
-    // 🔔 Notification logic:
-    try{
-      const roomIncr = Object.keys(ROOM_UNREAD)
-        .filter(slug => (ROOM_UNREAD[slug] || 0) > (prevRooms[slug] || 0));
+  const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
+  const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
 
+  const visible = document.visibilityState === 'visible';
+  const isActiveRoom = slug => currentDM == null && slug === currentRoom;
+  const isActiveDM   = id   => currentDM != null && Number(id) === Number(currentDM);
 
-      const dmIncr = Object.keys(UNREAD_PER)
-       .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
+  const passiveRoomBumped = roomIncrUnmuted.some(slug => !isActiveRoom(slug));
+  const passiveDmBumped   = dmIncrUnmuted.some(id   => !isActiveDM(id));
 
-      // Prefetch newly-bumped sources so switching feels instant.
-      try {
-        roomIncr
-          .filter(slug => slug !== currentRoom)
-          .forEach(slug => queuePrefetchRoom(slug));
+  const shouldRing =
+    (!visible && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
+    (visible && (passiveRoomBumped || passiveDmBumped));
 
-        dmIncr
-          .map(id => Number(id))
-          .filter(id => id !== Number(currentDM))
-          .forEach(id => queuePrefetchDM(id));
-      } catch(_) {}
-      // --- ignore muted sources for sound decisions
-      const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
-      const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
+  const mentionPassiveBumped = Object.keys(MENTION_FLAGS || {})
+    .filter(slug => MENTION_FLAGS[slug])
+    .some(slug => {
+      if (isRoomMuted(slug)) return false;
+      if (isActiveRoom(slug)) return false;
+      const was = !!prevMentions[slug];
+      const nowUnread = ROOM_UNREAD[slug] || 0;
+      const prevUnread = prevRooms[slug] || 0;
+      return !was || nowUnread > prevUnread;
+    });
 
-      const visible = document.visibilityState === 'visible';
-      const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
-      const isActiveDM   = (id)   => currentDM != null && Number(id) === Number(currentDM);
-
-      const passiveRoomBumped = roomIncrUnmuted.some(slug => !isActiveRoom(slug));
-      const passiveDmBumped   = dmIncrUnmuted.some(id   => !isActiveDM(id));
-
-      const shouldRing =
-        (!visible && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
-        (visible && (passiveRoomBumped || passiveDmBumped));
-
-      // Server-assisted mention hints — also ignore muted rooms and only ring on rising edge
-      const mentionBumps = (js && js.mention_bumps) ? js.mention_bumps : {};
-      const mentionPassiveBumped = Object.entries(mentionBumps)
-        .some(([slug, isMention]) =>
-          !!isMention &&
-          !isRoomMuted(slug) &&
-          !isActiveRoom(slug) &&
-          (ROOM_UNREAD[slug]||0) > (prevRooms[slug]||0)
-        );
-
-      if (mentionPassiveBumped && canRingMention()) {
-        playMentionOnce();
-      } else if (shouldRing) {
-        playNotifOnce();
-      }
-
-      // --- Ensure a tab exists for newly-bumped DMs
-      dmIncr.forEach(did => {
-        const id = Number(did);
-        if (!ACTIVE_DMS.has(id)) {
-          ACTIVE_DMS.add(id);
-          saveDMActive(ACTIVE_DMS);
-          // reflect it in the UI immediately
-          try { renderDMSidebar(); } catch(_){}
-          try { renderRoomTabs(); } catch(_){}
-        }
-      });
-
-      // --- Optional: auto-open the first newly-bumped DM so it "pops up"
-      if (AUTO_OPEN_DM_ON_NEW && currentDM == null) {
-        const first = dmIncr.find(did => !isBlocked(+did));
-        if (first) {
-          try { openDM(Number(first)); } catch(_) {}
-        }
-      }
-    }catch(_){}
-
-    // ⬇️ Optimistically clear active badge (prevents “stuck” counters).
-    if (document.visibilityState === 'visible') {
-      if (currentDM != null) {
-        UNREAD_PER[currentDM] = 0;
-      } else if (currentRoom) {
-        ROOM_UNREAD[currentRoom] = 0;
-      }
-    }
-
-    // recompute total DM unread after adjustments
-    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (+v||0)), 0);
-    
-
-    
-    // existing renders follow
-    renderUsers();
-    renderRoomsSidebar();
-    renderDMSidebar();
-    renderRoomTabs();
-    updateLeftCounts();
-
+  if (mentionPassiveBumped && canRingMention()) {
+    playMentionOnce();
+  } else if (shouldRing) {
+    playNotifOnce();
   }
+
+  dmIncr.forEach(did => {
+    const id = Number(did);
+    if (!ACTIVE_DMS.has(id)) {
+      ACTIVE_DMS.add(id);
+      saveDMActive(ACTIVE_DMS);
+      try { renderDMSidebar(); } catch(_){}
+      try { renderRoomTabs(); } catch(_){}
+    }
+  });
 
   renderUsers();
   renderRoomsSidebar();
@@ -2843,7 +2984,12 @@ actBlock?.addEventListener('click', async ()=>{
         BLOCKED.delete(id);
         showToast('Användare avblockerad');
       }
-      UNREAD_PER[id] = 0;
+      delete UNREAD_PER[id];
+      if (DM_LAST_KNOWN[id] > (DM_LAST_READ[id] || 0)) {
+        DM_LAST_READ[id] = DM_LAST_KNOWN[id];
+      }
+      persistUnreadState();
+      recomputeDmUnreadTotal();
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
       closeMsgSheet();
     } else {
@@ -2894,7 +3040,12 @@ imgActBlock?.addEventListener('click', async ()=>{
         BLOCKED.delete(id);
         showToast('Användare avblockerad');
       }
-      UNREAD_PER[id] = 0;
+      delete UNREAD_PER[id];
+      if (DM_LAST_KNOWN[id] > (DM_LAST_READ[id] || 0)) {
+        DM_LAST_READ[id] = DM_LAST_KNOWN[id];
+      }
+      persistUnreadState();
+      recomputeDmUnreadTotal();
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
 
       const blocked = isBlocked(id);
@@ -3147,7 +3298,14 @@ roomTabs.addEventListener('click', async e => {
   stashActive();
   currentDM = null;
   currentRoom = slug;
-  ROOM_UNREAD[slug] = 0;
+  delete ROOM_UNREAD[slug];
+  const knownRoom = ROOM_LAST_KNOWN[slug] || 0;
+  if (knownRoom > (ROOM_LAST_READ[slug] || 0)) {
+    ROOM_LAST_READ[slug] = knownRoom;
+  }
+  if (MENTION_FLAGS[slug]) delete MENTION_FLAGS[slug];
+  persistUnreadState();
+  recomputeDmUnreadTotal();
   renderRoomTabs();
 
   const cacheHit = applyCache(cacheKeyForRoom(slug));
@@ -3502,13 +3660,14 @@ async function openDM(id) {
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
   LAST_OPEN_DM = currentDM;
-  UNREAD_PER[currentDM] = 0;
 
-  // Recompute total DM unread so the left badge updates immediately
-  try {
-    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
-  } catch (_) {}
+  delete UNREAD_PER[currentDM];
+  const known = DM_LAST_KNOWN[currentDM] || 0;
+  if (known > (DM_LAST_READ[currentDM] || 0)) {
+    DM_LAST_READ[currentDM] = known;
+  }
+  persistUnreadState();
+  recomputeDmUnreadTotal();
 
   // Now render UI that depends on currentDM
   renderDMSidebar();
