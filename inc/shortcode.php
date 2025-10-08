@@ -16,6 +16,20 @@ add_shortcode('kkchat', function () {
 
   $is_admin = !empty($_SESSION['kkchat_is_admin']) && kkchat_is_admin();
 
+  $admin_links = [];
+  if ($is_admin) {
+    $admin_links = [
+      ['text' => 'Rum',           'url' => admin_url('admin.php?page=kkchat_rooms')],
+      ['text' => 'Banderoller',   'url' => admin_url('admin.php?page=kkchat_banners')],
+      ['text' => 'Moderering',    'url' => admin_url('admin.php?page=kkchat_moderation')],
+      ['text' => 'Ord',           'url' => admin_url('admin.php?page=kkchat_words')],
+      ['text' => 'Loggar',        'url' => admin_url('admin.php?page=kkchat_admin_logs')],
+      ['text' => 'Bildmoderering','url' => admin_url('admin.php?page=kkchat_media')],
+      ['text' => 'Rapporter',     'url' => admin_url('admin.php?page=kkchat_reports')],
+      ['text' => 'Inställningar', 'url' => admin_url('admin.php?page=kkchat_settings')],
+    ];
+  }
+
   $rest_nonce = esc_js( wp_create_nonce('wp_rest') );
   $open_dm = isset($_GET['dm']) ? (int)$_GET['dm'] : 'null';
 
@@ -378,6 +392,8 @@ f.addEventListener('submit', async (ev)=>{
   const ME_NM = <?= json_encode($me_nm) ?>;
   const OPEN_DM_USER = <?= $open_dm ?>;
   const IS_ADMIN = <?= $is_admin ? 'true' : 'false' ?>;
+  const ADMIN_LINKS = <?= wp_json_encode($admin_links) ?>;
+  const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
 
   const $ = s => document.querySelector(s);
@@ -1133,6 +1149,7 @@ function playNotifOnce() {
     const BLUR_KEY = 'kk_blur_images';
     let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '0') === '1';
     let SETTINGS_OPEN = false;
+    let ADMIN_MENU_OPEN = false;
 
     function applyBlurClass(){ root?.classList.toggle('nsfw-blur', IMG_BLUR); }
     function setImageBlur(on){
@@ -2823,6 +2840,24 @@ function renderRoomTabs(){
     ? '🔔 Slå på ljud för alla'
     : '🔕 Tysta alla';
 
+  const adminMenu = !HAS_ADMIN_TOOLS ? '' : `
+    <div class="tab-settings tab-settings-admin${ADMIN_MENU_OPEN ? ' is-open' : ''}" data-admin-root>
+      <button class="tabicons" data-admin-toggle="1"
+              title="Adminverktyg"
+              aria-label="Adminverktyg"
+              aria-haspopup="menu"
+              aria-expanded="${ADMIN_MENU_OPEN ? 'true' : 'false'}">🛠️</button>
+      <div class="tab-settings-menu${ADMIN_MENU_OPEN ? ' is-open' : ''}"
+           role="menu"
+           aria-hidden="${ADMIN_MENU_OPEN ? 'false' : 'true'}">
+        ${ADMIN_LINKS.map(link => {
+          const safeText = esc(link.text || '');
+          const safeUrl  = escAttr(link.url || '#');
+          return `<a class="tab-settings-item" href="${safeUrl}" role="menuitem">${safeText}</a>`;
+        }).join('')}
+      </div>
+    </div>`;
+
   const controls = `
     <span class="spacer"></span>
     <div class="tab-settings${SETTINGS_OPEN ? ' is-open' : ''}" data-settings-root>
@@ -2838,8 +2873,10 @@ function renderRoomTabs(){
         <button type="button" class="tab-settings-item" data-settings-autoscroll="1" role="menuitem">${autoLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-all="1" role="menuitem">${allMuteLabel}</button>
+        <button type="button" class="tab-settings-item" data-settings-logout="1" role="menuitem">🚪 Logga ut</button>
       </div>
-    </div>`;
+    </div>
+    ${adminMenu}`;
 
   roomTabs.innerHTML = roomBtns + dmBtns + controls;
 }
@@ -2892,6 +2929,17 @@ roomTabs.addEventListener('click', async e => {
     e.preventDefault();
     e.stopPropagation();
     SETTINGS_OPEN = !SETTINGS_OPEN;
+    if (SETTINGS_OPEN) ADMIN_MENU_OPEN = false;
+    renderRoomTabs();
+    return;
+  }
+
+  const adminToggle = e.target.closest('[data-admin-toggle]');
+  if (adminToggle) {
+    e.preventDefault();
+    e.stopPropagation();
+    ADMIN_MENU_OPEN = !ADMIN_MENU_OPEN;
+    if (ADMIN_MENU_OPEN) SETTINGS_OPEN = false;
     renderRoomTabs();
     return;
   }
@@ -2934,6 +2982,15 @@ roomTabs.addEventListener('click', async e => {
     e.stopPropagation();
     SETTINGS_OPEN = false;
     setAllMute(!allChatsMuted());
+    return;
+  }
+
+  const logoutSettingsBtn = e.target.closest('[data-settings-logout]');
+  if (logoutSettingsBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    SETTINGS_OPEN = false;
+    await doLogout();
     return;
   }
 
@@ -2984,15 +3041,22 @@ roomTabs.addEventListener('click', async e => {
 });
 
 document.addEventListener('click', e => {
-  if (!SETTINGS_OPEN) return;
-  if (e.target.closest('[data-settings-root]')) return;
-  SETTINGS_OPEN = false;
-  renderRoomTabs();
+  let changed = false;
+  if (SETTINGS_OPEN && !e.target.closest('[data-settings-root]')) {
+    SETTINGS_OPEN = false;
+    changed = true;
+  }
+  if (ADMIN_MENU_OPEN && !e.target.closest('[data-admin-root]')) {
+    ADMIN_MENU_OPEN = false;
+    changed = true;
+  }
+  if (changed) renderRoomTabs();
 });
 
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && SETTINGS_OPEN) {
+  if (e.key === 'Escape' && (SETTINGS_OPEN || ADMIN_MENU_OPEN)) {
     SETTINGS_OPEN = false;
+    ADMIN_MENU_OPEN = false;
     renderRoomTabs();
   }
 });
