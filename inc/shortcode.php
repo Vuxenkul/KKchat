@@ -681,38 +681,15 @@ let _lastPublicSeenSent = 0;
  */
 // Mark a batch of DM messages as read
 async function markDMSeen(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) return;
-  try {
-    const fd = new FormData()
-    fd.append('csrf_token', CSRF); 
-    for (const id of ids) fd.append('dms[]', String(id));
-    await fetch(`${API}/reads/mark`, {
-      method: 'POST',
-      credentials: 'include',
-      body: fd
-    });
-  } catch (e) {
-    console.warn('reads/mark (DM) failed', e);
-  }
+  // Client-unread mode keeps read state locally; no server mark needed.
+  return;
 }
 
 // Advance the public watermark to the server’s “now” from /sync
 // (don’t use Date.now(); keep using LAST_SERVER_NOW)
 async function markPublicSeen(ts) {
-  if (!ts || ts <= _lastPublicSeenSent) return;
-  _lastPublicSeenSent = ts;
-  try {
-    const fd = new FormData();
-    fd.append('csrf_token', CSRF); 
-    fd.append('public_since', String(ts));
-    await fetch(`${API}/reads/mark`, {
-      method: 'POST',
-      credentials: 'include',
-      body: fd
-    });
-  } catch (e) {
-    console.warn('reads/mark (public) failed', e);
-  }
+  // Client-unread mode keeps read state locally; no server mark needed.
+  return;
 }
 
 function isMobileLike(){
@@ -771,6 +748,30 @@ window.addEventListener('storage', (ev) => {
   if (ev.key === POLL_POKE_KEY) {
     if (ev.newValue) {
       try { handlePollMessage(JSON.parse(ev.newValue)); } catch (_) {}
+    }
+    return;
+  }
+  if (CLIENT_UNREAD_MODE) {
+    if (ev.key === CLIENT_UNREAD_KEYS.broadcast) {
+      if (ev.newValue) {
+        try { handleClientUnreadMessage(JSON.parse(ev.newValue)); } catch (_) {}
+      }
+      return;
+    }
+    if (ev.key === CLIENT_UNREAD_KEYS.rooms) {
+      ROOM_UNREAD = loadStoredMap(CLIENT_UNREAD_KEYS.rooms);
+      refreshUnreadUI();
+      return;
+    }
+    if (ev.key === CLIENT_UNREAD_KEYS.dms) {
+      UNREAD_PER = loadStoredMap(CLIENT_UNREAD_KEYS.dms);
+      recomputeDMTotal();
+      refreshUnreadUI();
+      return;
+    }
+    if (ev.key === CLIENT_UNREAD_KEYS.lastSeen) {
+      LAST_SEEN = loadStoredMap(CLIENT_UNREAD_KEYS.lastSeen);
+      return;
     }
   }
 });
@@ -1093,6 +1094,11 @@ function handlePollMessage(msg){
   if (!msg || typeof msg !== 'object') return;
   if (msg.from === POLL_CLIENT_ID) return;
 
+  if (msg.type === 'client-unread') {
+    handleClientUnreadMessage(msg);
+    return;
+  }
+
   if (msg.type === 'sync') {
     const state = desiredStreamState();
     if (!state) return;
@@ -1287,6 +1293,13 @@ function playNotifOnce() {
         localStorage.removeItem('kk_active_dms_v1');
         localStorage.removeItem('kk_joined_rooms_v1');
         localStorage.removeItem('kk_autoscroll');
+        const prefix = `kkchat:${ME_ID}:`;
+        [
+          `${prefix}room_unread_v1`,
+          `${prefix}dm_unread_v1`,
+          `${prefix}last_seen_v1`,
+          `${prefix}unread_sync_v1`
+        ].forEach(key => { try { localStorage.removeItem(key); } catch(_){} });
       }catch(_){}
     }
 
@@ -1458,6 +1471,328 @@ async function doLogout(){
 
   let BLOCKED = new Set();
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
+
+  let ROOM_UNREAD = {};
+  let UNREAD_PER = {};
+  let LAST_SEEN = {};
+
+  const CLIENT_UNREAD_MODE = true;
+  const MENTION_FLAGS = new Set();
+  const CLIENT_UNREAD_PREFIX = `kkchat:${ME_ID}:`;
+  const CLIENT_UNREAD_KEYS = Object.freeze({
+    rooms: `${CLIENT_UNREAD_PREFIX}room_unread_v1`,
+    dms: `${CLIENT_UNREAD_PREFIX}dm_unread_v1`,
+    lastSeen: `${CLIENT_UNREAD_PREFIX}last_seen_v1`,
+    broadcast: `${CLIENT_UNREAD_PREFIX}unread_sync_v1`
+  });
+
+  function loadStoredMap(key){
+    if (!CLIENT_UNREAD_MODE) return {};
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      const out = {};
+      Object.entries(parsed).forEach(([k, v]) => {
+        const num = Number(v);
+        if (Number.isFinite(num) && num >= 0) out[k] = num;
+      });
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function persistStoredMap(key, value){
+    if (!CLIENT_UNREAD_MODE) return;
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {}
+  }
+
+  function broadcastClientUnread(payload){
+    if (!CLIENT_UNREAD_MODE) return;
+    if (!payload || typeof payload !== 'object') return;
+    const message = {
+      type: 'client-unread',
+      from: POLL_CLIENT_ID,
+      payload,
+      ts: Date.now()
+    };
+    if (POLL_BROADCAST) {
+      try { POLL_BROADCAST.postMessage(message); } catch (_) {}
+    }
+    try {
+      localStorage.setItem(CLIENT_UNREAD_KEYS.broadcast, JSON.stringify(message));
+      localStorage.removeItem(CLIENT_UNREAD_KEYS.broadcast);
+    } catch (_) {}
+  }
+
+  function activeContextKey(){
+    if (currentDM != null) return `dm:${currentDM}`;
+    if (currentRoom) return `room:${currentRoom}`;
+    return null;
+  }
+
+  function parseContextKey(key){
+    if (!key || typeof key !== 'string') return null;
+    if (key.startsWith('room:')) {
+      return { kind: 'room', value: key.slice(5) };
+    }
+    if (key.startsWith('dm:')) {
+      return { kind: 'dm', value: Number(key.slice(3)) };
+    }
+    return null;
+  }
+
+  function contextKeyForRoom(slug){ return `room:${slug}`; }
+  function contextKeyForDM(id){ return `dm:${id}`; }
+
+  function setLastSeenValue(key, id, opts = {}){
+    if (!CLIENT_UNREAD_MODE) return false;
+    const num = Number(id);
+    if (!Number.isFinite(num) || num < 0) return false;
+    if (num <= Number(LAST_SEEN[key] || 0)) return false;
+    LAST_SEEN[key] = num;
+    if (!opts.skipPersist) persistStoredMap(CLIENT_UNREAD_KEYS.lastSeen, LAST_SEEN);
+    if (!opts.skipBroadcast) broadcastClientUnread({ lastSeen: { [key]: num } });
+    return true;
+  }
+
+  function setRoomUnreadValue(slug, value, opts = {}){
+    if (!slug) return false;
+    const num = Math.max(0, Number(value) || 0);
+    const prev = Number(ROOM_UNREAD[slug] || 0);
+    let changed = false;
+    if (num === 0) {
+      if (prev !== 0) {
+        delete ROOM_UNREAD[slug];
+        changed = true;
+      }
+      MENTION_FLAGS.delete(contextKeyForRoom(slug));
+    } else if (prev !== num) {
+      ROOM_UNREAD[slug] = num;
+      changed = true;
+    }
+    if (changed && CLIENT_UNREAD_MODE) {
+      if (!opts.skipPersist) persistStoredMap(CLIENT_UNREAD_KEYS.rooms, ROOM_UNREAD);
+      if (!opts.skipBroadcast) broadcastClientUnread({ rooms: { [slug]: num } });
+    }
+    return changed;
+  }
+
+  function setDMUnreadValue(id, value, opts = {}){
+    const key = String(id);
+    const num = Math.max(0, Number(value) || 0);
+    const prev = Number(UNREAD_PER[key] || 0);
+    let changed = false;
+    if (num === 0) {
+      if (prev !== 0) {
+        delete UNREAD_PER[key];
+        changed = true;
+      }
+      MENTION_FLAGS.delete(contextKeyForDM(key));
+    } else if (prev !== num) {
+      UNREAD_PER[key] = num;
+      changed = true;
+    }
+    if (changed && CLIENT_UNREAD_MODE) {
+      if (!opts.skipPersist) persistStoredMap(CLIENT_UNREAD_KEYS.dms, UNREAD_PER);
+      if (!opts.skipBroadcast) broadcastClientUnread({ dms: { [key]: num } });
+    }
+    return changed;
+  }
+
+  function applyClientUnreadPatch(patch, opts = {}){
+    if (!CLIENT_UNREAD_MODE) return false;
+    if (!patch || typeof patch !== 'object') return false;
+    const { rooms, dms, lastSeen } = patch;
+    let changed = false;
+    if (rooms && typeof rooms === 'object') {
+      Object.entries(rooms).forEach(([slug, val]) => {
+        if (setRoomUnreadValue(slug, val, { skipBroadcast: true, skipPersist: opts.skipPersist })) changed = true;
+      });
+    }
+    if (dms && typeof dms === 'object') {
+      Object.entries(dms).forEach(([id, val]) => {
+        if (setDMUnreadValue(id, val, { skipBroadcast: true, skipPersist: opts.skipPersist })) changed = true;
+      });
+    }
+    if (lastSeen && typeof lastSeen === 'object') {
+      Object.entries(lastSeen).forEach(([key, val]) => {
+        if (setLastSeenValue(key, val, { skipBroadcast: true, skipPersist: opts.skipPersist })) changed = true;
+      });
+    }
+    return changed;
+  }
+
+  LAST_SEEN = CLIENT_UNREAD_MODE ? loadStoredMap(CLIENT_UNREAD_KEYS.lastSeen) : {};
+
+  function collectMessagesFromPayload(js){
+    const out = [];
+    if (!js || typeof js !== 'object') return out;
+    const seenIds = new Set();
+    function addList(list){
+      if (!Array.isArray(list)) return;
+      list.forEach(m => {
+        const id = Number(m?.id);
+        if (!Number.isFinite(id) || id <= 0) return;
+        if (seenIds.has(id)) return;
+        seenIds.add(id);
+        out.push(m);
+      });
+    }
+    addList(js.messages);
+    if (Array.isArray(js.events)) {
+      js.events.forEach(ev => addList(ev?.messages));
+    }
+    return out;
+  }
+
+  function messageContextFromPayload(m){
+    if (!m || typeof m !== 'object') return null;
+    const room = m.room || m.room_slug || m.channel || null;
+    if (room) {
+      return { kind: 'room', value: String(room) };
+    }
+    const sender = Number(m.sender_id);
+    const recipientRaw = m.recipient_id;
+    const recipient = recipientRaw == null ? null : Number(recipientRaw);
+    if (sender === ME_ID && Number.isFinite(recipient)) {
+      return { kind: 'dm', value: recipient };
+    }
+    if (recipient === ME_ID && Number.isFinite(sender)) {
+      return { kind: 'dm', value: sender };
+    }
+    return null;
+  }
+
+  function applyClientUnreadMessages(messages){
+    if (!CLIENT_UNREAD_MODE) return { countsChanged: false, mentionTargets: [] };
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return { countsChanged: false, mentionTargets: [] };
+    }
+
+    const activeKey = activeContextKey();
+    const tabVisible = document.visibilityState === 'visible';
+    const activeAtBottom = tabVisible && activeKey ? atBottom(pubList) : false;
+
+    const roomChanges = new Map();
+    const dmChanges = new Map();
+    const seenChanges = new Map();
+    const mentionTargets = [];
+    const mentionSet = new Set();
+
+    messages.forEach(m => {
+      const id = Number(m?.id);
+      if (!Number.isFinite(id) || id <= 0) return;
+      const ctx = messageContextFromPayload(m);
+      if (!ctx) return;
+
+      const ctxKey = ctx.kind === 'room'
+        ? contextKeyForRoom(ctx.value)
+        : contextKeyForDM(ctx.value);
+
+      const prevSeen = Number(LAST_SEEN[ctxKey] || 0);
+      if (id <= prevSeen) return;
+
+      const senderId = Number(m?.sender_id || 0);
+      const isMine = senderId === ME_ID;
+
+      if (senderId && senderId !== ME_ID && isBlocked(senderId)) {
+        return;
+      }
+
+      if (ctx.kind === 'dm' && isBlocked(ctx.value) && senderId !== ME_ID) {
+        return;
+      }
+
+      const contextActive = ctxKey === activeKey;
+      const shouldAutoSee = contextActive && tabVisible && activeAtBottom;
+
+      if (shouldAutoSee || isMine) {
+        const prev = seenChanges.get(ctxKey) || prevSeen;
+        if (id > prev) seenChanges.set(ctxKey, id);
+        if (ctx.kind === 'room') {
+          roomChanges.set(ctx.value, 0);
+        } else {
+          dmChanges.set(String(ctx.value), 0);
+        }
+        if (shouldAutoSee) {
+          MENTION_FLAGS.delete(ctxKey);
+        }
+        return;
+      }
+
+      const key = ctx.kind === 'room' ? ctx.value : String(ctx.value);
+      if (ctx.kind === 'dm' && isBlocked(ctx.value)) {
+        return;
+      }
+
+      let currentCount;
+      if (ctx.kind === 'room') {
+        currentCount = roomChanges.has(key) ? roomChanges.get(key) : (ROOM_UNREAD[key] || 0);
+        currentCount += (senderId === ME_ID) ? 0 : 1;
+        roomChanges.set(key, currentCount);
+      } else {
+        currentCount = dmChanges.has(key) ? dmChanges.get(key) : (UNREAD_PER[key] || 0);
+        currentCount += (senderId === ME_ID) ? 0 : 1;
+        dmChanges.set(key, currentCount);
+      }
+
+      const isText = (m.kind || 'chat') === 'chat';
+      let mentionHit = false;
+      if (isText && senderId !== ME_ID && typeof textMentionsName === 'function') {
+        try { mentionHit = !!textMentionsName(String(m.content || ''), ME_NM); }
+        catch (_) { mentionHit = false; }
+      }
+
+      const mentionShouldNotify = mentionHit && (!tabVisible || !contextActive || !activeAtBottom);
+      if (mentionHit) {
+        MENTION_FLAGS.add(ctxKey);
+      }
+      if (mentionShouldNotify && !mentionSet.has(ctxKey)) {
+        mentionSet.add(ctxKey);
+        mentionTargets.push({ key: ctxKey, kind: ctx.kind, value: ctx.value });
+      }
+    });
+
+    let countsChanged = false;
+
+    seenChanges.forEach((val, key) => {
+      if (setLastSeenValue(key, val)) countsChanged = true;
+    });
+    roomChanges.forEach((val, slug) => {
+      if (setRoomUnreadValue(slug, val)) countsChanged = true;
+      if (val === 0) MENTION_FLAGS.delete(contextKeyForRoom(slug));
+    });
+    dmChanges.forEach((val, id) => {
+      if (setDMUnreadValue(id, val)) countsChanged = true;
+      if (Number(val) === 0) MENTION_FLAGS.delete(contextKeyForDM(id));
+    });
+
+    return { countsChanged, mentionTargets };
+  }
+
+  function refreshUnreadUI(){
+    try { renderUsers(); } catch (_) {}
+    try { renderRoomsSidebar(); } catch (_) {}
+    try { renderDMSidebar(); } catch (_) {}
+    try { renderRoomTabs(); } catch (_) {}
+    try { updateLeftCounts?.(); } catch (_) {}
+  }
+
+  function handleClientUnreadMessage(message){
+    if (!CLIENT_UNREAD_MODE) return;
+    if (!message || typeof message !== 'object') return;
+    if (message.from && message.from === POLL_CLIENT_ID) return;
+    const patch = message.payload;
+    if (!patch || typeof patch !== 'object') return;
+    const changed = applyClientUnreadPatch(patch, { skipPersist: true });
+    if (changed) {
+      recomputeDMTotal();
+      refreshUnreadUI();
+    }
+  }
   
   function msgToHTML(m){
   const mid = Number(m.id);
@@ -1609,7 +1944,13 @@ function applyCache(key){
 
       [...ACTIVE_DMS].forEach(id => { if (isBlocked(id)) ACTIVE_DMS.delete(id); });
       saveDMActive(ACTIVE_DMS);
-      renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
+      if (CLIENT_UNREAD_MODE) {
+        Object.keys(UNREAD_PER).forEach(id => {
+          if (isBlocked(+id)) setDMUnreadValue(id, 0);
+        });
+        recomputeDMTotal();
+      }
+      refreshUnreadUI();
     }catch(_){}
   }
 
@@ -1890,43 +2231,55 @@ function updateReceipts(el, items /*, isDM */){
 let pendingMark = []; let markTimer = null;
 // Debounced, batched read-marking — optimistic clear only
 const queueMark = (() => {
-  let pending = [];
-  let t = null;
+  let pendingKey = null;
+  let pendingMax = -1;
+  let timer = null;
 
-  return function(ids) {
-    // PUBLIC room path
-    if (!currentDM) {
-      // Optimistically clear unread for the active room
-      if (currentRoom) {
-        ROOM_UNREAD[currentRoom] = 0;
-        renderRoomTabs();
-        updateLeftCounts?.();
-      }
-      // Keep existing behavior: move the public watermark server-side
-      markPublicSeen(LAST_SERVER_NOW);
+  function flush(){
+    if (!pendingKey || pendingMax < 0) {
+      pendingKey = null;
+      pendingMax = -1;
       return;
     }
+    const ctx = parseContextKey(pendingKey);
+    pendingKey = null;
+    const maxId = pendingMax;
+    pendingMax = -1;
+    if (!ctx) return;
 
-    // DM path
-    // Optimistically clear unread for this DM
-    if (currentDM != null) {
-      UNREAD_PER[currentDM] = 0;
-      renderDMSidebar();
-      renderRoomTabs();
-      updateLeftCounts?.();
+    const seenChanged = setLastSeenValue(ctx.kind === 'dm' ? contextKeyForDM(ctx.value) : contextKeyForRoom(ctx.value), maxId);
+    let unreadChanged = false;
+    if (ctx.kind === 'room') {
+      unreadChanged = setRoomUnreadValue(ctx.value, 0);
+    } else if (ctx.kind === 'dm') {
+      unreadChanged = setDMUnreadValue(ctx.value, 0);
     }
+    if (unreadChanged) {
+      recomputeDMTotal();
+    }
+    if (seenChanged || unreadChanged) {
+      refreshUnreadUI();
+    }
+  }
 
-    // Keep existing debounce/batching + post
-    const add = (ids || []).map(Number).filter(n => n > 0);
-    pending = [...new Set(pending.concat(add))];
-
-    if (t) return;
-    t = setTimeout(() => {
-      const toSend = [...new Set(pending)];
-      pending = [];
-      t = null;
-      if (toSend.length) markDMSeen(toSend);
-    }, 300);
+  return function(ids) {
+    if (!CLIENT_UNREAD_MODE) return;
+    const ctxKey = activeContextKey();
+    if (!ctxKey) return;
+    const numbers = (ids || []).map(Number).filter(n => Number.isFinite(n) && n > 0);
+    if (!numbers.length) return;
+    const maxId = Math.max(...numbers);
+    if (!Number.isFinite(maxId) || maxId <= 0) return;
+    if (pendingKey && pendingKey !== ctxKey) {
+      flush();
+    }
+    pendingKey = ctxKey;
+    pendingMax = Math.max(pendingMax, maxId);
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = null;
+      flush();
+    }, 120);
   };
 })();
 
@@ -1947,12 +2300,32 @@ function markVisible(listEl){
 
 
 
-  let USERS=[]; let UNREAD_PER={};
+  let USERS=[];
+  UNREAD_PER = CLIENT_UNREAD_MODE ? loadStoredMap(CLIENT_UNREAD_KEYS.dms) : {};
   let lastPubCounts = 0, lastDMCounts = 0;
   let DM_UNREAD_TOTAL = 0;
-  let ROOM_UNREAD = {};              
-let PREV_ROOM_UNREAD = {};         
-let PREV_UNREAD_PER  = {};         
+  ROOM_UNREAD = CLIENT_UNREAD_MODE ? loadStoredMap(CLIENT_UNREAD_KEYS.rooms) : {};
+let PREV_ROOM_UNREAD = {};
+let PREV_UNREAD_PER  = {};
+
+  function recomputeDMTotal(){
+    try {
+      DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
+        .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
+    } catch (_) {
+      DM_UNREAD_TOTAL = 0;
+    }
+  }
+
+  if (CLIENT_UNREAD_MODE) {
+    Object.keys(UNREAD_PER).forEach(k => {
+      const id = Number(k);
+      if (isBlocked(id) && (UNREAD_PER[k] || 0) > 0) {
+        setDMUnreadValue(id, 0, { skipBroadcast: true, skipPersist: false });
+      }
+    });
+  }
+  recomputeDMTotal();
 
   function sortUsersForList(){
     return [...USERS].sort((a,b)=>{
@@ -2189,7 +2562,8 @@ userListEl.addEventListener('click', async (e)=>{
           showView('vPublic');
         }
 
-        UNREAD_PER[id] = 0;
+        setDMUnreadValue(id, 0);
+        recomputeDMTotal();
         if (isBlocked(id)) { ACTIVE_DMS.delete(id); saveDMActive(ACTIVE_DMS); }
         renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
         showToast(js.now_blocked ? 'Användare blockerad' : 'Användare avblockerad');
@@ -2483,30 +2857,106 @@ function applySyncPayload(js){
     try { USERS.forEach(u => rememberGender(u.id, u.gender)); } catch(_){}
   }
 
-  if (js && js.unread) {
+  const prevRooms = CLIENT_UNREAD_MODE ? { ...(ROOM_UNREAD || {}) } : {};
+  const prevDMs   = CLIENT_UNREAD_MODE ? { ...(UNREAD_PER  || {}) } : {};
+  let clientMentionTargets = [];
+  let clientCountsChanged = false;
+
+  if (CLIENT_UNREAD_MODE) {
+    try {
+      const collected = collectMessagesFromPayload(js);
+      if (collected.length) {
+        const res = applyClientUnreadMessages(collected);
+        clientMentionTargets = res?.mentionTargets || [];
+        if (res?.countsChanged) clientCountsChanged = true;
+      }
+    } catch (_) {}
+
+    if (clientCountsChanged) {
+      recomputeDMTotal();
+    }
+
+    const roomIncr = Object.keys(ROOM_UNREAD)
+      .filter(slug => (ROOM_UNREAD[slug] || 0) > (prevRooms[slug] || 0));
+    const dmIncr = Object.keys(UNREAD_PER)
+      .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
+
+    try {
+      roomIncr
+        .filter(slug => slug !== currentRoom)
+        .forEach(slug => queuePrefetchRoom(slug));
+
+      dmIncr
+        .map(id => Number(id))
+        .filter(id => id !== Number(currentDM))
+        .forEach(id => queuePrefetchDM(id));
+    } catch (_) {}
+
+    const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
+    const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
+
+    const visible = document.visibilityState === 'visible';
+    const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
+    const isActiveDM   = (id)   => currentDM != null && Number(id) === Number(currentDM);
+
+    const passiveRoomBumped = roomIncrUnmuted.some(slug => !isActiveRoom(slug));
+    const passiveDmBumped   = dmIncrUnmuted.some(id   => !isActiveDM(id));
+
+    const shouldRing =
+      (!visible && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
+      (visible && (passiveRoomBumped || passiveDmBumped));
+
+    const mentionPassive = clientMentionTargets.some(target => {
+      if (target?.kind === 'room') {
+        if (isRoomMuted(target.value)) return false;
+        return !isActiveRoom(target.value);
+      }
+      const id = Number(target?.value);
+      if (!Number.isFinite(id)) return false;
+      if (isDmMuted(id)) return false;
+      return !isActiveDM(id);
+    });
+
+    if (mentionPassive && canRingMention()) {
+      playMentionOnce();
+    } else if (shouldRing) {
+      playNotifOnce();
+    }
+
+    dmIncr.forEach(did => {
+      const id = Number(did);
+      if (!ACTIVE_DMS.has(id)) {
+        ACTIVE_DMS.add(id);
+        saveDMActive(ACTIVE_DMS);
+        try { renderDMSidebar(); } catch(_){}
+        try { renderRoomTabs(); } catch(_){}
+      }
+    });
+
+    if (AUTO_OPEN_DM_ON_NEW && currentDM == null) {
+      const first = dmIncr.find(did => !isBlocked(+did));
+      if (first) {
+        try { openDM(Number(first)); } catch(_) {}
+      }
+    }
+  } else if (js && js.unread) {
     const unread = js.unread || {};
 
-    // keep previous counts for comparison (for sounds)
     const prevRooms = { ...(ROOM_UNREAD || {}) };
     const prevDMs   = { ...(UNREAD_PER  || {}) };
 
-    // update to latest counts from server
     UNREAD_PER  = unread.per   || {};
     ROOM_UNREAD = unread.rooms || {};
 
-    // zero out blocked users in DM counts
-    Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) UNREAD_PER[k] = 0; });
+    Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) setDMUnreadValue(k, 0); });
 
-    // 🔔 Notification logic:
     try{
       const roomIncr = Object.keys(ROOM_UNREAD)
         .filter(slug => (ROOM_UNREAD[slug] || 0) > (prevRooms[slug] || 0));
 
-
       const dmIncr = Object.keys(UNREAD_PER)
        .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
 
-      // Prefetch newly-bumped sources so switching feels instant.
       try {
         roomIncr
           .filter(slug => slug !== currentRoom)
@@ -2517,7 +2967,6 @@ function applySyncPayload(js){
           .filter(id => id !== Number(currentDM))
           .forEach(id => queuePrefetchDM(id));
       } catch(_) {}
-      // --- ignore muted sources for sound decisions
       const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
       const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
 
@@ -2532,7 +2981,6 @@ function applySyncPayload(js){
         (!visible && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
         (visible && (passiveRoomBumped || passiveDmBumped));
 
-      // Server-assisted mention hints — also ignore muted rooms and only ring on rising edge
       const mentionBumps = (js && js.mention_bumps) ? js.mention_bumps : {};
       const mentionPassiveBumped = Object.entries(mentionBumps)
         .some(([slug, isMention]) =>
@@ -2548,19 +2996,16 @@ function applySyncPayload(js){
         playNotifOnce();
       }
 
-      // --- Ensure a tab exists for newly-bumped DMs
       dmIncr.forEach(did => {
         const id = Number(did);
         if (!ACTIVE_DMS.has(id)) {
           ACTIVE_DMS.add(id);
           saveDMActive(ACTIVE_DMS);
-          // reflect it in the UI immediately
           try { renderDMSidebar(); } catch(_){}
           try { renderRoomTabs(); } catch(_){}
         }
       });
 
-      // --- Optional: auto-open the first newly-bumped DM so it "pops up"
       if (AUTO_OPEN_DM_ON_NEW && currentDM == null) {
         const first = dmIncr.find(did => !isBlocked(+did));
         if (first) {
@@ -2569,28 +3014,22 @@ function applySyncPayload(js){
       }
     }catch(_){}
 
-    // ⬇️ Optimistically clear active badge (prevents “stuck” counters).
     if (document.visibilityState === 'visible') {
       if (currentDM != null) {
-        UNREAD_PER[currentDM] = 0;
+        setDMUnreadValue(currentDM, 0);
       } else if (currentRoom) {
-        ROOM_UNREAD[currentRoom] = 0;
+        setRoomUnreadValue(currentRoom, 0);
       }
     }
 
-    // recompute total DM unread after adjustments
     DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
       .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (+v||0)), 0);
-    
 
-    
-    // existing renders follow
     renderUsers();
     renderRoomsSidebar();
     renderDMSidebar();
     renderRoomTabs();
     updateLeftCounts();
-
   }
 
   renderUsers();
@@ -2843,7 +3282,8 @@ actBlock?.addEventListener('click', async ()=>{
         BLOCKED.delete(id);
         showToast('Användare avblockerad');
       }
-      UNREAD_PER[id] = 0;
+      setDMUnreadValue(id, 0);
+      recomputeDMTotal();
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
       closeMsgSheet();
     } else {
@@ -2894,7 +3334,8 @@ imgActBlock?.addEventListener('click', async ()=>{
         BLOCKED.delete(id);
         showToast('Användare avblockerad');
       }
-      UNREAD_PER[id] = 0;
+      setDMUnreadValue(id, 0);
+      recomputeDMTotal();
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
 
       const blocked = isBlocked(id);
@@ -3147,8 +3588,8 @@ roomTabs.addEventListener('click', async e => {
   stashActive();
   currentDM = null;
   currentRoom = slug;
-  ROOM_UNREAD[slug] = 0;
-  renderRoomTabs();
+  setRoomUnreadValue(slug, 0);
+  refreshUnreadUI();
 
   const cacheHit = applyCache(cacheKeyForRoom(slug));
   setComposerAccess();
@@ -3502,13 +3943,8 @@ async function openDM(id) {
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
   LAST_OPEN_DM = currentDM;
-  UNREAD_PER[currentDM] = 0;
-
-  // Recompute total DM unread so the left badge updates immediately
-  try {
-    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
-  } catch (_) {}
+  setDMUnreadValue(currentDM, 0);
+  recomputeDMTotal();
 
   // Now render UI that depends on currentDM
   renderDMSidebar();
