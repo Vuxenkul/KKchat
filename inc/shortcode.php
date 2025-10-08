@@ -2853,7 +2853,7 @@ function renderRoomTabs(){
         ${ADMIN_LINKS.map(link => {
           const safeText = esc(link.text || '');
           const safeUrl  = escAttr(link.url || '#');
-          return `<a class="tab-settings-item" href="${safeUrl}" role="menuitem">${safeText}</a>`;
+          return `<a class="tab-settings-item" href="${safeUrl}" role="menuitem" target="_blank" rel="noopener noreferrer">${safeText}</a>`;
         }).join('')}
       </div>
     </div>`;
