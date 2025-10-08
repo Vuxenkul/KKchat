@@ -1000,6 +1000,7 @@ function becomeLeader(){
     localStorage.setItem(POLL_LEADER_KEY, JSON.stringify({ id: POLL_CLIENT_ID, ts: Date.now() }));
   } catch (_) {}
   startLeaderHeartbeat();
+  startKeepAlive();
   scheduleStreamReconnect(0);
 }
 
@@ -1013,8 +1014,10 @@ function ensureLeader(force = false){
   POLL_IS_LEADER = rec.id === POLL_CLIENT_ID;
   if (POLL_IS_LEADER) {
     startLeaderHeartbeat();
+    startKeepAlive();
   } else {
     stopLeaderHeartbeat();
+    stopKeepAlive();
     stopStream();
   }
   return POLL_IS_LEADER;
@@ -1055,10 +1058,12 @@ function handleLeaderStorage(value){
   POLL_IS_LEADER = isSelf;
   if (isSelf) {
     startLeaderHeartbeat();
+    startKeepAlive();
     return;
   }
 
   stopLeaderHeartbeat();
+  stopKeepAlive();
   stopStream();
 }
 
@@ -1690,28 +1695,6 @@ function applyCache(key){
     return r.json();
   }
 
-  async function loadHistorySnapshot(state){
-    try {
-      const target = state || desiredStreamState();
-      if (!target) return false;
-
-      const params = new URLSearchParams({ limit: String(FIRST_LOAD_LIMIT), since: '-1' });
-      if (target.kind === 'dm') {
-        params.set('to', String(target.to));
-      } else {
-        params.set('public', '1');
-        params.set('room', target.room);
-      }
-
-      const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
-      if (!Array.isArray(items) || !items.length) return false;
-
-      handleStreamSync({ messages: items }, target);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function initials(n){ return (n||'').trim().split(' ').filter(Boolean).map(s=>s[0]||'').join('').slice(0,2).toUpperCase(); }
@@ -3213,18 +3196,12 @@ roomTabs.addEventListener('click', async e => {
   setComposerAccess();
   showView('vPublic');
 
-  let snapshotPromise = null;
   if (cacheHit) {
     markVisible(pubList);
-  } else {
-    snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
   }
 
   const syncPromise = pollActive(true).catch(()=>{});
   openStream();
-  if (snapshotPromise) {
-    await snapshotPromise.catch(()=>{});
-  }
   await syncPromise;
 });
 
@@ -3343,19 +3320,13 @@ roomsListEl?.addEventListener('click', async (e) => {
         setComposerAccess();
         showView('vPublic');
 
-        let snapshotPromise = null;
         if (cacheHit) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
-        } else {
-          snapshotPromise = loadHistorySnapshot({ kind: 'room', room: currentRoom });
         }
 
         const syncPromise = pollActive(true).catch(()=>{});
         openStream();
-        if (snapshotPromise) {
-          await snapshotPromise.catch(()=>{});
-        }
         await syncPromise;
       }
     }
@@ -3584,18 +3555,12 @@ async function openDM(id) {
   setComposerAccess();
   showView('vPublic');
 
-  let snapshotPromise = null;
   if (cacheHit) {
     markVisible(pubList);
-  } else {
-    snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
   }
 
   const syncPromise = pollActive(true).catch(()=>{});
   openStream();
-  if (snapshotPromise) {
-    await snapshotPromise.catch(()=>{});
-  }
   await syncPromise;
 
 
@@ -4180,7 +4145,10 @@ jumpBtn.addEventListener('click', ()=>{
   bindCopy(pubList);
 
 (function(){
+  const POLL_FALLBACK_INTERVAL_MS = 90_000;
+
   async function touch(){
+    if (!POLL_IS_LEADER) return;
     try { await fetch(API + '/ping', { credentials:'include', headers:h }); } catch(_){}
   }
 
@@ -4198,6 +4166,7 @@ jumpBtn.addEventListener('click', ()=>{
   function maybePollActiveFallback(){
     if (pollFallbackBusy) return;
     if (document.visibilityState === 'hidden') return;
+    if (!POLL_IS_LEADER) return;
 
     pollFallbackBusy = true;
     pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
@@ -4205,8 +4174,7 @@ jumpBtn.addEventListener('click', ()=>{
 
   function ensurePollFallback(){
     if (pollFallbackTimer) return;
-    pollFallbackTimer = setInterval(maybePollActiveFallback, 20000);
-    setTimeout(maybePollActiveFallback, 1000);
+    pollFallbackTimer = setInterval(maybePollActiveFallback, POLL_FALLBACK_INTERVAL_MS);
   }
 
   ensurePollFallback();
@@ -4498,10 +4466,10 @@ logList?.addEventListener('click', async (e) => {
 // ===== Keep-alive ping (works in background) =================
 const PING_URL = `${API}/ping`;
 
-// Ping every ~55–63s. Background tabs throttle timers, but this cadence
+// Ping every ~90–110s. Background tabs throttle timers, but this cadence
 // plus beacons on hide/close keep presence alive under typical 120s TTL.
-const PING_BASE_MS = 55_000;
-const PING_JITTER  = 8_000;
+const PING_BASE_MS = 90_000;
+const PING_JITTER  = 20_000;
 
 let keepAliveTimer = null;
 
@@ -4511,6 +4479,10 @@ function scheduleKeepAlive() {
 }
 
 async function pingOnce() {
+  if (!POLL_IS_LEADER) {
+    scheduleKeepAlive();
+    return;
+  }
   try {
     const r  = await fetch(`${PING_URL}?ts=${Date.now()}`, {
       method: 'GET',
@@ -4604,10 +4576,8 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      const snapshotPromise = loadHistorySnapshot();
       const syncPromise = pollActive(true).catch(()=>{});          // single, awaited warm-up poll (force fresh)
       openStream();
-      await snapshotPromise.catch(()=>{});
       await syncPromise;
     }
     await unreadPromise;
@@ -4615,6 +4585,7 @@ async function init(){
     // optionally log e
   }
 
+  startKeepAlive();
   maybeToggleFab();
 }
 init();
