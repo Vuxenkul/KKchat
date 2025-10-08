@@ -385,6 +385,23 @@ f.addEventListener('submit', async (ev)=>{
   </div>
 </div>
 
+<div
+  id="kk-tabModal"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="kk-tabTitle"
+  aria-describedby="kk-tabDesc"
+  hidden
+  aria-hidden="true"
+  tabindex="-1"
+>
+  <div class="tab-modal__box">
+    <strong id="kk-tabTitle">Chatten är redan öppen</strong>
+    <p id="kk-tabDesc">KKchat är öppet i en annan flik eller ett annat fönster. Stäng den andra vyn för att fortsätta här.</p>
+    <button type="button" id="kk-tabRetry">Försök igen</button>
+  </div>
+</div>
+
     <audio id="kk-notifSound"   src="<?= $audio ?>"         preload="auto"></audio>
     <audio id="kk-mentionSound" src="<?= $mention_audio ?>" preload="auto"></audio>
         <audio id="kk-reportSound"  src="<?= $report_audio ?>"  preload="auto"></audio>
@@ -410,6 +427,8 @@ f.addEventListener('submit', async (ev)=>{
   const notif   = $('#kk-notifSound');
   const toast   = $('#kk-toast');
   const jumpBtn = $('#kk-jumpBottom');
+  const tabModal = document.getElementById('kk-tabModal');
+  const tabModalRetry = document.getElementById('kk-tabRetry');
 
   const userListEl = $('#kk-userList');
   const userSearch = $('#kk-uSearch');
@@ -744,6 +763,7 @@ let POLL_HIDDEN_SINCE = 0;
 let CROSS_POLL_TIMER = null;
 let CROSS_POLL_DM_CURSOR = -1;
 let CROSS_POLL_READY = false;
+let TAB_LOCK_ACTIVE = false;
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
@@ -940,6 +960,32 @@ function nextCrossPollDmTarget(){
   return candidates[CROSS_POLL_DM_CURSOR];
 }
 
+function setTabLocked(locked){
+  TAB_LOCK_ACTIVE = !!locked;
+  if (!tabModal) return;
+
+  tabModal.hidden = !TAB_LOCK_ACTIVE;
+  tabModal.setAttribute('aria-hidden', TAB_LOCK_ACTIVE ? 'false' : 'true');
+
+  if (TAB_LOCK_ACTIVE) {
+    document.body?.classList.add('kk-tab-locked');
+    requestAnimationFrame(() => {
+      tabModalRetry?.focus();
+    });
+  } else {
+    document.body?.classList.remove('kk-tab-locked');
+  }
+}
+
+tabModalRetry?.addEventListener('click', (ev) => {
+  ev.preventDefault();
+  ensureLeader(false);
+  if (POLL_IS_LEADER) {
+    setTabLocked(false);
+    openStream(true);
+  }
+});
+
 function openStream(forceCold = false){
   if (POLL_SUSPENDED) return;
   const state = desiredStreamState();
@@ -996,6 +1042,7 @@ function leaderExpired(rec){
 
 function becomeLeader(){
   POLL_IS_LEADER = true;
+  setTabLocked(false);
   try {
     localStorage.setItem(POLL_LEADER_KEY, JSON.stringify({ id: POLL_CLIENT_ID, ts: Date.now() }));
   } catch (_) {}
@@ -1013,9 +1060,11 @@ function ensureLeader(force = false){
   POLL_IS_LEADER = rec.id === POLL_CLIENT_ID;
   if (POLL_IS_LEADER) {
     startLeaderHeartbeat();
+    setTabLocked(false);
   } else {
     stopLeaderHeartbeat();
     stopStream();
+    setTabLocked(true);
   }
   return POLL_IS_LEADER;
 }
@@ -1055,11 +1104,13 @@ function handleLeaderStorage(value){
   POLL_IS_LEADER = isSelf;
   if (isSelf) {
     startLeaderHeartbeat();
+    setTabLocked(false);
     return;
   }
 
   stopLeaderHeartbeat();
   stopStream();
+  setTabLocked(true);
 }
 
 function computePollDelay(hintMs){
@@ -3509,7 +3560,11 @@ async function pollActive(forceCold = false){
   if (!state) return;
 
   if (forceCold) {
-    ensureLeader(true);
+    if (TAB_LOCK_ACTIVE) {
+      ensureLeader(false);
+    } else {
+      ensureLeader(true);
+    }
   } else {
     ensureLeader(false);
   }

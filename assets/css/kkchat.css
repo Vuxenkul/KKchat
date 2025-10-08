@@ -93,6 +93,71 @@
   font-weight: 900;
 }
 
+/* ===========================
+   Single-tab lock modal
+   =========================== */
+
+body.kk-tab-locked {
+  overflow: hidden;
+}
+
+#kk-tabModal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.94);
+  z-index: 10050;
+}
+
+#kk-tabModal[hidden] {
+  display: none !important;
+}
+
+#kk-tabModal .tab-modal__box {
+  width: min(520px, 100%);
+  background: #fff;
+  border-radius: 18px;
+  padding: 32px 28px;
+  text-align: center;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+#kk-tabModal .tab-modal__box strong {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+#kk-tabModal .tab-modal__box p {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #1f2937;
+}
+
+#kk-tabModal #kk-tabRetry {
+  align-self: center;
+  border: 0;
+  border-radius: 999px;
+  background: var(--brand, #2563eb);
+  color: #fff;
+  font-weight: 700;
+  padding: 12px 28px;
+  font-size: 1rem;
+  cursor: pointer;
+  box-shadow: 0 10px 25px rgba(37, 99, 235, 0.35);
+}
+
+#kk-tabModal #kk-tabRetry:focus {
+  outline: 3px solid rgba(37, 99, 235, 0.4);
+  outline-offset: 3px;
+}
+
 /* Admin bubbles */
 #kkchat-root .list .item.them.admin .bubble:not(.img),
 #kkchat-root .list .item.me.admin  .bubble:not(.img) {
