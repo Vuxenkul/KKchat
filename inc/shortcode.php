@@ -1499,6 +1499,29 @@ function applyCache(key){
     }
     return r.json();
   }
+
+  async function loadHistorySnapshot(state){
+    try {
+      const target = state || desiredStreamState();
+      if (!target) return false;
+
+      const params = new URLSearchParams({ limit: String(FIRST_LOAD_LIMIT), since: '-1' });
+      if (target.kind === 'dm') {
+        params.set('to', String(target.to));
+      } else {
+        params.set('public', '1');
+        params.set('room', target.room);
+      }
+
+      const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
+      if (!Array.isArray(items) || !items.length) return false;
+
+      handleStreamSync({ messages: items }, target);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
   function initials(n){ return (n||'').trim().split(' ').filter(Boolean).map(s=>s[0]||'').join('').slice(0,2).toUpperCase(); }
@@ -2941,17 +2964,22 @@ roomTabs.addEventListener('click', async e => {
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
-const cacheHit = applyCache(cacheKeyForRoom(slug));
-setComposerAccess();
-showView('vPublic');
+  const cacheHit = applyCache(cacheKeyForRoom(slug));
+  setComposerAccess();
+  showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-}
-  // (No else branch — fetch happens immediately below)
+  let snapshotPromise = null;
+  if (cacheHit) {
+    markVisible(pubList);
+  } else {
+    snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
+  }
 
-  const syncPromise = pollActive().catch(()=>{});
+  const syncPromise = pollActive(true).catch(()=>{});
   openStream();
+  if (snapshotPromise) {
+    await snapshotPromise.catch(()=>{});
+  }
   await syncPromise;
 });
 
@@ -3063,13 +3091,19 @@ roomsListEl?.addEventListener('click', async (e) => {
         setComposerAccess();
         showView('vPublic');
 
+        let snapshotPromise = null;
         if (cacheHit) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
+        } else {
+          snapshotPromise = loadHistorySnapshot({ kind: 'room', room: currentRoom });
         }
 
-        const syncPromise = pollActive().catch(()=>{});
+        const syncPromise = pollActive(true).catch(()=>{});
         openStream();
+        if (snapshotPromise) {
+          await snapshotPromise.catch(()=>{});
+        }
         await syncPromise;
       }
     }
@@ -3292,21 +3326,23 @@ async function openDM(id) {
   userListEl.querySelector(`.openbtn[data-dm="${currentDM}"]`)?.setAttribute('aria-current', 'true');
 
   // 2) render from cache immediately
-const cacheHit = applyCache(cacheKeyForDM(currentDM));
+  const cacheHit = applyCache(cacheKeyForDM(currentDM));
 
-setComposerAccess();
-showView('vPublic');
+  setComposerAccess();
+  showView('vPublic');
 
-if (cacheHit) {
-  markVisible(pubList);
-} else {
-  // If you prefer to keep your existing cold-load path, you can omit this else.
-  // (You already have a cold-load branch elsewhere in openDM.)
-}
+  let snapshotPromise = null;
+  if (cacheHit) {
+    markVisible(pubList);
+  } else {
+    snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
+  }
 
-
-  const syncPromise = pollActive().catch(()=>{});
+  const syncPromise = pollActive(true).catch(()=>{});
   openStream();
+  if (snapshotPromise) {
+    await snapshotPromise.catch(()=>{});
+  }
   await syncPromise;
 
 
@@ -4314,10 +4350,13 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
-      const syncPromise = pollActive().catch(()=>{});              // single, awaited warm-up poll
+      const snapshotPromise = loadHistorySnapshot();
+      const syncPromise = pollActive(true).catch(()=>{});          // single, awaited warm-up poll (force fresh)
       openStream();
+      await snapshotPromise.catch(()=>{});
+      await syncPromise;
     }
-        await unreadPromise;
+    await unreadPromise;
   } catch (e) {
     // optionally log e
   }
