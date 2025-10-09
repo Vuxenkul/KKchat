@@ -385,6 +385,23 @@ f.addEventListener('submit', async (ev)=>{
   </div>
 </div>
 
+<!-- Multi-tab takeover modal -->
+<div
+  id="kk-multiTabModal"
+  class="kk-multitab"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="kk-multiTabTitle"
+  aria-hidden="true"
+  hidden
+>
+  <div class="kk-multitab__box">
+    <h2 id="kk-multiTabTitle">Chatten är redan öppen</h2>
+    <p id="kk-multiTabDesc">Chatten är redan öppen i en annan flik. Tryck på ”Använd chatten här” om du vill fortsätta i den här fliken.</p>
+    <button type="button" id="kk-multiTabUseHere" class="kk-multitab__btn">Använd chatten här</button>
+  </div>
+</div>
+
     <audio id="kk-notifSound"   src="<?= $audio ?>"         preload="auto"></audio>
     <audio id="kk-mentionSound" src="<?= $mention_audio ?>" preload="auto"></audio>
         <audio id="kk-reportSound"  src="<?= $report_audio ?>"  preload="auto"></audio>
@@ -420,6 +437,15 @@ f.addEventListener('submit', async (ev)=>{
   const activeGenderFilters = new Set();
   const logoutBtn  = $('#kk-logout');
   const roomTabs   = document.getElementById('kk-roomTabs');
+  const chatRoot   = document.getElementById('kkchat-root');
+  const multiTabModal = document.getElementById('kk-multiTabModal');
+  const multiTabDesc  = document.getElementById('kk-multiTabDesc');
+  const multiTabUseHere = document.getElementById('kk-multiTabUseHere');
+
+  multiTabUseHere?.addEventListener('click', (ev)=>{
+    ev.preventDefault();
+    claimActiveTab({ forceCold: true });
+  });
 
     function safeEsc(s){
       const t = s == null ? '' : String(s);
@@ -748,6 +774,182 @@ let PREFETCH_BUSY = false;
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
 
+const MULTITAB_ACTIVE_KEY = 'kkchat:active-tab:v1';
+const MULTITAB_HEARTBEAT_MS = 5000;
+let multiTabHeartbeatTimer = null;
+let multiTabOwnerId = null;
+let multiTabReadyResolve;
+const multiTabReady = new Promise(resolve => { multiTabReadyResolve = resolve; });
+let MULTITAB_LOCKED = false;
+let MULTITAB_IS_ACTIVE = false;
+
+function signalMultiTabReady(){
+  if (multiTabReadyResolve) {
+    try { multiTabReadyResolve(); } catch (_) {}
+    multiTabReadyResolve = null;
+  }
+}
+
+function parseActiveTabRecord(raw){
+  if (!raw) return null;
+  try {
+    const rec = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!rec || typeof rec.id !== 'string') return null;
+    return rec;
+  } catch (_) {
+    return null;
+  }
+}
+
+function readActiveTabRecord(){
+  try {
+    return parseActiveTabRecord(localStorage.getItem(MULTITAB_ACTIVE_KEY));
+  } catch (_) {
+    return null;
+  }
+}
+
+function isActiveTabStale(rec){
+  if (!rec) return true;
+  const ts = Number(rec.ts || 0);
+  if (!Number.isFinite(ts)) return true;
+  return Date.now() - ts > MULTITAB_HEARTBEAT_MS * 3;
+}
+
+function writeActiveTabRecord(){
+  const rec = { id: POLL_CLIENT_ID, ts: Date.now() };
+  multiTabOwnerId = rec.id;
+  try { localStorage.setItem(MULTITAB_ACTIVE_KEY, JSON.stringify(rec)); } catch (_) {}
+}
+
+function startMultiTabHeartbeat(){
+  stopMultiTabHeartbeat();
+  writeActiveTabRecord();
+  multiTabHeartbeatTimer = setInterval(() => {
+    writeActiveTabRecord();
+  }, MULTITAB_HEARTBEAT_MS);
+}
+
+function stopMultiTabHeartbeat(){
+  if (multiTabHeartbeatTimer) {
+    clearInterval(multiTabHeartbeatTimer);
+    multiTabHeartbeatTimer = null;
+  }
+}
+
+function setMultiTabModalMessage(text){
+  if (multiTabDesc) {
+    multiTabDesc.textContent = text;
+  }
+}
+
+function showMultiTabModal(message){
+  if (chatRoot) {
+    chatRoot.setAttribute('data-multitab-locked', '1');
+  }
+  if (multiTabModal) {
+    multiTabModal.hidden = false;
+    multiTabModal.setAttribute('aria-hidden', 'false');
+    multiTabModal.classList.add('is-open');
+  }
+  if (typeof message === 'string' && message) {
+    setMultiTabModalMessage(message);
+  }
+  requestAnimationFrame(() => { multiTabUseHere?.focus(); });
+}
+
+function hideMultiTabModal(){
+  if (chatRoot) {
+    chatRoot.removeAttribute('data-multitab-locked');
+  }
+  if (multiTabModal) {
+    multiTabModal.classList.remove('is-open');
+    multiTabModal.setAttribute('aria-hidden', 'true');
+    multiTabModal.hidden = true;
+  }
+}
+
+function lockMultiTab(message){
+  if (MULTITAB_LOCKED && message) {
+    setMultiTabModalMessage(message);
+  }
+  if (MULTITAB_LOCKED) return;
+  MULTITAB_LOCKED = true;
+  MULTITAB_IS_ACTIVE = false;
+  stopMultiTabHeartbeat();
+  showMultiTabModal(message || 'Chatten är redan öppen i en annan flik.');
+  suspendStream();
+  stopKeepAlive();
+}
+
+function unlockMultiTab(){
+  if (!MULTITAB_LOCKED) return;
+  MULTITAB_LOCKED = false;
+  hideMultiTabModal();
+  resumeStream();
+  startKeepAlive();
+  pollActive().catch(()=>{});
+}
+
+function claimActiveTab(options = {}){
+  const { forceCold = false } = options || {};
+  const wasLocked = MULTITAB_LOCKED;
+  MULTITAB_IS_ACTIVE = true;
+  hideMultiTabModal();
+  MULTITAB_LOCKED = false;
+  startMultiTabHeartbeat();
+  signalMultiTabReady();
+  startKeepAlive();
+  if (wasLocked) {
+    resumeStream();
+  }
+  if (forceCold || wasLocked) {
+    pollActive(true).catch(()=>{});
+  }
+}
+
+function handleActiveTabChange(rec){
+  const owner = (!rec || isActiveTabStale(rec)) ? null : rec.id;
+  multiTabOwnerId = owner;
+
+  if (owner === POLL_CLIENT_ID) {
+    if (!MULTITAB_IS_ACTIVE) {
+      MULTITAB_IS_ACTIVE = true;
+      stopMultiTabHeartbeat();
+      startMultiTabHeartbeat();
+      hideMultiTabModal();
+      signalMultiTabReady();
+      unlockMultiTab();
+    }
+    return;
+  }
+
+  MULTITAB_IS_ACTIVE = false;
+  if (!owner) {
+    stopMultiTabHeartbeat();
+    claimActiveTab({ forceCold: true });
+    return;
+  }
+
+  const message = 'Chatten används nu i en annan flik. Tryck på ”Använd chatten här” för att fortsätta här.';
+  lockMultiTab(message);
+}
+
+function handleActiveStorage(raw){
+  handleActiveTabChange(parseActiveTabRecord(raw));
+}
+
+function initMultiTabLock(){
+  const current = readActiveTabRecord();
+  if (!current || isActiveTabStale(current) || current.id === POLL_CLIENT_ID) {
+    claimActiveTab();
+  } else {
+    handleActiveTabChange(current);
+    const message = 'Chatten är redan öppen i en annan flik. Tryck på ”Använd chatten här” om du vill fortsätta i den här fliken.';
+    lockMultiTab(message);
+  }
+}
+
 const POLL_BROADCAST = (typeof BroadcastChannel === 'function') ? new BroadcastChannel(POLL_CHANNEL_NAME) : null;
 if (POLL_BROADCAST) {
   try {
@@ -772,8 +974,13 @@ window.addEventListener('storage', (ev) => {
     if (ev.newValue) {
       try { handlePollMessage(JSON.parse(ev.newValue)); } catch (_) {}
     }
+    return;
+  }
+  if (ev.key === MULTITAB_ACTIVE_KEY) {
+    handleActiveStorage(ev.newValue);
   }
 });
+
 
 function desiredStreamState(){
   if (currentDM) { return { kind: 'dm', to: Number(currentDM) }; }
@@ -886,7 +1093,7 @@ async function runPrefetchTick(){
 }
 
 function openStream(forceCold = false){
-  if (POLL_SUSPENDED) return;
+  if (POLL_SUSPENDED || MULTITAB_LOCKED) return;
   const state = desiredStreamState();
   if (!state) return;
 
@@ -908,6 +1115,7 @@ function suspendStream(){
 
 function resumeStream(){
   if (!POLL_SUSPENDED) return;
+  if (MULTITAB_LOCKED) return;
   POLL_SUSPENDED = false;
   openStream();
 }
@@ -3486,6 +3694,7 @@ function handleStreamSync(js, context){
 }
 
 async function pollActive(forceCold = false){
+  if (MULTITAB_LOCKED) return;
   const state = desiredStreamState();
   if (!state) return;
 
@@ -4486,6 +4695,19 @@ const PING_JITTER  = 8_000;
 
 let keepAliveTimer = null;
 
+initMultiTabLock();
+
+window.addEventListener('beforeunload', () => {
+  if (!MULTITAB_IS_ACTIVE) return;
+  if (multiTabOwnerId !== POLL_CLIENT_ID) return;
+  try {
+    const rec = readActiveTabRecord();
+    if (!rec || rec.id === POLL_CLIENT_ID) {
+      localStorage.removeItem(MULTITAB_ACTIVE_KEY);
+    }
+  } catch (_) {}
+});
+
 function scheduleKeepAlive() {
   const delay = PING_BASE_MS + Math.floor(Math.random() * PING_JITTER);
   keepAliveTimer = setTimeout(pingOnce, delay);
@@ -4572,6 +4794,7 @@ async function refreshUsersAndUnread(){
 
 
 async function init(){
+  await multiTabReady;
   try{
     await Promise.all([
       refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); }),
