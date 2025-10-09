@@ -764,6 +764,44 @@ let POLL_HEARTBEAT_TIMER = null;
 let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
 let POLL_HIDDEN_SINCE = 0;
+let BACKGROUND_POLL_TIMER = null;
+
+function stopBackgroundPolling(){
+  if (BACKGROUND_POLL_TIMER) {
+    clearTimeout(BACKGROUND_POLL_TIMER);
+    BACKGROUND_POLL_TIMER = null;
+  }
+}
+
+function computeBackgroundPollDelay(){
+  const hiddenSince = Number(POLL_HIDDEN_SINCE) || 0;
+  if (!hiddenSince) return 10000;
+  const inactiveMs = Math.max(0, Date.now() - hiddenSince);
+  if (inactiveMs < 5 * 60 * 1000) return 10000;
+  if (inactiveMs < 10 * 60 * 1000) return 30000;
+  return 60000;
+}
+
+function scheduleBackgroundPoll(delay){
+  if (document.visibilityState !== 'hidden') return;
+  if (MULTITAB_LOCKED) return;
+
+  const wait = Math.max(1000, Number.isFinite(delay) ? delay : computeBackgroundPollDelay());
+  stopBackgroundPolling();
+
+  BACKGROUND_POLL_TIMER = setTimeout(async () => {
+    BACKGROUND_POLL_TIMER = null;
+    if (document.visibilityState !== 'hidden') return;
+    if (MULTITAB_LOCKED) return;
+    try {
+      await pollActive(false, { allowSuspended: true });
+    } catch (_) {
+      // ignore transient failures and keep cadence
+    } finally {
+      scheduleBackgroundPoll();
+    }
+  }, wait);
+}
 
 const PREFETCH_DELAY_MS = 250;
 const PREFETCH_QUEUE = [];
@@ -880,6 +918,7 @@ function lockMultiTab(message){
   showMultiTabModal(message || 'Chatten är redan öppen i en annan flik.');
   suspendStream();
   stopKeepAlive();
+  stopBackgroundPolling();
 }
 
 function unlockMultiTab(){
@@ -889,6 +928,9 @@ function unlockMultiTab(){
   resumeStream();
   startKeepAlive();
   pollActive().catch(()=>{});
+  if (document.visibilityState === 'hidden') {
+    scheduleBackgroundPoll();
+  }
 }
 
 function claimActiveTab(options = {}){
@@ -1334,8 +1376,9 @@ function handlePollMessage(msg){
   }
 }
 
-async function performPoll(forceCold = false){
-  if (POLL_BUSY || POLL_SUSPENDED) return;
+async function performPoll(forceCold = false, options = {}){
+  const { allowSuspended = false } = options || {};
+  if (POLL_BUSY || (POLL_SUSPENDED && !allowSuspended)) return;
 
   const state = desiredStreamState();
   if (!state) {
@@ -3693,7 +3736,8 @@ function handleStreamSync(js, context){
   }
 }
 
-async function pollActive(forceCold = false){
+async function pollActive(forceCold = false, options = {}){
+  const { allowSuspended = false } = options || {};
   if (MULTITAB_LOCKED) return;
   const state = desiredStreamState();
   if (!state) return;
@@ -3710,20 +3754,23 @@ async function pollActive(forceCold = false){
   }
 
   try {
-    await performPoll(forceCold);
+    await performPoll(forceCold, { allowSuspended });
   } catch(_) {}
 }
 
 if (document.visibilityState === 'hidden') {
   POLL_HIDDEN_SINCE = Date.now();
+  scheduleBackgroundPoll();
 }
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     POLL_HIDDEN_SINCE = Date.now();
     suspendStream();
+    scheduleBackgroundPoll();
   } else {
     POLL_HIDDEN_SINCE = 0;
+    stopBackgroundPolling();
     resumeStream();
     pollActive().catch(()=>{});
   }
