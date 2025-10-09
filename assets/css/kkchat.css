@@ -65,6 +65,63 @@
   align-items: center;
   justify-content: center;
 }
+#kk-multiTabModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10050;
+  padding: 20px;
+}
+#kk-multiTabModal.is-open {
+  display: flex;
+}
+#kk-multiTabModal[hidden] {
+  display: none !important;
+}
+#kk-multiTabModal .kk-multitab__box {
+  width: min(520px, 100%);
+  background: #fff;
+  color: #111;
+  border-radius: 16px;
+  padding: 28px 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+#kk-multiTabModal h2 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+#kk-multiTabModal p {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+#kk-multiTabModal .kk-multitab__btn {
+  align-self: center;
+  background: var(--brand, #111827);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 28px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+#kk-multiTabModal .kk-multitab__btn:focus {
+  outline: 3px solid rgba(59, 130, 246, 0.6);
+  outline-offset: 3px;
+}
+#kk-multiTabModal .kk-multitab__btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.25);
+}
 #kk-camBox {
   width: min(96vw, 720px);
   background: #111;
