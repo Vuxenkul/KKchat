@@ -1354,7 +1354,7 @@ function handlePollMessage(msg){
     } else {
       LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
     }
-    handleStreamSync(data, msg.state || state);
+    handleStreamSync(data, { ...(msg.state || state), source: 'poll' });
     const next = Number(data.next ?? NaN);
     if (Number.isFinite(next)) {
       pubList.dataset.last = String(Math.max(+pubList.dataset.last || -1, next));
@@ -1454,7 +1454,7 @@ async function performPoll(forceCold = false, options = {}){
       LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
     }
 
-    handleStreamSync(payload, state);
+    handleStreamSync(payload, { ...state, source: 'poll' });
 
     const next = Number(payload?.next ?? NaN);
     if (Number.isFinite(next)) {
@@ -2107,7 +2107,7 @@ async function prefetchDM(userId){
 
     const active = (currentDM != null) && Number(currentDM) === Number(peerId);
     if (active) {
-      handleStreamSync({ messages: [normalized] }, { kind: 'dm', to: peerId });
+      handleStreamSync({ messages: [normalized] }, { kind: 'dm', to: peerId, source: 'p2p' });
       return;
     }
 
@@ -2243,7 +2243,7 @@ function applyCache(key){
       const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
       if (!Array.isArray(items) || !items.length) return false;
 
-      handleStreamSync({ messages: items }, target);
+      handleStreamSync({ messages: items }, { ...target, source: 'history' });
       return true;
     } catch (_) {
       return false;
@@ -3999,6 +3999,27 @@ function didAppendNew(payload, prevLast) {
   return false;
 }
 
+const SENT_MESSAGE_SOURCE_LOG = new Set();
+
+function logSentMessageSource(messages, source){
+  if (!Array.isArray(messages) || !messages.length) return;
+  if (source !== 'php' && source !== 'poll') return;
+
+  const label = source === 'php' ? 'PHP (direct POST)' : 'poll sync';
+
+  for (const msg of messages) {
+    if (!msg || Number(msg.sender_id) !== Number(ME_ID)) continue;
+    const id = Number(msg.id);
+    const fallback = msg?.temp_id ?? msg?.client_id ?? `${msg?.time ?? ''}:${msg?.content ?? ''}`;
+    const idKey = Number.isFinite(id) ? `id:${id}` : `tmp:${fallback}`;
+    const key = `${source}:${idKey}`;
+    if (SENT_MESSAGE_SOURCE_LOG.has(key)) continue;
+    SENT_MESSAGE_SOURCE_LOG.add(key);
+    const suffix = Number.isFinite(id) ? ` (id=${id})` : '';
+    console.info(`KKchat: message sent via ${label}${suffix}.`);
+  }
+}
+
 function handleStreamSync(js, context){
   if (!js || typeof js !== 'object') return;
 
@@ -4021,6 +4042,8 @@ function handleStreamSync(js, context){
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
     const items   = isCold ? payload.slice(-FIRST_LOAD_LIMIT) : payload;
+
+    logSentMessageSource(items, context?.source);
 
     renderList(pubList, items);
     markVisible(pubList);
@@ -4058,6 +4081,8 @@ function handleStreamSync(js, context){
       sender_id: Number(m.sender_id),
       recipient_id: m.recipient_id == null ? null : Number(m.recipient_id)
     }));
+
+    logSentMessageSource(items, context?.source);
 
     renderList(pubList, items);
     markVisible(pubList);
@@ -4366,9 +4391,9 @@ async function takeWebcamPhoto(){
     if (message) {
       if (currentDM) {
         maybeSendDmP2P(currentDM, message);
-        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM });
+        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM, source: 'php' });
       } else {
-        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom });
+        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom, source: 'php' });
       }
       await pollActive();
       showToast('Bild skickad');
@@ -4477,7 +4502,7 @@ pubForm.addEventListener('submit', async (e)=>{
       const ctx = currentDM
         ? { kind: 'dm', to: currentDM }
         : { kind: 'room', room: currentRoom };
-      try { handleStreamSync({ messages: [payload] }, ctx); } catch(_){}
+      try { handleStreamSync({ messages: [payload] }, { ...ctx, source: 'php' }); } catch(_){}
       if (currentDM) {
         maybeSendDmP2P(currentDM, payload);
       }
@@ -4655,9 +4680,9 @@ pubImgInp?.addEventListener('change', async ()=>{
     if (message) {
       if (currentDM) {
         maybeSendDmP2P(currentDM, message);
-        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM });
+        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM, source: 'php' });
       } else {
-        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom });
+        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom, source: 'php' });
       }
       await pollActive();
       showToast('Bild skickad');
@@ -4698,9 +4723,9 @@ pubCamInp?.addEventListener('change', async ()=>{
     if (message) {
       if (currentDM) {
         maybeSendDmP2P(currentDM, message);
-        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM });
+        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM, source: 'php' });
       } else {
-        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom });
+        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom, source: 'php' });
       }
       await pollActive();
       showToast('Bild skickad');
