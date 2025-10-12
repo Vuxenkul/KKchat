@@ -130,13 +130,13 @@ add_action('rest_api_init', function () {
 
   if (!function_exists('kkchat_sync_build_context')) {
     function kkchat_sync_build_context(WP_REST_Request $req): array {
-      kkchat_require_login();
+      kkchat_require_login(false);
       kkchat_assert_not_blocked_or_fail();
       nocache_headers();
 
       global $wpdb; $t = kkchat_tables();
 
-      kkchat_touch_active_user();
+      kkchat_touch_active_user(false, false);
 
       $since_pub = isset($_SESSION['kkchat_seen_at_public']) ? (int) $_SESSION['kkchat_seen_at_public'] : 0;
 
@@ -1163,14 +1163,14 @@ register_rest_route($ns, '/ping', [
   'methods'  => ['GET','POST'],
   'callback' => function () {
     // Auth & access checks (may read/write session)
-    kkchat_require_login();
+    kkchat_require_login(false);
     kkchat_assert_not_blocked_or_fail();
 
     // Pings should never be cached
     nocache_headers();
 
     // Ensure/refresh my presence row (also ensures session knows my id)
-    $uid = kkchat_touch_active_user();
+    $uid = kkchat_touch_active_user(false, false);
 
     // Release the PHP session lock ASAP — ping is frequent
     kkchat_close_session_if_open();

@@ -244,7 +244,7 @@ function kkchat_logout_session(bool $regenerate_id = true): void {
   }
 }
 
-function kkchat_require_login() {
+function kkchat_require_login(bool $refresh_ttl = true) {
   if (!isset($_SESSION['kkchat_user_id'], $_SESSION['kkchat_user_name'])) {
     kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
   }
@@ -261,7 +261,9 @@ function kkchat_require_login() {
     }
   }
 
-  $_SESSION['kkchat_last_active_at'] = time();
+  if ($refresh_ttl) {
+    $_SESSION['kkchat_last_active_at'] = time();
+  }
 }
 function kkchat_user_ttl() { return 600; }
 function kkchat_is_guest(): bool { return !empty($_SESSION['kkchat_is_guest']); }
@@ -283,41 +285,64 @@ function kkchat_current_wp_username(): string {
 }
 
 /** Revive or create the active_users row for the current session user and store its id in the session. */
-function kkchat_touch_active_user(): int {
-  global $wpdb; $t = kkchat_tables(); $now = time();
-
+function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_session_ttl = true): int {
+  $now  = time();
   $name = kkchat_current_user_name();
-  if ($name === '') return 0;
 
-  $name_lc = mb_strtolower($name, 'UTF-8');
-  $gender  = (string)$_SESSION['kkchat_gender'] ?? '';
-  $ip      = kkchat_client_ip();
-  $wp_user = kkchat_current_wp_username() ?: null;
+  if ($name === '') {
+    if ($refresh_session_ttl) {
+      $_SESSION['kkchat_last_active_at'] = $now;
+    }
+    return 0;
+  }
 
-  // INSERT … ON DUPLICATE KEY UPDATE keyed by uniq_name_lc(name_lc)
-  $wpdb->query($wpdb->prepare(
-    "INSERT INTO {$t['users']} (name, name_lc, gender, last_seen, ip, wp_username)
-     VALUES (%s, %s, %s, %d, %s, %s)
-     ON DUPLICATE KEY UPDATE
-     id = LAST_INSERT_ID(id),
-       gender = VALUES(gender),
-       last_seen = VALUES(last_seen),
-       ip = VALUES(ip),
-       wp_username = VALUES(wp_username)",
-    $name, $name_lc, $gender, $now, $ip, $wp_user
-  ));
+  $id       = (int) ($_SESSION['kkchat_user_id'] ?? 0);
+  $name_lc  = mb_strtolower($name, 'UTF-8');
 
-  // Read the id and bind it to the session
-  $id = (int) $wpdb->insert_id;
-  if ($id <= 0) {
+  if ($refresh_presence) {
+    global $wpdb; $t = kkchat_tables();
+
+    $gender  = (string) ($_SESSION['kkchat_gender'] ?? '');
+    $ip      = kkchat_client_ip();
+    $wp_user = kkchat_current_wp_username() ?: null;
+
+    // INSERT … ON DUPLICATE KEY UPDATE keyed by uniq_name_lc(name_lc)
+    $wpdb->query($wpdb->prepare(
+      "INSERT INTO {$t['users']} (name, name_lc, gender, last_seen, ip, wp_username)
+       VALUES (%s, %s, %s, %d, %s, %s)
+       ON DUPLICATE KEY UPDATE
+       id = LAST_INSERT_ID(id),
+         gender = VALUES(gender),
+         last_seen = VALUES(last_seen),
+         ip = VALUES(ip),
+         wp_username = VALUES(wp_username)",
+      $name, $name_lc, $gender, $now, $ip, $wp_user
+    ));
+
+    $id = (int) $wpdb->insert_id;
+    if ($id <= 0) {
+      $id = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
+        $name_lc
+      ));
+    }
+    if ($id > 0) {
+      $_SESSION['kkchat_user_id'] = $id;
+    }
+  } elseif ($id <= 0) {
+    global $wpdb; $t = kkchat_tables();
     $id = (int) $wpdb->get_var($wpdb->prepare(
       "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
       $name_lc
     ));
+    if ($id > 0) {
+      $_SESSION['kkchat_user_id'] = $id;
+    }
   }
-  if ($id > 0) $_SESSION['kkchat_user_id'] = $id;
 
-  $_SESSION['kkchat_last_active_at'] = $now;
+  if ($refresh_session_ttl) {
+    $_SESSION['kkchat_last_active_at'] = $now;
+  }
 
   return $id;
 }
