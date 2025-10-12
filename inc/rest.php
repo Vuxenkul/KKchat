@@ -1506,9 +1506,9 @@ register_rest_route($ns, '/fetch', [
   'permission_callback' => '__return_true',
 ]);
 
-  register_rest_route($ns, '/message', [
-    'methods'  => 'POST',
-    'callback' => function (WP_REST_Request $req) {
+register_rest_route($ns, '/message', [
+  'methods'  => 'POST',
+  'callback' => function (WP_REST_Request $req) {
       kkchat_require_login(); kkchat_assert_not_blocked_or_fail(); kkchat_check_csrf_or_fail($req);
       global $wpdb; $t = kkchat_tables();
       $me_id = kkchat_current_user_id();
@@ -1782,6 +1782,76 @@ register_rest_route($ns, '/fetch', [
     'permission_callback' => '__return_true',
   ]);
 
+if (!function_exists('kkchat_mark_dm_reads')) {
+  function kkchat_mark_dm_reads($ids, int $userId): void {
+    if (!is_array($ids) || empty($ids)) {
+      return;
+    }
+
+    global $wpdb; $t = kkchat_tables();
+    $reads_table = $t['reads'];
+
+    $filtered = array_values(
+      array_unique(
+        array_filter(array_map('intval', $ids), static fn($x) => $x > 0)
+      )
+    );
+
+    if (empty($filtered)) {
+      return;
+    }
+
+    static $hasCreatedAt = null;
+    if ($hasCreatedAt === null) {
+      $hasCreatedAt = true;
+      try {
+        if (function_exists('kkchat_column_exists')) {
+          $hasCreatedAt = kkchat_column_exists($reads_table, 'created_at');
+        } else {
+          $hasCreatedAt = (bool) $wpdb->get_var(
+            $wpdb->prepare(
+              "SELECT 1 FROM information_schema.columns"
+               . " WHERE table_schema = DATABASE()"
+               . "   AND table_name   = %s"
+               . "   AND column_name  = 'created_at'"
+               . " LIMIT 1",
+              $reads_table
+            )
+          );
+        }
+      } catch (\Throwable $e) {
+        $hasCreatedAt = true;
+      }
+    }
+
+    $now = time();
+    foreach (array_chunk($filtered, 400) as $chunk) {
+      $rows = [];
+      $vals = [];
+
+      if ($hasCreatedAt) {
+        foreach ($chunk as $mid) {
+          $rows[] = '(%d,%d,%d)';
+          $vals[] = $mid; $vals[] = $userId; $vals[] = $now;
+        }
+        $sql = "INSERT INTO {$reads_table} (message_id,user_id,created_at) VALUES "
+             . implode(',', $rows)
+             . " ON DUPLICATE KEY UPDATE created_at = GREATEST(created_at, VALUES(created_at))";
+      } else {
+        foreach ($chunk as $mid) {
+          $rows[] = '(%d,%d)';
+          $vals[] = $mid; $vals[] = $userId;
+        }
+        $sql = "REPLACE INTO {$reads_table} (message_id,user_id) VALUES "
+             . implode(',', $rows);
+      }
+
+      // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
+      $wpdb->query($wpdb->prepare($sql, ...$vals));
+    }
+  }
+}
+
 register_rest_route($ns, '/reads/mark', [
   'methods'  => 'POST',
   'callback' => function (WP_REST_Request $req) {
@@ -1805,59 +1875,8 @@ register_rest_route($ns, '/reads/mark', [
     $public_since = (int) ($req->get_param('public_since') ?? 0); // server "now" watermark
 
     // ---- Mark DM reads (handles both 2-col and 3-col schema) ----------------
-    $reads_table = $t['reads'];
-    $has_created_at = true;
-    try {
-      if (function_exists('kkchat_column_exists')) {
-        $has_created_at = kkchat_column_exists($reads_table, 'created_at');
-      } else {
-        $has_created_at = (bool) $wpdb->get_var(
-          $wpdb->prepare(
-            "SELECT 1 FROM information_schema.columns
-             WHERE table_schema = DATABASE()
-               AND table_name   = %s
-               AND column_name  = 'created_at'
-             LIMIT 1",
-            $reads_table
-          )
-        );
-      }
-    } catch (\Throwable $e) { /* default true */ }
-
     if (is_array($dms) && !empty($dms)) {
-      $ids = array_values(
-        array_unique(
-          array_filter(array_map('intval', $dms), fn($x) => $x > 0)
-        )
-      );
-
-      if (!empty($ids)) {
-        $now = time();
-        foreach (array_chunk($ids, 400) as $chunk) {
-          $rows = [];
-          $vals = [];
-
-          if ($has_created_at) {
-            foreach ($chunk as $mid) {
-              $rows[] = '(%d,%d,%d)';   // (message_id, user_id, created_at)
-              $vals[] = $mid; $vals[] = $me; $vals[] = $now;
-            }
-            $sql = "INSERT INTO {$reads_table} (message_id,user_id,created_at) VALUES "
-                 . implode(',', $rows)
-                 . " ON DUPLICATE KEY UPDATE created_at = GREATEST(created_at, VALUES(created_at))";
-          } else {
-            foreach ($chunk as $mid) {
-              $rows[] = '(%d,%d)';      // (message_id, user_id)
-              $vals[] = $mid; $vals[] = $me;
-            }
-            $sql = "REPLACE INTO {$reads_table} (message_id,user_id) VALUES "
-                 . implode(',', $rows);
-          }
-
-          // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-          $wpdb->query($wpdb->prepare($sql, ...$vals));
-        }
-      }
+      kkchat_mark_dm_reads($dms, $me);
     }
 
     // ---- Advance public watermark (SESSION WRITE happens here) --------------
@@ -1869,6 +1888,300 @@ register_rest_route($ns, '/reads/mark', [
     }
 
     // ✅ Now it's safe to release the session lock
+    kkchat_close_session_if_open();
+
+    return kkchat_json(['ok' => true]);
+  },
+  'permission_callback' => '__return_true',
+]);
+
+register_rest_route($ns, '/dm/audit/batch', [
+  'methods'  => 'POST',
+  'callback' => function (WP_REST_Request $req) {
+    kkchat_require_login();
+    kkchat_assert_not_blocked_or_fail();
+    kkchat_check_csrf_or_fail($req);
+
+    global $wpdb; $t = kkchat_tables();
+    $me_id = kkchat_current_user_id();
+    $me_nm = kkchat_current_user_name();
+    if ($me_id <= 0 || $me_nm === '') {
+      kkchat_json(['ok' => false, 'err' => 'not_logged_in'], 401);
+    }
+
+    $body = $req->get_json_params();
+    if (!is_array($body) || empty($body)) {
+      $body = $req->get_body_params();
+    }
+
+    $items = [];
+    if (is_array($body)) {
+      $items = $body['items'] ?? [];
+    }
+    if (!is_array($items) || empty($items)) {
+      kkchat_json(['ok' => false, 'err' => 'empty_batch'], 400);
+    }
+
+    $items = array_slice(array_values($items), 0, 24);
+
+    $blocked = kkchat_blocked_ids($me_id);
+    $recipientCache = [];
+    $results = [];
+    $now = time();
+    $sender_ip = kkchat_client_ip();
+    $is_admin = kkchat_is_admin();
+    $rules = $is_admin ? [] : kkchat_rules_active();
+    $window = max(1, kkchat_dedupe_window());
+
+    $minGap = max(0, kkchat_min_interval_seconds());
+    if ($minGap > 0) {
+      $recent = (int)$wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$t['messages']} WHERE sender_id = %d AND created_at > %d",
+        $me_id,
+        $now - $minGap
+      ));
+      if ($recent > 0) {
+        kkchat_json([
+          'ok'   => false,
+          'err'  => 'too_fast',
+          'cause'=> 'Du skriver för snabbt. Försök igen strax.'
+        ], 429);
+      }
+    }
+
+    foreach ($items as $raw) {
+      $msgId = isset($raw['msg_id']) ? trim((string)$raw['msg_id']) : '';
+      if ($msgId === '') {
+        $results[] = ['ok' => false, 'error' => 'missing_msg_id'];
+        continue;
+      }
+
+      $peer = isset($raw['recipient_id']) ? (int)$raw['recipient_id'] : (int)($raw['peer_id'] ?? 0);
+      if ($peer <= 0 || $peer === $me_id) {
+        $results[] = ['msg_id' => $msgId, 'ok' => false, 'error' => 'bad_recipient'];
+        continue;
+      }
+      if (in_array($peer, $blocked, true)) {
+        $results[] = ['msg_id' => $msgId, 'ok' => false, 'error' => 'blocked_peer'];
+        continue;
+      }
+
+      if (!isset($recipientCache[$peer])) {
+        $recipientCache[$peer] = $wpdb->get_row(
+          $wpdb->prepare("SELECT name, ip FROM {$t['users']} WHERE id=%d", $peer),
+          ARRAY_A
+        ) ?: null;
+      }
+      if (!$recipientCache[$peer]) {
+        $results[] = ['msg_id' => $msgId, 'ok' => false, 'error' => 'peer_gone'];
+        continue;
+      }
+
+      $txt = trim((string)($raw['text'] ?? ''));
+      if ($txt === '' || mb_strlen($txt) > 2000) {
+        $results[] = ['msg_id' => $msgId, 'ok' => false, 'error' => 'bad_text'];
+        continue;
+      }
+
+      if (!$is_admin && $txt !== '') {
+        $hit_forbid = null; $hit_watch = null;
+        foreach ($rules as $rule) {
+          if (!kkchat_rule_matches($rule, $txt)) continue;
+          if (($rule['kind'] ?? 'forbid') === 'watch' && !$hit_watch) {
+            $hit_watch = $rule;
+          }
+          if (($rule['kind'] ?? 'forbid') === 'forbid' && !$hit_forbid) {
+            $hit_forbid = $rule;
+          }
+        }
+        if ($hit_watch) {
+          $wpdb->update(
+            $t['users'],
+            ['watch_flag' => 1, 'watch_flag_at' => $now],
+            ['id' => $me_id],
+            ['%d','%d'],
+            ['%d']
+          );
+        }
+        if ($hit_forbid) {
+          $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
+          $cause = 'Forbidden word: "' . $hit_forbid['word'] . '"';
+          $dur   = $hit_forbid['duration_sec'];
+          $ip    = kkchat_client_ip();
+
+          if ($hit_forbid['action'] === 'kick') {
+            $exp = isset($dur) ? ($now + max(60, (int)$dur)) : null;
+            $wpdb->insert($t['blocks'], [
+              'type' => 'kick',
+              'target_user_id' => $me_id,
+              'target_name' => $me_nm,
+              'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
+              'target_ip' => null,
+              'cause' => $cause,
+              'created_by' => $admin ?: null,
+              'created_at' => $now,
+              'expires_at' => $exp,
+              'active' => 1
+            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+            if ($exp === null) {
+              $id = (int)$wpdb->insert_id;
+              $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at=NULL WHERE id=%d", $id));
+            }
+          } elseif ($hit_forbid['action'] === 'ipban') {
+            $exp = isset($dur) ? ($now + max(60, (int)$dur)) : null;
+            $wpdb->insert($t['blocks'], [
+              'type' => 'ipban',
+              'target_user_id' => $me_id,
+              'target_name' => $me_nm,
+              'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
+              'target_ip' => kkchat_ip_ban_key($ip),
+              'cause' => $cause,
+              'created_by' => $admin ?: null,
+              'created_at' => $now,
+              'expires_at' => $exp,
+              'active' => 1
+            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+            if ($exp === null) {
+              $id = (int)$wpdb->insert_id;
+              $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at=NULL WHERE id=%d", $id));
+            }
+          }
+
+          $wpdb->delete($t['users'], ['id' => $me_id], ['%d']);
+          kkchat_json(['ok' => false, 'err' => 'auto_moderated', 'cause' => $cause], 403);
+        }
+      }
+
+      $ctx = 'dm:' . $peer;
+      $raw = trim($txt);
+      $content_hash = sha1($ctx . '|' . $raw);
+
+      $dupe_id = (int)$wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$t['messages']}\n         WHERE sender_id=%d AND content_hash=%s AND created_at > %d\n         ORDER BY id DESC LIMIT 1",
+        $me_id,
+        $content_hash,
+        $now - max(1, $window)
+      ));
+
+      if ($dupe_id > 0) {
+        $wpdb->query($wpdb->prepare(
+          "UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL WHERE id=%d",
+          $me_id
+        ));
+
+        if (!$is_admin) {
+          if (!isset($_SESSION['kk_dupe'])) {
+            $_SESSION['kk_dupe'] = [];
+          }
+          $key = $content_hash;
+          $win   = kkchat_dupe_window_seconds();
+          $fast  = kkchat_dupe_fast_seconds();
+          $max   = kkchat_dupe_max_repeats();
+          $mins  = kkchat_dupe_autokick_minutes();
+          $rec = $_SESSION['kk_dupe'][$key] ?? ['n' => 0, 'first' => $now];
+          if ($now - $rec['first'] > $win) {
+            $rec = ['n' => 0, 'first' => $now];
+          }
+          $rec['n']++;
+          $_SESSION['kk_dupe'][$key] = $rec;
+          if ($mins > 0 && $rec['n'] >= $max && ($now - $rec['first']) <= $fast) {
+            $exp = $now + max(60, $mins * 60);
+            $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
+            $cause = 'Repeat spam (auto)';
+            $wpdb->insert($t['blocks'], [
+              'type' => 'kick',
+              'target_user_id' => $me_id,
+              'target_name' => $me_nm,
+              'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
+              'target_ip' => null,
+              'cause' => $cause,
+              'created_by' => $admin ?: null,
+              'created_at' => $now,
+              'expires_at' => $exp,
+              'active' => 1
+            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+            unset($_SESSION['kk_dupe'][$key]);
+            $wpdb->delete($t['users'], ['id' => $me_id], ['%d']);
+            kkchat_json(['ok' => false, 'err' => 'auto_moderated', 'cause' => $cause], 403);
+          }
+        }
+
+        $results[] = ['msg_id' => $msgId, 'ok' => true, 'deduped' => 1, 'id' => $dupe_id];
+        continue;
+      }
+
+      $recipient_name = (string)($recipientCache[$peer]['name'] ?? '');
+      $recipient_ip   = (string)($recipientCache[$peer]['ip'] ?? '');
+
+      $data = [
+        'created_at'   => $now,
+        'sender_id'    => $me_id,
+        'sender_name'  => $me_nm,
+        'sender_ip'    => $sender_ip,
+        'content_hash' => $content_hash,
+        'content'      => $txt,
+        'kind'         => 'chat',
+        'recipient_id'   => $peer,
+        'recipient_name' => $recipient_name,
+        'recipient_ip'   => $recipient_ip,
+      ];
+
+      $ok = $wpdb->insert($t['messages'], $data, ['%d','%d','%s','%s','%s','%s','%s','%d','%s','%s']);
+      if ($ok === false) {
+        $results[] = ['msg_id' => $msgId, 'ok' => false, 'error' => 'db_insert_failed'];
+        continue;
+      }
+
+      $mid = (int)$wpdb->insert_id;
+      $results[] = ['msg_id' => $msgId, 'ok' => true, 'id' => $mid];
+
+      $preview = mb_substr(trim($txt), 0, 200);
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['users']} SET typing_text=%s, typing_room=NULL, typing_to=%d, typing_at=%d WHERE id=%d",
+        $preview,
+        $peer,
+        $now,
+        $me_id
+      ));
+    }
+
+    kkchat_json(['ok' => true, 'results' => $results]);
+  },
+  'permission_callback' => '__return_true',
+]);
+
+register_rest_route($ns, '/dm/receipts/batch', [
+  'methods'  => 'POST',
+  'callback' => function (WP_REST_Request $req) {
+    kkchat_require_login();
+    kkchat_assert_not_blocked_or_fail();
+    kkchat_check_csrf_or_fail($req);
+    nocache_headers();
+
+    kkchat_touch_active_user();
+
+    $me = (int) kkchat_current_user_id();
+    if ($me <= 0) {
+      return new WP_REST_Response(['ok' => false, 'error' => 'not_logged_in'], 401);
+    }
+
+    $body = $req->get_json_params();
+    if (!is_array($body) || empty($body)) {
+      $body = $req->get_body_params();
+    }
+
+    $ids = [];
+    if (is_array($body)) {
+      $ids = $body['ids'] ?? $body['dms'] ?? [];
+    }
+    if (!is_array($ids)) {
+      $ids = $req->get_param('ids');
+    }
+
+    if (is_array($ids) && !empty($ids)) {
+      kkchat_mark_dm_reads($ids, $me);
+    }
+
     kkchat_close_session_if_open();
 
     return kkchat_json(['ok' => true]);
@@ -2577,6 +2890,112 @@ register_rest_route($ns, '/admin/user-messages', [
       },
       'permission_callback' => '__return_true',
     ],
+  ]);
+
+  register_rest_route($ns, '/rtc/signal/outbox', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login();
+      kkchat_assert_not_blocked_or_fail();
+      kkchat_check_csrf_or_fail($req);
+
+      $body = $req->get_json_params();
+      if (!is_array($body) || empty($body)) {
+        $body = $req->get_body_params();
+      }
+
+      $items = [];
+      if (is_array($body)) {
+        $items = $body['items'] ?? [];
+      }
+      if (!is_array($items) || empty($items)) {
+        kkchat_json(['ok' => false, 'err' => 'empty_batch'], 400);
+      }
+
+      $me = kkchat_current_user_id();
+      $states = [];
+      $versions = [];
+
+      foreach ($items as $entry) {
+        if (!is_array($entry)) { continue; }
+        $peer = isset($entry['peer_id']) ? (int)$entry['peer_id'] : (int)($entry['peer'] ?? 0);
+        if ($peer <= 0 || $peer === $me) { continue; }
+
+        $kind = isset($entry['kind']) ? strtolower((string)$entry['kind']) : '';
+        if ($kind === '') { continue; }
+
+        $data = $entry['data'] ?? [];
+        if (!is_array($data)) { $data = []; }
+
+        if (!isset($states[$peer])) {
+          $states[$peer] = kkchat_rtc_load_state($me, $peer, true);
+        }
+
+        $state =& $states[$peer];
+
+        if ($kind === 'offer') {
+          $sdp  = substr((string)($data['sdp'] ?? ''), 0, 10000);
+          $type = substr((string)($data['type'] ?? 'offer'), 0, 32);
+          if ($sdp === '') { continue; }
+          $seq = kkchat_rtc_next_seq($state);
+          $state['offer'] = [
+            'from' => $me,
+            'sdp'  => $sdp,
+            'type' => $type !== '' ? $type : 'offer',
+            'seq'  => $seq,
+            'at'   => time(),
+          ];
+          $state['answer']     = null;
+          $state['candidates'] = [];
+        } elseif ($kind === 'answer') {
+          $sdp  = substr((string)($data['sdp'] ?? ''), 0, 10000);
+          $type = substr((string)($data['type'] ?? 'answer'), 0, 32);
+          if ($sdp === '') { continue; }
+          $seq = kkchat_rtc_next_seq($state);
+          $state['answer'] = [
+            'from' => $me,
+            'sdp'  => $sdp,
+            'type' => $type !== '' ? $type : 'answer',
+            'seq'  => $seq,
+            'at'   => time(),
+          ];
+        } elseif ($kind === 'candidate') {
+          $candidate = substr((string)($data['candidate'] ?? ''), 0, 2000);
+          if ($candidate === '') { continue; }
+          $seq   = kkchat_rtc_next_seq($state);
+          $entryData = [
+            'from'      => $me,
+            'candidate' => $candidate,
+            'seq'       => $seq,
+            'at'        => time(),
+          ];
+          if (isset($data['sdpMid'])) {
+            $entryData['sdpMid'] = substr((string)$data['sdpMid'], 0, 64);
+          }
+          if (isset($data['sdpMLineIndex'])) {
+            $entryData['sdpMLineIndex'] = is_numeric($data['sdpMLineIndex']) ? (int)$data['sdpMLineIndex'] : null;
+          }
+          if (!isset($state['candidates']) || !is_array($state['candidates'])) {
+            $state['candidates'] = [];
+          }
+          $state['candidates'][] = $entryData;
+          $max = (int) apply_filters('kkchat_rtc_max_candidates', 32);
+          if ($max > 0 && count($state['candidates']) > $max) {
+            $state['candidates'] = array_slice($state['candidates'], -$max);
+          }
+        }
+      }
+
+      foreach ($states as $peer => $state) {
+        kkchat_rtc_save_state($me, $peer, $state);
+        $versions[$peer] = (int)($state['seq'] ?? 0);
+      }
+
+      kkchat_close_session_if_open();
+
+      kkchat_json(['ok' => true, 'versions' => $versions]);
+    },
+    'permission_callback' => '__return_true',
   ]);
 
   register_rest_route($ns, '/rtc/clear', [

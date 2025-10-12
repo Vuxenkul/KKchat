@@ -652,6 +652,20 @@ const camFlip   = document.getElementById('kk-camFlip');
 
   const h = {'X-WP-Nonce': REST_NONCE};
 
+  const JSON_HEADERS = { ...h, 'Content-Type': 'application/json' };
+
+  function requestJson(url, payload, options = {}) {
+    const body = payload != null ? JSON.stringify(payload) : undefined;
+    const init = {
+      method: 'POST',
+      credentials: 'include',
+      headers: JSON_HEADERS,
+      body,
+      ...options,
+    };
+    return fetch(url, init);
+  }
+
   let redirectingToLogin = false;
   async function maybeRedirectToLogin(response){
     if (!response || redirectingToLogin) return;
@@ -708,18 +722,7 @@ let _lastPublicSeenSent = 0;
 // Mark a batch of DM messages as read
 async function markDMSeen(ids) {
   if (!Array.isArray(ids) || ids.length === 0) return;
-  try {
-    const fd = new FormData()
-    fd.append('csrf_token', CSRF); 
-    for (const id of ids) fd.append('dms[]', String(id));
-    await fetch(`${API}/reads/mark`, {
-      method: 'POST',
-      credentials: 'include',
-      body: fd
-    });
-  } catch (e) {
-    console.warn('reads/mark (DM) failed', e);
-  }
+  ReceiptOutbox.enqueue(ids);
 }
 
 // Advance the public watermark to the server’s “now” from /sync
@@ -1263,25 +1266,27 @@ function computePollDelay(hintMs){
     ? (POLL_HIDDEN_SINCE ? now - POLL_HIDDEN_SINCE : 0)
     : 0;
 
-  if (hiddenFor >= 90000) {
+  if (hiddenFor >= 600000) {
     base = 30000;
+  } else if (hiddenFor >= 120000) {
+    base = 24000;
   }
 
   if (base == null) {
     if (now < POLL_HOT_UNTIL) {
-      base = 4000;
-    } else if (now - POLL_LAST_EVENT_AT < 480000) {
-      base = 8000;
+      base = 3500;
+    } else if (now - POLL_LAST_EVENT_AT < 300000) {
+      base = 18000;
     } else {
-      base = 90000;
+      base = 26000;
     }
   }
 
   const conn = navigator.connection?.effectiveType || '';
   if (/slow-2g|2g/i.test(conn)) {
-    base += 20000;
+    base += 4000;
   } else if (/3g/i.test(conn)) {
-    base += 10000;
+    base += 2500;
   }
 
   if (hintMs != null && Number.isFinite(hintMs)) {
@@ -2901,10 +2906,23 @@ let LAST_OPEN_DM = null;
     const sessions = new Map();
     const SIGNAL_URL = `${API}/rtc/signal`;
     const CLEAR_URL  = `${API}/rtc/clear`;
-    const JSON_HEADERS = { ...h, 'Content-Type': 'application/json' };
     const NEGOTIATION_TIMEOUT_MS = 10000;
     const POLL_FALLBACK_MS = 2000;
     const BACKGROUND_PROBE_MS = 60000;
+
+    SignalOutbox.subscribe((versions) => {
+      if (!versions || typeof versions !== 'object') return;
+      for (const [peer, ver] of Object.entries(versions)) {
+        const pid = Number(peer);
+        if (!Number.isFinite(pid)) continue;
+        const version = Number(ver);
+        if (!Number.isFinite(version)) continue;
+        const session = sessions.get(pid);
+        if (session) {
+          session.version = Math.max(session.version || 0, version);
+        }
+      }
+    });
 
     function sessionFor(peerId) {
       const id = Number(peerId);
@@ -3192,26 +3210,14 @@ let LAST_OPEN_DM = null;
       }
     }
 
-    async function sendSignal(session, kind, data) {
+    function sendSignal(session, kind, data) {
       if (!session) return;
       if (kind === 'candidate') {
         const signature = [data?.candidate || '', data?.sdpMid || '', data?.sdpMLineIndex ?? ''].join('|');
         if (session.sentCandidates.has(signature)) return;
         session.sentCandidates.add(signature);
       }
-      const body = { peer_id: session.peerId, kind, data };
-      try {
-        const resp = await fetch(SIGNAL_URL, {
-          method: 'POST',
-          credentials: 'include',
-          headers: JSON_HEADERS,
-          body: JSON.stringify(body)
-        });
-        const js = await resp.json().catch(() => null);
-        if (resp.ok && js && Number.isFinite(+js.version)) {
-          session.version = Math.max(session.version, Number(js.version));
-        }
-      } catch (_) {}
+      SignalOutbox.enqueue(session.peerId, kind, data);
     }
 
     function startPolling(session) {
@@ -3368,13 +3374,20 @@ let LAST_OPEN_DM = null;
       session.placeholders.set(placeholderId, { element, text: text || '' });
     }
 
-    function sendMessage(peerId, text) {
+    function sendMessage(peerId, text, msgId) {
       const session = ensureSession(peerId);
       if (!session) return false;
       const channel = session.dc;
       if (channel && channel.readyState === 'open') {
         try {
-          const payload = { type: 'message', text, from: ME_ID, name: ME_NM, ts: Date.now() };
+          const payload = {
+            type: 'message',
+            text,
+            from: ME_ID,
+            name: ME_NM,
+            ts: Date.now(),
+            id: msgId || generateMessageId(),
+          };
           channel.send(JSON.stringify(payload));
           console.info('[P2P] Sent DM via peer-to-peer channel', { peerId, text });
           return true;
@@ -4563,6 +4576,314 @@ function escapeHtml(s){
   );
 }
 
+function generateMessageId(){
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const seed = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `m-${seed}`;
+}
+
+const ReceiptOutbox = (() => {
+  const pending = new Set();
+  let timer = null;
+  let inflight = false;
+  let retryDelay = 600;
+
+  function schedule(delay){
+    if (timer) return;
+    const wait = Math.max(200, delay || 350);
+    timer = setTimeout(() => {
+      timer = null;
+      flush().catch(()=>{});
+    }, wait);
+  }
+
+  async function flush(){
+    if (inflight) return;
+    if (pending.size === 0) return;
+    inflight = true;
+
+    const ids = Array.from(pending);
+    pending.clear();
+
+    try {
+      const resp = await requestJson(`${API}/dm/receipts/batch`, {
+        csrf_token: CSRF,
+        ids,
+      });
+      if (!resp.ok) {
+        throw new Error(`receipts ${resp.status}`);
+      }
+      retryDelay = 600;
+    } catch (err) {
+      console.warn('Receipt batch failed, retrying', err);
+      ids.forEach(id => pending.add(id));
+      retryDelay = Math.min(retryDelay * 2, 8000);
+      schedule(retryDelay);
+    } finally {
+      inflight = false;
+    }
+  }
+
+  function enqueue(ids){
+    if (!Array.isArray(ids)) return;
+    ids.forEach(id => {
+      const mid = Number(id);
+      if (!Number.isFinite(mid) || mid <= 0) return;
+      pending.add(mid);
+    });
+    if (pending.size === 0) return;
+    if (pending.size >= 40) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush().catch(()=>{});
+    } else {
+      schedule();
+    }
+  }
+
+  return { enqueue };
+})();
+
+const DMOutbox = (() => {
+  const MAX_BATCH = 12;
+  const BASE_DELAY = 250;
+  const queue = [];
+  const placeholders = new Map();
+  let timer = null;
+  let inflight = false;
+  let retryDelay = BASE_DELAY;
+
+  function trackPlaceholder(msgId, info){
+    if (!msgId) return;
+    placeholders.set(msgId, {
+      element: info?.element || null,
+      text: info?.text || '',
+      peerId: info?.peerId != null ? Number(info.peerId) : null,
+    });
+  }
+
+  function markDelivered(msgId){
+    const entry = placeholders.get(msgId);
+    if (!entry) return;
+    const el = entry.element;
+    if (el) {
+      el.classList.remove('pending');
+      el.dataset.delivered = '1';
+    }
+    placeholders.delete(msgId);
+  }
+
+  function markDeduped(msgId){
+    const entry = placeholders.get(msgId);
+    if (!entry) return;
+    const el = entry.element;
+    if (el) {
+      el.remove();
+    }
+    placeholders.delete(msgId);
+    try { showToast?.('Spam - Ditt meddelande avvisades.'); } catch (_) {}
+  }
+
+  function markErrored(msgId, message){
+    const entry = placeholders.get(msgId);
+    if (!entry) return;
+    const el = entry.element;
+    if (el) {
+      el.classList.remove('pending');
+      el.classList.add('error');
+      if (message) {
+        el.dataset.error = message;
+      }
+    }
+    placeholders.delete(msgId);
+  }
+
+  function schedule(delay){
+    if (inflight) return;
+    if (timer) return;
+    const wait = Math.max(120, delay || BASE_DELAY);
+    timer = setTimeout(() => {
+      timer = null;
+      flush().catch(()=>{});
+    }, wait);
+  }
+
+  async function flush(){
+    if (inflight) return;
+    if (!queue.length) return;
+    inflight = true;
+
+    const batch = queue.splice(0, MAX_BATCH);
+    const payload = {
+      csrf_token: CSRF,
+      items: batch.map(item => ({
+        msg_id: item.msg_id,
+        recipient_id: item.recipient_id,
+        text: item.text,
+        sent_at: item.sent_at,
+      })),
+    };
+
+    try {
+      const resp = await requestJson(`${API}/dm/audit/batch`, payload);
+      const js = await resp.json().catch(() => null);
+      if (!resp.ok || !js || js.ok === false) {
+        throw new Error(`audit ${resp.status}`);
+      }
+
+      const results = Array.isArray(js.results) ? js.results : [];
+      const handled = new Set();
+      for (const res of results) {
+        const msgId = String(res?.msg_id || '').trim();
+        if (!msgId) continue;
+        handled.add(msgId);
+        if (res?.deduped) {
+          markDeduped(msgId);
+          continue;
+        }
+        if (res?.ok === false) {
+          markErrored(msgId, res?.error || '');
+          continue;
+        }
+        markDelivered(msgId);
+      }
+
+      // Any batch items without explicit result: treat as success
+      for (const item of batch) {
+        if (handled.has(item.msg_id)) continue;
+        markDelivered(item.msg_id);
+      }
+
+      retryDelay = BASE_DELAY;
+    } catch (err) {
+      console.warn('DM audit batch failed, retrying', err);
+      queue.unshift(...batch);
+      retryDelay = Math.min(retryDelay * 2, 8000);
+      schedule(retryDelay);
+    } finally {
+      inflight = false;
+    }
+
+    if (!inflight && queue.length) {
+      schedule(retryDelay);
+    }
+  }
+
+  function enqueue(entry){
+    if (!entry) return;
+    const msgId = String(entry.msgId || entry.msg_id || '').trim();
+    const recipient = Number(entry.peerId ?? entry.recipient_id);
+    const text = (entry.text ?? '').toString();
+    if (!msgId || !Number.isFinite(recipient) || recipient <= 0 || text === '') return;
+
+    const element = entry.placeholder || entry.element || null;
+    trackPlaceholder(msgId, { element, text, peerId: recipient });
+
+    queue.push({
+      msg_id: msgId,
+      recipient_id: recipient,
+      text,
+      sent_at: Number(entry.sent_at || Date.now()),
+    });
+
+    if (queue.length >= MAX_BATCH) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush().catch(()=>{});
+    } else {
+      schedule();
+    }
+  }
+
+  return { enqueue, trackPlaceholder };
+})();
+
+const SignalOutbox = (() => {
+  const queue = [];
+  const listeners = new Set();
+  let timer = null;
+  let inflight = false;
+  let retryDelay = 400;
+
+  function notifyVersions(map){
+    if (!map) return;
+    for (const listener of listeners) {
+      try { listener(map); } catch (_) {}
+    }
+  }
+
+  function schedule(delay){
+    if (inflight) return;
+    if (timer) return;
+    const wait = Math.max(120, delay || 180);
+    timer = setTimeout(() => {
+      timer = null;
+      flush().catch(()=>{});
+    }, wait);
+  }
+
+  async function flush(){
+    if (inflight) return;
+    if (!queue.length) return;
+    inflight = true;
+
+    const batch = queue.splice(0, queue.length);
+    const payload = {
+      csrf_token: CSRF,
+      items: batch.map(item => ({
+        peer_id: item.peerId,
+        kind: item.kind,
+        data: item.data,
+      })),
+    };
+
+    try {
+      const resp = await requestJson(`${API}/rtc/signal/outbox`, payload);
+      const js = await resp.json().catch(() => null);
+      if (!resp.ok || !js || js.ok === false) {
+        throw new Error(`signal ${resp.status}`);
+      }
+      if (js.versions && typeof js.versions === 'object') {
+        notifyVersions(js.versions);
+      }
+      retryDelay = 400;
+    } catch (err) {
+      console.warn('Signal batch failed, retrying', err);
+      queue.unshift(...batch);
+      retryDelay = Math.min(retryDelay * 2, 8000);
+      schedule(retryDelay);
+    } finally {
+      inflight = false;
+    }
+
+    if (!inflight && queue.length) {
+      schedule(retryDelay);
+    }
+  }
+
+  function enqueue(peerId, kind, data){
+    const pid = Number(peerId);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    const normalizedKind = typeof kind === 'string' ? kind : '';
+    if (!normalizedKind) return;
+    queue.push({ peerId: pid, kind: normalizedKind, data: data || {} });
+    if (queue.length >= 8) {
+      if (timer) { clearTimeout(timer); timer = null; }
+      flush().catch(()=>{});
+    } else {
+      schedule();
+    }
+  }
+
+  function subscribe(listener){
+    if (typeof listener !== 'function') return () => {};
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  }
+
+  return { enqueue, subscribe };
+})();
+
 function appendPendingMessage(text){
   const li = document.createElement('li');
   li.className = 'item me pending';
@@ -4632,14 +4953,28 @@ pubForm.addEventListener('submit', async (e)=>{
   if (currentDM) fd.append('recipient_id', String(currentDM));
   else fd.append('room', currentRoom);
 
+  let deliveredViaPeer = false;
+  let msgId = null;
   if (currentDM) {
+    msgId = generateMessageId();
     try {
       P2PManager.ensureSession(currentDM);
-      P2PManager.sendMessage(currentDM, txt);
-    } catch (_) {}
+      deliveredViaPeer = !!P2PManager.sendMessage(currentDM, txt, msgId);
+    } catch (_) { deliveredViaPeer = false; }
   }
 
   const pending = appendPendingMessage(txt);
+  if (pending && msgId) {
+    pending.dataset.msgId = msgId;
+  }
+
+  if (currentDM && deliveredViaPeer) {
+    const placeholderId = pending?.dataset?.temp || msgId;
+    try { P2PManager.registerPlaceholder(currentDM, placeholderId, pending, txt); } catch (_) {}
+    DMOutbox.enqueue({ msgId, peerId: currentDM, text: txt, placeholder: pending, sent_at: Date.now() });
+    pubForm.reset();
+    return;
+  }
 
   try{
     const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
