@@ -128,6 +128,55 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_rtc_signal_key')) {
+    function kkchat_rtc_signal_key(int $user_id): string {
+      return 'kkchat_rtc_' . $user_id;
+    }
+
+    function kkchat_rtc_signal_queue_get(int $user_id): array {
+      $key  = kkchat_rtc_signal_key($user_id);
+      $raw  = get_transient($key);
+      $now  = time();
+      $rows = [];
+
+      if (is_array($raw)) {
+        foreach ($raw as $row) {
+          $ts = isset($row['ts']) ? (int) $row['ts'] : 0;
+          if ($ts < $now - 60) {
+            continue;
+          }
+          $rows[] = $row;
+        }
+      }
+
+      if (empty($rows)) {
+        delete_transient($key);
+      }
+
+      return $rows;
+    }
+
+    function kkchat_rtc_signal_queue_set(int $user_id, array $queue): void {
+      $key = kkchat_rtc_signal_key($user_id);
+      if (empty($queue)) {
+        delete_transient($key);
+        return;
+      }
+      set_transient($key, array_values($queue), 60);
+    }
+
+    function kkchat_rtc_signal_queue_push(int $recipient_id, array $item): void {
+      $queue   = kkchat_rtc_signal_queue_get($recipient_id);
+      $queue[] = $item;
+
+      if (count($queue) > 40) {
+        $queue = array_slice($queue, -40);
+      }
+
+      kkchat_rtc_signal_queue_set($recipient_id, $queue);
+    }
+  }
+
   if (!function_exists('kkchat_sync_build_context')) {
     function kkchat_sync_build_context(WP_REST_Request $req): array {
       kkchat_require_login();
@@ -1427,6 +1476,94 @@ register_rest_route($ns, '/fetch', [
   'permission_callback' => '__return_true',
 ]);
 
+  register_rest_route($ns, '/rtc/signal', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login();
+      kkchat_assert_not_blocked_or_fail();
+      kkchat_check_csrf_or_fail($req);
+
+      $me_id = kkchat_current_user_id();
+      $peer  = (int) $req->get_param('peer_id');
+      if ($peer <= 0 || $peer === $me_id) {
+        kkchat_json(['ok' => false, 'err' => 'bad_peer'], 400);
+      }
+
+      if (kkchat_is_blocked_by($me_id, $peer) || kkchat_is_blocked_by($peer, $me_id)) {
+        kkchat_json(['ok' => false, 'err' => 'blocked'], 403);
+      }
+
+      $body    = $req->get_json_params();
+      $payload = null;
+      if (is_array($body) && array_key_exists('payload', $body)) {
+        $payload = $body['payload'];
+      } else {
+        $payload = $req->get_param('payload');
+      }
+
+      if (is_array($payload) || is_object($payload)) {
+        $payload = wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+      }
+
+      $payload = trim((string) $payload);
+      if ($payload === '' || strlen($payload) > 8192) {
+        kkchat_json(['ok' => false, 'err' => 'bad_payload'], 400);
+      }
+
+      kkchat_rtc_signal_queue_push($peer, [
+        'from'    => $me_id,
+        'payload' => $payload,
+        'ts'      => time(),
+      ]);
+
+      kkchat_json(['ok' => true]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
+  register_rest_route($ns, '/rtc/signal', [
+    'methods'  => 'GET',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login();
+      kkchat_assert_not_blocked_or_fail();
+
+      $me_id = kkchat_current_user_id();
+      $peer  = (int) $req->get_param('peer_id');
+      $now   = time();
+
+      $queue = kkchat_rtc_signal_queue_get($me_id);
+      $keep  = [];
+      $out   = [];
+
+      foreach ($queue as $row) {
+        $from = isset($row['from']) ? (int) $row['from'] : 0;
+        if ($from <= 0) {
+          continue;
+        }
+        if ($peer > 0 && $from !== $peer) {
+          $keep[] = $row;
+          continue;
+        }
+
+        $payload_raw = isset($row['payload']) ? (string) $row['payload'] : '';
+        $decoded     = json_decode($payload_raw, true);
+        if ($decoded === null && json_last_error() !== JSON_ERROR_NONE) {
+          $decoded = $payload_raw;
+        }
+
+        $out[] = [
+          'from'    => $from,
+          'payload' => $decoded,
+        ];
+      }
+
+      kkchat_rtc_signal_queue_set($me_id, $keep);
+
+      kkchat_json(['ok' => true, 'signals' => $out, 'now' => $now]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
   register_rest_route($ns, '/message', [
     'methods'  => 'POST',
     'callback' => function (WP_REST_Request $req) {
@@ -1665,9 +1802,21 @@ register_rest_route($ns, '/fetch', [
 
       $mid = (int)$wpdb->insert_id;
 
-    // Write a short-lived preview so admins see the last sent message (room or DM).
-    // It expires via the existing 8–10s cleanup in /users, /sync and /ping.
-    if ($kind === 'chat') {
+      $response_message = [
+        'id'             => $mid,
+        'time'           => $now,
+        'kind'           => $kind,
+        'room'           => $recipient !== null ? null : $room,
+        'sender_id'      => $me_id,
+        'sender_name'    => $me_nm,
+        'recipient_id'   => $recipient,
+        'recipient_name' => $recipient_name,
+        'content'        => $content,
+      ];
+
+      // Write a short-lived preview so admins see the last sent message (room or DM).
+      // It expires via the existing 8–10s cleanup in /users, /sync and /ping.
+      if ($kind === 'chat') {
       $preview = mb_substr(trim((string)$txt), 0, 200);
       // Prefer a fresh timestamp; $now is already set above, but reusing is fine.
       $ts = time();
@@ -1695,9 +1844,9 @@ register_rest_route($ns, '/fetch', [
         "UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL WHERE id=%d",
         (int)$me_id
       ));
-    }
-    
-    kkchat_json(['ok'=>true,'id'=>$mid]);
+      }
+
+      kkchat_json(['ok'=>true,'id'=>$mid,'message'=>$response_message]);
 
     },
     'permission_callback' => '__return_true',
