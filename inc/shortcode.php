@@ -1794,6 +1794,349 @@ async function prefetchDM(userId){
 
   function cacheKeyForRoom(slug){ return `room:${slug}`; }
   function cacheKeyForDM(id){ return `dm:${id}`; }
+
+  const DM_P2P_STATES = new Map();
+  const RTC_AVAILABLE = typeof window !== 'undefined' && typeof window.RTCPeerConnection !== 'undefined';
+  const RTC_CONFIG = { iceServers: [{ urls: ['stun:stun.l.google.com:19302'] }] };
+  const P2P_SIGNAL_POLL_MS = 1200;
+  const P2P_SIGNAL_POLL_OPEN_MS = 4000;
+  const P2P_CONNECT_TIMEOUT_MS = 10000;
+  const P2P_PROBE_WINDOW_MS = 30000;
+
+  function getDmP2PState(peerId){
+    const id = Number(peerId);
+    if (!Number.isFinite(id) || id <= 0) return null;
+    let state = DM_P2P_STATES.get(id);
+    if (!state) {
+      state = {
+        peerId: id,
+        isInitiator: Number(ME_ID) < id,
+        pc: null,
+        channel: null,
+        connecting: false,
+        mode: 'idle',
+        timeoutTimer: null,
+        signalTimer: null,
+        backgroundTimer: null,
+        pendingCandidates: [],
+        loggedFallback: false,
+        probeDeadline: 0,
+      };
+      DM_P2P_STATES.set(id, state);
+    }
+    return state;
+  }
+
+  function clearDmTimers(state){
+    if (!state) return;
+    if (state.timeoutTimer){ clearTimeout(state.timeoutTimer); state.timeoutTimer = null; }
+    if (state.signalTimer){ clearTimeout(state.signalTimer); state.signalTimer = null; }
+  }
+
+  function resetDmPeerConnection(state){
+    if (!state) return;
+    clearDmTimers(state);
+    if (state.pc){
+      try { state.pc.onicecandidate = null; } catch(_){}
+      try { state.pc.oniceconnectionstatechange = null; } catch(_){}
+      try { state.pc.onconnectionstatechange = null; } catch(_){}
+      try { state.pc.ondatachannel = null; } catch(_){}
+      try { state.pc.close(); } catch(_){}
+    }
+    state.pc = null;
+    state.pendingCandidates = [];
+    if (state.channel){
+      try { state.channel.close(); } catch(_){}
+    }
+    state.channel = null;
+    state.connecting = false;
+  }
+
+  async function sendRtcSignal(peerId, payload){
+    if (!RTC_AVAILABLE) return;
+    try {
+      const headers = new Headers(h);
+      headers.set('Content-Type', 'application/json');
+      await fetch(API + '/rtc/signal', {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+        body: JSON.stringify({ peer_id: Number(peerId), payload })
+      });
+    } catch(_) {}
+  }
+
+  async function fetchRtcSignals(peerId){
+    if (!RTC_AVAILABLE) return [];
+    try {
+      const url = `${API}/rtc/signal?peer_id=${encodeURIComponent(peerId)}`;
+      const headers = new Headers(h);
+      const resp = await fetch(url, { credentials: 'include', headers });
+      if (!resp.ok) return [];
+      const js = await resp.json().catch(()=>null);
+      if (!js || !js.ok || !Array.isArray(js.signals)) return [];
+      return js.signals;
+    } catch(_) {
+      return [];
+    }
+  }
+
+  function scheduleSignalPoll(state){
+    if (!state) return;
+    if (state.signalTimer) return;
+    const poll = async () => {
+      state.signalTimer = null;
+      if (!state.pc) return;
+      try {
+        const signals = await fetchRtcSignals(state.peerId);
+        for (const sig of signals) {
+          await handleRtcSignal(state, sig);
+        }
+      } catch(_) {}
+      if (!state.pc) return;
+      const delay = state.channel && state.channel.readyState === 'open'
+        ? P2P_SIGNAL_POLL_OPEN_MS
+        : P2P_SIGNAL_POLL_MS;
+      state.signalTimer = setTimeout(poll, delay);
+    };
+    state.signalTimer = setTimeout(poll, 0);
+  }
+
+  async function flushPendingCandidates(state){
+    if (!state || !state.pc || !state.pc.remoteDescription) return;
+    while (state.pendingCandidates.length) {
+      const cand = state.pendingCandidates.shift();
+      try { await state.pc.addIceCandidate(cand); } catch(_){}
+    }
+  }
+
+  async function handleRtcSignal(state, signal){
+    if (!state || !signal) return;
+    if (Number(signal.from) !== state.peerId) return;
+    let payload = signal.payload;
+    if (typeof payload === 'string') {
+      try { payload = JSON.parse(payload); }
+      catch(_) { payload = null; }
+    }
+    if (!payload || typeof payload !== 'object') return;
+    if (payload.type === 'offer' && !state.isInitiator) {
+      try {
+        if (!state.pc) return;
+        await state.pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: payload.sdp }));
+        const answer = await state.pc.createAnswer();
+        await state.pc.setLocalDescription(answer);
+        await sendRtcSignal(state.peerId, { type: 'answer', sdp: answer.sdp });
+        await flushPendingCandidates(state);
+      } catch(_) {
+        triggerDmFallback(state, 'offer');
+      }
+      return;
+    }
+
+    if (payload.type === 'answer' && state.isInitiator) {
+      try {
+        if (!state.pc) return;
+        await state.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: payload.sdp }));
+        await flushPendingCandidates(state);
+      } catch(_) {
+        triggerDmFallback(state, 'answer');
+      }
+      return;
+    }
+
+    if (payload.type === 'candidate') {
+      try {
+        const cand = payload.candidate || payload;
+        if (!cand) return;
+        const ice = new RTCIceCandidate(cand);
+        if (state.pc && state.pc.remoteDescription) {
+          await state.pc.addIceCandidate(ice);
+        } else {
+          state.pendingCandidates.push(ice);
+        }
+      } catch(_){}
+    }
+  }
+
+  function handleDmP2PMessage(peerId, raw){
+    if (!raw) return;
+    let data = null;
+    try { data = JSON.parse(raw); } catch(_) { return; }
+    if (!data || typeof data !== 'object') return;
+    if (data.type === 'message' && data.payload) {
+      receiveDmP2PMessage(peerId, data.payload);
+    }
+  }
+
+  function setupDmDataChannel(state, channel){
+    if (!state || !channel) return;
+    state.channel = channel;
+    channel.binaryType = 'arraybuffer';
+    channel.addEventListener('open', () => {
+      state.connecting = false;
+      clearDmTimers(state);
+      if (state.loggedFallback) {
+        console.info('P2P 2nd try successful -  Connection found and established');
+      }
+      state.loggedFallback = false;
+      state.mode = 'p2p';
+      if (state.backgroundTimer){ clearTimeout(state.backgroundTimer); state.backgroundTimer = null; }
+      state.probeDeadline = 0;
+    });
+    const onFail = () => { triggerDmFallback(state, 'closed'); };
+    channel.addEventListener('close', onFail);
+    channel.addEventListener('error', onFail);
+    channel.addEventListener('message', (ev) => {
+      try { handleDmP2PMessage(state.peerId, ev.data); } catch(_){}
+    });
+  }
+
+  async function startDmP2P(state){
+    if (!RTC_AVAILABLE || !state) return;
+    resetDmPeerConnection(state);
+    state.connecting = true;
+    state.mode = 'connecting';
+    state.pc = new RTCPeerConnection(RTC_CONFIG);
+    state.pendingCandidates = [];
+
+    state.pc.onicecandidate = (event) => {
+      if (event && event.candidate) {
+        sendRtcSignal(state.peerId, { type: 'candidate', candidate: event.candidate });
+      }
+    };
+
+    const onStateChange = () => {
+      const ice = state.pc?.iceConnectionState || '';
+      if (ice === 'failed' || ice === 'disconnected') {
+        triggerDmFallback(state, 'ice');
+      }
+      const cs = state.pc?.connectionState || '';
+      if (cs === 'failed' || cs === 'disconnected') {
+        triggerDmFallback(state, 'conn');
+      }
+    };
+
+    state.pc.oniceconnectionstatechange = onStateChange;
+    state.pc.onconnectionstatechange = onStateChange;
+
+    if (!state.isInitiator) {
+      state.pc.ondatachannel = (event) => {
+        if (!event || !event.channel) return;
+        setupDmDataChannel(state, event.channel);
+      };
+    }
+
+    state.timeoutTimer = setTimeout(() => { triggerDmFallback(state, 'timeout'); }, P2P_CONNECT_TIMEOUT_MS);
+
+    scheduleSignalPoll(state);
+
+    if (state.isInitiator) {
+      try {
+        const channel = state.pc.createDataChannel('kkchat-dm', { ordered: true });
+        setupDmDataChannel(state, channel);
+        const offer = await state.pc.createOffer();
+        await state.pc.setLocalDescription(offer);
+        await sendRtcSignal(state.peerId, { type: 'offer', sdp: offer.sdp });
+      } catch(_) {
+        triggerDmFallback(state, 'offer-init');
+      }
+    }
+  }
+
+  function triggerDmFallback(state, reason){
+    if (!state) return;
+    resetDmPeerConnection(state);
+    state.mode = 'fallback';
+    state.connecting = false;
+    if (!state.loggedFallback) {
+      console.warn('Couldn’t establish a peer-to-peer connection. Using fallback transport.');
+      state.loggedFallback = true;
+    }
+    if (!state.probeDeadline) {
+      state.probeDeadline = Date.now() + P2P_PROBE_WINDOW_MS;
+    }
+    if (!state.backgroundTimer) {
+      state.backgroundTimer = setTimeout(() => {
+        state.backgroundTimer = null;
+        if (Date.now() > state.probeDeadline) return;
+        maybeEnsureDmP2P(state.peerId, { forceRetry: true });
+      }, 4000);
+    }
+  }
+
+  function maybeEnsureDmP2P(peerId, opts = {}){
+    if (!RTC_AVAILABLE) return;
+    const state = getDmP2PState(peerId);
+    if (!state) return;
+    if (state.channel && state.channel.readyState === 'open') return;
+    if (state.connecting) return;
+    if (state.mode === 'fallback' && !opts.forceRetry) {
+      if (state.probeDeadline && Date.now() > state.probeDeadline) {
+        return;
+      }
+    }
+    startDmP2P(state).catch(()=>{ triggerDmFallback(state, 'start'); });
+  }
+
+  function normalizeServerMessage(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const msg = { ...raw };
+    msg.id = Number(msg.id);
+    msg.time = Number(msg.time || msg.created_at || Math.floor(Date.now() / 1000));
+    msg.sender_id = Number(msg.sender_id);
+    if (msg.recipient_id != null) msg.recipient_id = Number(msg.recipient_id);
+    if (!Number.isFinite(msg.id) || !Number.isFinite(msg.sender_id)) return null;
+    msg.kind = msg.kind || 'chat';
+    if (msg.content != null) msg.content = String(msg.content);
+    return msg;
+  }
+
+  function maybeSendDmP2P(peerId, message){
+    const state = DM_P2P_STATES.get(Number(peerId));
+    if (!state || !state.channel || state.channel.readyState !== 'open') return;
+    try {
+      state.channel.send(JSON.stringify({ type: 'message', payload: message }));
+    } catch(_){}
+  }
+
+  function receiveDmP2PMessage(peerId, rawMessage){
+    const normalized = normalizeServerMessage(rawMessage);
+    if (!normalized) return;
+    if (Number(normalized.sender_id) === Number(ME_ID)) return; // ignore echoes
+    if (isBlocked && isBlocked(Number(normalized.sender_id))) return;
+
+    const active = (currentDM != null) && Number(currentDM) === Number(peerId);
+    if (active) {
+      handleStreamSync({ messages: [normalized] }, { kind: 'dm', to: peerId });
+      return;
+    }
+
+    const key = cacheKeyForDM(peerId);
+    const cached = ROOM_CACHE.get(key);
+    try {
+      const prevHTML = cached?.html || '';
+      const prevLast = Number(cached?.last) || -1;
+      const combined = clampHTML(prevHTML + msgsToHTML([normalized]));
+      ROOM_CACHE.set(key, {
+        last: Math.max(prevLast, Number(normalized.id) || prevLast),
+        html: combined
+      });
+    } catch(_){}
+
+    ACTIVE_DMS.add(Number(peerId));
+    saveDMActive(ACTIVE_DMS);
+
+    if (!UNREAD_PER || typeof UNREAD_PER !== 'object') UNREAD_PER = {};
+    UNREAD_PER[peerId] = (UNREAD_PER[peerId] || 0) + 1;
+    DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
+      .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (+v || 0)), 0);
+
+    try { renderDMSidebar(); } catch(_){}
+    try { renderRoomTabs(); } catch(_){}
+    try { updateLeftCounts(); } catch(_){}
+    try { queuePrefetchDM(peerId); } catch(_){}
+  }
+
   function activeCacheKey(){
     if (currentDM) return cacheKeyForDM(currentDM);
     return cacheKeyForRoom(currentRoom);
@@ -3799,6 +4142,7 @@ async function openDM(id) {
   currentDM = Number(id);
   LAST_OPEN_DM = currentDM;
   UNREAD_PER[currentDM] = 0;
+  try { maybeEnsureDmP2P(currentDM); } catch(_){}
 
   // Recompute total DM unread so the left badge updates immediately
   try {
@@ -4018,8 +4362,17 @@ async function takeWebcamPhoto(){
     showToast('Laddar bild…');
     const url = await uploadImage(file);
 
-    const ok = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    const message = await sendImageMessage(url);
+    if (message) {
+      if (currentDM) {
+        maybeSendDmP2P(currentDM, message);
+        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM });
+      } else {
+        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom });
+      }
+      await pollActive();
+      showToast('Bild skickad');
+    }
   } catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   } finally {
@@ -4118,6 +4471,17 @@ pubForm.addEventListener('submit', async (e)=>{
 
     pubForm.reset();
     pending?.remove();
+
+    const payload = normalizeServerMessage(js.message);
+    if (payload) {
+      const ctx = currentDM
+        ? { kind: 'dm', to: currentDM }
+        : { kind: 'room', room: currentRoom };
+      try { handleStreamSync({ messages: [payload] }, ctx); } catch(_){}
+      if (currentDM) {
+        maybeSendDmP2P(currentDM, payload);
+      }
+    }
 
     await pollActive();
   }catch(_){
@@ -4268,9 +4632,9 @@ async function uploadImage(file){
     else fd.append('room', currentRoom);
     const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
-    if (!r.ok || !js.ok) { showToast(js.cause || js.err || 'Kunde inte skicka bild'); return false; }
-    if (js.deduped) { showToast('Spam - Duplicerad bild avvisades.'); return false; }
-    return true;
+    if (!r.ok || !js.ok) { showToast(js.cause || js.err || 'Kunde inte skicka bild'); return null; }
+    if (js.deduped) { showToast('Spam - Duplicerad bild avvisades.'); return null; }
+    return normalizeServerMessage(js.message);
   }
 
 // Upload picker
@@ -4287,8 +4651,17 @@ pubImgInp?.addEventListener('change', async ()=>{
     const small = await compressImageIfNeeded(file);
     showToast('Laddar bild…');
     const url = await uploadImage(small);
-    const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    const message = await sendImageMessage(url);
+    if (message) {
+      if (currentDM) {
+        maybeSendDmP2P(currentDM, message);
+        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM });
+      } else {
+        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom });
+      }
+      await pollActive();
+      showToast('Bild skickad');
+    }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -4321,8 +4694,17 @@ pubCamInp?.addEventListener('change', async ()=>{
     const small = await compressImageIfNeeded(file);
     showToast('Laddar bild…');
     const url = await uploadImage(small);
-    const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    const message = await sendImageMessage(url);
+    if (message) {
+      if (currentDM) {
+        maybeSendDmP2P(currentDM, message);
+        handleStreamSync({ messages: [message] }, { kind: 'dm', to: currentDM });
+      } else {
+        handleStreamSync({ messages: [message] }, { kind: 'room', room: currentRoom });
+      }
+      await pollActive();
+      showToast('Bild skickad');
+    }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
