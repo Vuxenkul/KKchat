@@ -128,6 +128,85 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_rtc_state_key_for')) {
+    function kkchat_rtc_state_key_for(int $a, int $b): string {
+      $ids = [$a, $b];
+      sort($ids, SORT_NUMERIC);
+      return 'kkchat_rtc_' . md5(implode(':', $ids));
+    }
+
+    function kkchat_rtc_state_ttl(): int {
+      $ttl = (int) apply_filters('kkchat_rtc_state_ttl', 120);
+      return max(30, $ttl);
+    }
+
+    function kkchat_rtc_prune_state(array $state): array {
+      $now = time();
+      $ttl = kkchat_rtc_state_ttl();
+
+      $state['candidates'] = array_values(array_filter(
+        is_array($state['candidates'] ?? null) ? $state['candidates'] : [],
+        function ($row) use ($now, $ttl) {
+          $at = (int) ($row['at'] ?? 0);
+          return $at > ($now - $ttl);
+        }
+      ));
+
+      if (isset($state['offer']) && is_array($state['offer'])) {
+        $at = (int) ($state['offer']['at'] ?? 0);
+        if ($at <= ($now - $ttl)) {
+          $state['offer'] = null;
+        }
+      }
+
+      if (isset($state['answer']) && is_array($state['answer'])) {
+        $at = (int) ($state['answer']['at'] ?? 0);
+        if ($at <= ($now - $ttl)) {
+          $state['answer'] = null;
+        }
+      }
+
+      return $state;
+    }
+
+    function kkchat_rtc_load_state(int $a, int $b, bool $create = true): array {
+      $key = kkchat_rtc_state_key_for($a, $b);
+      $state = get_transient($key);
+      if (!is_array($state)) {
+        if (!$create) { return []; }
+        $state = [
+          'created'    => time(),
+          'updated'    => time(),
+          'seq'        => 0,
+          'offer'      => null,
+          'answer'     => null,
+          'candidates' => [],
+        ];
+      }
+
+      $state = kkchat_rtc_prune_state($state);
+      return $state;
+    }
+
+    function kkchat_rtc_save_state(int $a, int $b, array $state): void {
+      $key = kkchat_rtc_state_key_for($a, $b);
+      $state['updated'] = time();
+      $ttl = kkchat_rtc_state_ttl();
+      set_transient($key, $state, $ttl);
+    }
+
+    function kkchat_rtc_delete_state(int $a, int $b): void {
+      delete_transient(kkchat_rtc_state_key_for($a, $b));
+    }
+
+    function kkchat_rtc_next_seq(array &$state): int {
+      $seq = (int) ($state['seq'] ?? 0);
+      $seq++;
+      $state['seq'] = $seq;
+      return $seq;
+    }
+  }
+
   if (!function_exists('kkchat_sync_build_context')) {
     function kkchat_sync_build_context(WP_REST_Request $req): array {
       kkchat_require_login();
@@ -2311,5 +2390,217 @@ register_rest_route($ns, '/admin/user-messages', [
   },
   'permission_callback' => '__return_true',
 ]);
+
+  register_rest_route($ns, '/rtc/signal', [
+    [
+      'methods'  => 'GET',
+      'callback' => function (WP_REST_Request $req) {
+        kkchat_require_login();
+        kkchat_assert_not_blocked_or_fail();
+        kkchat_close_session_if_open();
+
+        $peer = (int) $req->get_param('peer_id');
+        if ($peer <= 0) {
+          kkchat_json(['ok' => false, 'err' => 'invalid_peer'], 400);
+        }
+
+        $me = kkchat_current_user_id();
+        if ($peer === $me) {
+          kkchat_json(['ok' => false, 'err' => 'invalid_peer'], 400);
+        }
+
+        $since = max(0, (int) $req->get_param('since'));
+
+        $state = kkchat_rtc_load_state($me, $peer, false);
+        if (!$state) {
+          kkchat_json([
+            'ok'         => true,
+            'version'    => 0,
+            'offer'      => null,
+            'answer'     => null,
+            'candidates' => [],
+            'poll_after' => 2,
+          ]);
+        }
+
+        $state   = kkchat_rtc_prune_state($state);
+        $version = (int) ($state['seq'] ?? 0);
+
+        $offer = null;
+        if (!empty($state['offer']) && is_array($state['offer'])) {
+          $from = (int) ($state['offer']['from'] ?? 0);
+          $seq  = (int) ($state['offer']['seq'] ?? 0);
+          if ($from !== $me && $seq > $since) {
+            $offer = [
+              'sdp'  => (string) ($state['offer']['sdp'] ?? ''),
+              'type' => (string) ($state['offer']['type'] ?? 'offer'),
+              'seq'  => $seq,
+            ];
+          }
+        }
+
+        $answer = null;
+        if (!empty($state['answer']) && is_array($state['answer'])) {
+          $from = (int) ($state['answer']['from'] ?? 0);
+          $seq  = (int) ($state['answer']['seq'] ?? 0);
+          if ($from !== $me && $seq > $since) {
+            $answer = [
+              'sdp'  => (string) ($state['answer']['sdp'] ?? ''),
+              'type' => (string) ($state['answer']['type'] ?? 'answer'),
+              'seq'  => $seq,
+            ];
+          }
+        }
+
+        $cands = [];
+        foreach (is_array($state['candidates'] ?? null) ? $state['candidates'] : [] as $cand) {
+          $from = (int) ($cand['from'] ?? 0);
+          $seq  = (int) ($cand['seq'] ?? 0);
+          if ($from === $me) { continue; }
+          if ($seq <= $since) { continue; }
+          $item = [
+            'candidate' => (string) ($cand['candidate'] ?? ''),
+            'seq'       => $seq,
+          ];
+          if (isset($cand['sdpMid'])) {
+            $item['sdpMid'] = (string) $cand['sdpMid'];
+          }
+          if (isset($cand['sdpMLineIndex'])) {
+            $idx = $cand['sdpMLineIndex'];
+            if ($idx !== null && $idx !== '') {
+              $item['sdpMLineIndex'] = (int) $idx;
+            }
+          }
+          $cands[] = $item;
+        }
+
+        kkchat_json([
+          'ok'         => true,
+          'version'    => $version,
+          'offer'      => $offer,
+          'answer'     => $answer,
+          'candidates' => $cands,
+          'poll_after' => 2,
+        ]);
+      },
+      'permission_callback' => '__return_true',
+    ],
+    [
+      'methods'  => 'POST',
+      'callback' => function (WP_REST_Request $req) {
+        kkchat_require_login();
+        kkchat_assert_not_blocked_or_fail();
+
+        $body = $req->get_json_params();
+        if (!is_array($body)) {
+          $body = $req->get_body_params();
+        }
+
+        $peer = isset($body['peer_id']) ? (int) $body['peer_id'] : (int) $req->get_param('peer_id');
+        if ($peer <= 0) {
+          kkchat_json(['ok' => false, 'err' => 'invalid_peer'], 400);
+        }
+
+        $me = kkchat_current_user_id();
+        if ($peer === $me) {
+          kkchat_json(['ok' => false, 'err' => 'invalid_peer'], 400);
+        }
+
+        $kind = isset($body['kind']) ? (string) $body['kind'] : (string) $req->get_param('kind');
+        $kind = strtolower($kind);
+        $data = $body['data'] ?? [];
+        if (!is_array($data)) { $data = []; }
+
+        $state = kkchat_rtc_load_state($me, $peer, true);
+
+        if ($kind === 'offer') {
+          $sdp  = substr((string) ($data['sdp'] ?? ''), 0, 10000);
+          $type = substr((string) ($data['type'] ?? 'offer'), 0, 32);
+          if ($sdp === '') {
+            kkchat_json(['ok' => false, 'err' => 'invalid_offer'], 400);
+          }
+          $seq = kkchat_rtc_next_seq($state);
+          $state['offer'] = [
+            'from' => $me,
+            'sdp'  => $sdp,
+            'type' => $type !== '' ? $type : 'offer',
+            'seq'  => $seq,
+            'at'   => time(),
+          ];
+          $state['answer']     = null;
+          $state['candidates'] = [];
+        } elseif ($kind === 'answer') {
+          $sdp  = substr((string) ($data['sdp'] ?? ''), 0, 10000);
+          $type = substr((string) ($data['type'] ?? 'answer'), 0, 32);
+          if ($sdp === '') {
+            kkchat_json(['ok' => false, 'err' => 'invalid_answer'], 400);
+          }
+          $seq = kkchat_rtc_next_seq($state);
+          $state['answer'] = [
+            'from' => $me,
+            'sdp'  => $sdp,
+            'type' => $type !== '' ? $type : 'answer',
+            'seq'  => $seq,
+            'at'   => time(),
+          ];
+        } elseif ($kind === 'candidate') {
+          $candidate = substr((string) ($data['candidate'] ?? ''), 0, 2000);
+          if ($candidate === '') {
+            kkchat_json(['ok' => false, 'err' => 'invalid_candidate'], 400);
+          }
+          $seq   = kkchat_rtc_next_seq($state);
+          $entry = [
+            'from'      => $me,
+            'candidate' => $candidate,
+            'seq'       => $seq,
+            'at'        => time(),
+          ];
+          if (isset($data['sdpMid'])) {
+            $entry['sdpMid'] = substr((string) $data['sdpMid'], 0, 64);
+          }
+          if (isset($data['sdpMLineIndex'])) {
+            $entry['sdpMLineIndex'] = is_numeric($data['sdpMLineIndex']) ? (int) $data['sdpMLineIndex'] : null;
+          }
+          $state['candidates'][] = $entry;
+          $max = (int) apply_filters('kkchat_rtc_max_candidates', 32);
+          if ($max > 0 && count($state['candidates']) > $max) {
+            $state['candidates'] = array_slice($state['candidates'], -$max);
+          }
+        } else {
+          kkchat_json(['ok' => false, 'err' => 'invalid_kind'], 400);
+        }
+
+        kkchat_rtc_save_state($me, $peer, $state);
+        kkchat_close_session_if_open();
+
+        kkchat_json(['ok' => true, 'version' => (int) ($state['seq'] ?? 0)]);
+      },
+      'permission_callback' => '__return_true',
+    ],
+  ]);
+
+  register_rest_route($ns, '/rtc/clear', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login();
+      kkchat_assert_not_blocked_or_fail();
+
+      $peer = (int) $req->get_param('peer_id');
+      if ($peer <= 0) {
+        kkchat_json(['ok' => false, 'err' => 'invalid_peer'], 400);
+      }
+
+      $me = kkchat_current_user_id();
+      if ($peer === $me) {
+        kkchat_json(['ok' => false, 'err' => 'invalid_peer'], 400);
+      }
+
+      kkchat_rtc_delete_state($me, $peer);
+      kkchat_close_session_if_open();
+
+      kkchat_json(['ok' => true]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
 
 });

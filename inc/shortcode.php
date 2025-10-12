@@ -2897,6 +2897,502 @@ let currentRoom = 'lobby';
 let currentDM = null;
 let LAST_OPEN_DM = null;
 
+  const P2PManager = (() => {
+    const sessions = new Map();
+    const SIGNAL_URL = `${API}/rtc/signal`;
+    const CLEAR_URL  = `${API}/rtc/clear`;
+    const JSON_HEADERS = { ...h, 'Content-Type': 'application/json' };
+    const NEGOTIATION_TIMEOUT_MS = 10000;
+    const POLL_FALLBACK_MS = 2000;
+    const BACKGROUND_PROBE_MS = 60000;
+
+    function sessionFor(peerId) {
+      const id = Number(peerId);
+      if (!Number.isFinite(id) || id <= 0) return null;
+      if (!sessions.has(id)) {
+        sessions.set(id, createSession(id));
+      }
+      return sessions.get(id) || null;
+    }
+
+    function createSession(peerId) {
+      return {
+        peerId,
+        pc: null,
+        dc: null,
+        status: 'idle',
+        isInitiator: Number(ME_ID) < Number(peerId),
+        failTimer: null,
+        pollTimer: null,
+        probeTimer: null,
+        version: 0,
+        lastOfferSeq: 0,
+        lastAnswerSeq: 0,
+        seenCandidateSeqs: new Set(),
+        pendingCandidates: [],
+        sentCandidates: new Set(),
+        fallbackNotified: false,
+        fallbackActive: false,
+        backgroundUntil: 0,
+        serverInitialized: false,
+        highestServerId: 0,
+        recentIncoming: new Map(),
+        placeholders: new Map(),
+      };
+    }
+
+    function ensureSession(peerId) {
+      const session = sessionFor(peerId);
+      if (!session) return null;
+      if (session.status === 'idle') {
+        startNegotiation(session);
+      } else if (session.status === 'fallback') {
+        if (!session.pc && !session.probeTimer && Date.now() < session.backgroundUntil) {
+          startNegotiation(session);
+        }
+      }
+      return session;
+    }
+
+    function startNegotiation(session) {
+      if (!session || session.status === 'connecting') return;
+      clearProbeTimer(session);
+      cleanupPeerConnection(session);
+      session.status = 'connecting';
+      session.pendingCandidates = [];
+      session.sentCandidates = new Set();
+      session.seenCandidateSeqs = new Set();
+      session.lastOfferSeq = 0;
+      session.lastAnswerSeq = 0;
+      clearFailTimer(session);
+      stopPolling(session);
+
+      session.pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      const { pc } = session;
+
+      pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+        const data = {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        };
+        sendSignal(session, 'candidate', data);
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (!pc) return;
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          enterFallback(session, pc.connectionState);
+        }
+      };
+
+      pc.oniceconnectionstatechange = () => {
+        if (!pc) return;
+        const st = pc.iceConnectionState;
+        if (st === 'failed' || st === 'disconnected') {
+          enterFallback(session, st);
+        } else if (st === 'connected' || st === 'completed') {
+          clearFailTimer(session);
+        }
+      };
+
+      pc.ondatachannel = (event) => {
+        if (event && event.channel) {
+          setupChannel(session, event.channel);
+        }
+      };
+
+      if (session.isInitiator) {
+        try {
+          const channel = pc.createDataChannel('kkchat-dm', { ordered: true });
+          setupChannel(session, channel);
+        } catch (_) {}
+        createAndSendOffer(session).catch(() => {
+          enterFallback(session, 'offer-error');
+        });
+      }
+
+      scheduleFailTimer(session);
+      startPolling(session);
+    }
+
+    function scheduleFailTimer(session) {
+      clearFailTimer(session);
+      session.failTimer = setTimeout(() => {
+        if (session.status === 'connecting') {
+          enterFallback(session, 'timeout');
+        }
+      }, NEGOTIATION_TIMEOUT_MS);
+    }
+
+    function clearFailTimer(session) {
+      if (session.failTimer) {
+        clearTimeout(session.failTimer);
+        session.failTimer = null;
+      }
+    }
+
+    function clearProbeTimer(session) {
+      if (session.probeTimer) {
+        clearTimeout(session.probeTimer);
+        session.probeTimer = null;
+      }
+    }
+
+    function cleanupPeerConnection(session) {
+      try { session.dc?.close(); } catch (_) {}
+      try { session.pc?.close(); } catch (_) {}
+      session.dc = null;
+      session.pc = null;
+      session.pendingCandidates = [];
+    }
+
+    function setupChannel(session, channel) {
+      if (!channel) return;
+      session.dc = channel;
+      channel.onopen = () => {
+        clearFailTimer(session);
+        session.status = 'connected';
+        stopPolling(session);
+        clearProbeTimer(session);
+        if (session.fallbackActive) {
+          console.info('P2P 2nd try successful -  Connection found and established');
+          session.fallbackActive = false;
+          session.fallbackNotified = false;
+        }
+        session.backgroundUntil = 0;
+        sendClear(session);
+      };
+      channel.onclose = () => {
+        if (session.status === 'connected') {
+          enterFallback(session, 'channel-closed');
+        }
+      };
+      channel.onerror = () => {
+        if (session.status !== 'fallback') {
+          enterFallback(session, 'channel-error');
+        }
+      };
+      channel.onmessage = (event) => {
+        handleChannelMessage(session, event?.data);
+      };
+    }
+
+    function handleChannelMessage(session, raw) {
+      let payload = null;
+      if (typeof raw === 'string') {
+        try { payload = JSON.parse(raw); } catch (_) { return; }
+      } else if (raw instanceof ArrayBuffer) {
+        try { payload = JSON.parse(new TextDecoder().decode(raw)); } catch (_) { return; }
+      }
+      if (!payload || typeof payload !== 'object') return;
+      if (payload.type === 'message') {
+        const text = typeof payload.text === 'string' ? payload.text : '';
+        if (!text) return;
+        noteIncomingViaP2P(session, text);
+        console.info('[P2P] Received DM via peer-to-peer channel', { peerId: session.peerId, text });
+        appendIncomingP2PMessage(session.peerId, text, payload);
+      }
+    }
+
+    function noteIncomingViaP2P(session, text) {
+      const key = textKey(text);
+      if (!key) return;
+      cleanupRecentIncoming(session);
+      session.recentIncoming.set(key, Date.now() + 30000);
+    }
+
+    function cleanupRecentIncoming(session) {
+      const now = Date.now();
+      for (const [key, expiry] of session.recentIncoming.entries()) {
+        if (!expiry || expiry <= now) {
+          session.recentIncoming.delete(key);
+        }
+      }
+    }
+
+    function textKey(text) {
+      return (text || '').toString().slice(0, 200);
+    }
+
+    async function createAndSendOffer(session) {
+      if (!session.pc) return;
+      try {
+        const offer = await session.pc.createOffer();
+        await session.pc.setLocalDescription(offer);
+        await sendSignal(session, 'offer', { sdp: offer.sdp, type: offer.type });
+      } catch (err) {
+        throw err;
+      }
+    }
+
+    async function handleRemoteOffer(session, offer) {
+      if (!session.pc || session.isInitiator) return;
+      const seq = Number(offer?.seq ?? 0);
+      if (seq && seq <= session.lastOfferSeq) return;
+      const desc = { type: offer?.type || 'offer', sdp: offer?.sdp || '' };
+      if (!desc.sdp) return;
+      session.lastOfferSeq = seq || session.lastOfferSeq;
+      try {
+        await session.pc.setRemoteDescription(new RTCSessionDescription(desc));
+        await flushPendingCandidates(session);
+        const answer = await session.pc.createAnswer();
+        await session.pc.setLocalDescription(answer);
+        await sendSignal(session, 'answer', { sdp: answer.sdp, type: answer.type });
+      } catch (_) {
+        enterFallback(session, 'offer-set');
+      }
+    }
+
+    async function handleRemoteAnswer(session, answer) {
+      if (!session.pc || !session.isInitiator) return;
+      const seq = Number(answer?.seq ?? 0);
+      if (seq && seq <= session.lastAnswerSeq) return;
+      const desc = { type: answer?.type || 'answer', sdp: answer?.sdp || '' };
+      if (!desc.sdp) return;
+      session.lastAnswerSeq = seq || session.lastAnswerSeq;
+      try {
+        await session.pc.setRemoteDescription(new RTCSessionDescription(desc));
+        await flushPendingCandidates(session);
+      } catch (_) {
+        enterFallback(session, 'answer-set');
+      }
+    }
+
+    async function handleRemoteCandidate(session, cand) {
+      if (!session.pc) return;
+      const seq = Number(cand?.seq ?? 0);
+      if (seq && session.seenCandidateSeqs.has(seq)) return;
+      if (seq) session.seenCandidateSeqs.add(seq);
+      const ice = {
+        candidate: cand?.candidate || '',
+        sdpMid: cand?.sdpMid ?? null,
+        sdpMLineIndex: cand?.sdpMLineIndex ?? null,
+      };
+      if (!ice.candidate) return;
+      if (session.pc.remoteDescription) {
+        try { await session.pc.addIceCandidate(new RTCIceCandidate(ice)); }
+        catch (_) {}
+      } else {
+        session.pendingCandidates.push(ice);
+      }
+    }
+
+    async function flushPendingCandidates(session) {
+      if (!session.pc || !session.pc.remoteDescription) return;
+      while (session.pendingCandidates.length) {
+        const ice = session.pendingCandidates.shift();
+        if (!ice) continue;
+        try { await session.pc.addIceCandidate(new RTCIceCandidate(ice)); }
+        catch (_) {}
+      }
+    }
+
+    async function sendSignal(session, kind, data) {
+      if (!session) return;
+      if (kind === 'candidate') {
+        const signature = [data?.candidate || '', data?.sdpMid || '', data?.sdpMLineIndex ?? ''].join('|');
+        if (session.sentCandidates.has(signature)) return;
+        session.sentCandidates.add(signature);
+      }
+      const body = { peer_id: session.peerId, kind, data };
+      try {
+        const resp = await fetch(SIGNAL_URL, {
+          method: 'POST',
+          credentials: 'include',
+          headers: JSON_HEADERS,
+          body: JSON.stringify(body)
+        });
+        const js = await resp.json().catch(() => null);
+        if (resp.ok && js && Number.isFinite(+js.version)) {
+          session.version = Math.max(session.version, Number(js.version));
+        }
+      } catch (_) {}
+    }
+
+    function startPolling(session) {
+      stopPolling(session);
+      pollSignals(session).catch(() => {
+        session.pollTimer = setTimeout(() => pollSignals(session).catch(()=>{}), POLL_FALLBACK_MS);
+      });
+    }
+
+    function stopPolling(session) {
+      if (session.pollTimer) {
+        clearTimeout(session.pollTimer);
+        session.pollTimer = null;
+      }
+    }
+
+    async function pollSignals(session) {
+      if (!session || session.status === 'fallback') return;
+      const params = new URLSearchParams({
+        peer_id: String(session.peerId),
+        since: String(session.version || 0)
+      });
+      try {
+        const resp = await fetch(`${SIGNAL_URL}?${params.toString()}`, {
+          credentials: 'include',
+          headers: h
+        });
+        const js = await resp.json().catch(() => null);
+        if (resp.ok && js) {
+          if (Number.isFinite(+js.version)) {
+            session.version = Math.max(session.version, Number(js.version));
+          }
+          if (js.offer) {
+            await handleRemoteOffer(session, js.offer);
+          }
+          if (js.answer) {
+            await handleRemoteAnswer(session, js.answer);
+          }
+          if (Array.isArray(js.candidates)) {
+            for (const cand of js.candidates) {
+              await handleRemoteCandidate(session, cand);
+            }
+          }
+          if (session.status === 'fallback') { return; }
+          const wait = Math.max(500, Math.round((Number(js.poll_after) || 2) * 1000));
+          session.pollTimer = setTimeout(() => {
+            pollSignals(session).catch(() => {
+              session.pollTimer = setTimeout(() => pollSignals(session).catch(()=>{}), POLL_FALLBACK_MS);
+            });
+          }, wait);
+          return;
+        }
+      } catch (_) {}
+      if (session.status !== 'fallback') {
+        session.pollTimer = setTimeout(() => pollSignals(session).catch(()=>{}), 3000);
+      }
+    }
+
+    function enterFallback(session, reason) {
+      if (!session) return;
+      if (session.status === 'fallback' && !session.pc) return;
+      cleanupPeerConnection(session);
+      stopPolling(session);
+      clearFailTimer(session);
+      if (!session.fallbackNotified) {
+        console.warn("Couldn't establish a peer-to-peer connection. Using fallback transport.");
+        session.fallbackNotified = true;
+      }
+      session.status = 'fallback';
+      session.fallbackActive = true;
+      session.backgroundUntil = Date.now() + BACKGROUND_PROBE_MS;
+      scheduleProbe(session);
+    }
+
+    function scheduleProbe(session) {
+      if (Date.now() >= session.backgroundUntil) return;
+      if (session.probeTimer) return;
+      session.probeTimer = setTimeout(() => {
+        session.probeTimer = null;
+        if (session.status === 'fallback') {
+          startNegotiation(session);
+        }
+      }, 7000);
+    }
+
+    async function sendClear(session) {
+      try {
+        await fetch(CLEAR_URL, {
+          method: 'POST',
+          credentials: 'include',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ peer_id: session.peerId })
+        });
+      } catch (_) {}
+    }
+
+    function prepareForServerSync(peerId) {
+      const session = sessions.get(Number(peerId));
+      if (!session) return;
+      session.placeholders.forEach(item => {
+        try { item?.element?.remove?.(); } catch (_) {}
+      });
+      session.placeholders.clear();
+    }
+
+    function wasReceivedViaP2P(session, text) {
+      cleanupRecentIncoming(session);
+      const key = textKey(text);
+      if (!key) return false;
+      const expiry = session.recentIncoming.get(key);
+      if (expiry && expiry > Date.now()) {
+        session.recentIncoming.delete(key);
+        return true;
+      }
+      if (expiry) {
+        session.recentIncoming.delete(key);
+      }
+      return false;
+    }
+
+    function handleServerMessages(peerId, messages) {
+      const session = sessions.get(Number(peerId));
+      if (!session) return;
+      cleanupRecentIncoming(session);
+      if (!session.serverInitialized) {
+        let maxId = session.highestServerId || 0;
+        for (const msg of messages) {
+          const mid = Number(msg?.id);
+          if (Number.isFinite(mid)) {
+            maxId = Math.max(maxId, mid);
+          }
+        }
+        session.highestServerId = maxId;
+        session.serverInitialized = true;
+        return;
+      }
+      for (const msg of messages) {
+        const mid = Number(msg?.id);
+        if (!Number.isFinite(mid)) continue;
+        if (mid <= session.highestServerId) continue;
+        session.highestServerId = Math.max(session.highestServerId, mid);
+        if (Number(msg?.sender_id) === Number(peerId)) {
+          const text = typeof msg?.content === 'string' ? msg.content : '';
+          if (!wasReceivedViaP2P(session, text)) {
+            console.info('[P2P] Received DM via fallback transport', { peerId, text });
+          }
+        }
+      }
+    }
+
+    function registerPlaceholder(peerId, placeholderId, element, text) {
+      const session = sessions.get(Number(peerId));
+      if (!session || !placeholderId || !element) return;
+      session.placeholders.set(placeholderId, { element, text: text || '' });
+    }
+
+    function sendMessage(peerId, text) {
+      const session = ensureSession(peerId);
+      if (!session) return false;
+      const channel = session.dc;
+      if (channel && channel.readyState === 'open') {
+        try {
+          const payload = { type: 'message', text, from: ME_ID, name: ME_NM, ts: Date.now() };
+          channel.send(JSON.stringify(payload));
+          console.info('[P2P] Sent DM via peer-to-peer channel', { peerId, text });
+          return true;
+        } catch (_) {}
+      }
+      console.info('[P2P] Sent DM via fallback transport', { peerId, text });
+      return false;
+    }
+
+    return {
+      ensureSession,
+      sendMessage,
+      prepareForServerSync,
+      handleServerMessages,
+      registerPlaceholder,
+    };
+  })();
+
   function defaultRoomSlug(){
 
     const gen = ROOMS.find(r=> r.slug==='lobby' && r.allowed);
@@ -3697,6 +4193,7 @@ function handleStreamSync(js, context){
       html: pubList.innerHTML
     });
   } else {
+    P2PManager.prepareForServerSync(context.to);
     const raw = Array.isArray(js?.messages) ? js.messages : [];
     const between = raw.filter(m => {
       const sid = Number(m.sender_id);
@@ -3708,6 +4205,8 @@ function handleStreamSync(js, context){
       const sid = Number(m.sender_id);
       return !isBlocked(sid) || sid === ME_ID;
     });
+
+    P2PManager.handleServerMessages(context.to, mine);
 
     const items = (isCold ? mine.slice(-FIRST_LOAD_LIMIT) : mine).map(m => ({
       ...m,
@@ -3799,6 +4298,8 @@ async function openDM(id) {
   currentDM = Number(id);
   LAST_OPEN_DM = currentDM;
   UNREAD_PER[currentDM] = 0;
+
+  try { P2PManager.ensureSession(currentDM); } catch (_) {}
 
   // Recompute total DM unread so the left badge updates immediately
   try {
@@ -4086,6 +4587,39 @@ function appendPendingMessage(text){
   return li;
 }
 
+function appendIncomingP2PMessage(peerId, text, meta){
+  if (!pubList) return null;
+  if (currentDM == null || Number(currentDM) !== Number(peerId)) return null;
+
+  const wasAtBottom = atBottom(pubList);
+  const tempId = `p2p-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const li = document.createElement('li');
+  li.className = 'item them p2p-temp';
+  li.dataset.p2pTemp = tempId;
+  li.dataset.p2pPeer = String(peerId);
+
+  const ts = Number(meta?.ts ?? Date.now());
+  const stamp = new Date(Number.isFinite(ts) ? ts : Date.now());
+  const hh = String(stamp.getHours()).padStart(2, '0');
+  const mm = String(stamp.getMinutes()).padStart(2, '0');
+
+  li.innerHTML = `
+    <div class="msg"><div class="bubble chat">${escapeHtml(text)}</div></div>
+    <div class="small"><span class="time">${hh}:${mm}</span></div>
+  `;
+
+  pubList.appendChild(li);
+  try { pruneList(pubList, 300); } catch (_) {}
+  try { markVisible(pubList); } catch (_) {}
+  try { watchNewImages(pubList); } catch (_) {}
+  if (AUTO_SCROLL || wasAtBottom) {
+    scrollToBottom(pubList, false);
+  }
+
+  try { P2PManager.registerPlaceholder(peerId, tempId, li, text); } catch (_) {}
+  return li;
+}
+
 pubForm.addEventListener('submit', async (e)=>{
   e.preventDefault();
 
@@ -4097,6 +4631,13 @@ pubForm.addEventListener('submit', async (e)=>{
 
   if (currentDM) fd.append('recipient_id', String(currentDM));
   else fd.append('room', currentRoom);
+
+  if (currentDM) {
+    try {
+      P2PManager.ensureSession(currentDM);
+      P2PManager.sendMessage(currentDM, txt);
+    } catch (_) {}
+  }
 
   const pending = appendPendingMessage(txt);
 
