@@ -651,6 +651,13 @@ const camFlip   = document.getElementById('kk-camFlip');
   const imgActBlock  = document.getElementById('kk-img-act-block');
 
   const h = {'X-WP-Nonce': REST_NONCE};
+  const WS_ENABLED = <?= kkchat_realtime_enabled() ? 'true' : 'false' ?>;
+
+  let realtimeSocket = null;
+  let realtimeConnectTimer = null;
+  let realtimeAttempt = 0;
+  let realtimePollCooldownUntil = 0;
+  let realtimeUnreadTimer = null;
 
   let redirectingToLogin = false;
   async function maybeRedirectToLogin(response){
@@ -820,6 +827,187 @@ let multiTabReadyResolve;
 const multiTabReady = new Promise(resolve => { multiTabReadyResolve = resolve; });
 let MULTITAB_LOCKED = false;
 let MULTITAB_IS_ACTIVE = false;
+
+function realtimeSupported(){
+  return WS_ENABLED && typeof window.WebSocket === 'function';
+}
+
+function startRealtime(delayMs){
+  if (!realtimeSupported()) return;
+  stopRealtimeTimer();
+  const wait = Math.max(0, Number.isFinite(delayMs) ? delayMs : 0);
+  realtimeConnectTimer = setTimeout(async () => {
+    realtimeConnectTimer = null;
+    try {
+      const info = await fetchRealtimeToken();
+      connectRealtime(info);
+    } catch (err) {
+      realtimeAttempt++;
+      scheduleRealtimeReconnect();
+    }
+  }, wait);
+}
+
+function stopRealtimeTimer(){
+  if (realtimeConnectTimer) {
+    clearTimeout(realtimeConnectTimer);
+    realtimeConnectTimer = null;
+  }
+}
+
+async function fetchRealtimeToken(){
+  const resp = await fetch(`${API}/ws/token`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'X-WP-Nonce': REST_NONCE,
+      'Accept': 'application/json',
+    },
+  });
+  if (!resp.ok) {
+    throw new Error(`ws token ${resp.status}`);
+  }
+  const js = await resp.json();
+  if (!js || !js.ok || !js.url) {
+    throw new Error('ws token bad');
+  }
+  return js;
+}
+
+function connectRealtime(info){
+  if (!info || !info.url) {
+    throw new Error('ws missing url');
+  }
+  try {
+    const ws = new WebSocket(info.url);
+    realtimeSocket = ws;
+
+    ws.addEventListener('open', () => {
+      realtimeAttempt = 0;
+      realtimePollCooldownUntil = Date.now() + 800;
+    });
+
+    ws.addEventListener('message', handleRealtimeMessage);
+    ws.addEventListener('error', () => {
+      try { ws.close(); } catch(_) {}
+    });
+    ws.addEventListener('close', () => {
+      realtimeSocket = null;
+      realtimeAttempt++;
+      scheduleRealtimeReconnect('close');
+    });
+  } catch (err) {
+    realtimeSocket = null;
+    realtimeAttempt++;
+    scheduleRealtimeReconnect('error');
+    throw err;
+  }
+}
+
+function scheduleRealtimeReconnect(reason){
+  if (!realtimeSupported()) return;
+  if (realtimeConnectTimer) return;
+  const attempt = Math.min(realtimeAttempt, 6);
+  const base = 1000 * Math.pow(1.8, attempt);
+  const jitter = Math.random() * 250;
+  const wait = Math.min(16000, Math.max(1200, base + jitter));
+  realtimeConnectTimer = setTimeout(() => {
+    realtimeConnectTimer = null;
+    startRealtime();
+  }, wait);
+}
+
+function sendRealtime(data){
+  if (!realtimeSocket || realtimeSocket.readyState !== WebSocket.OPEN) return;
+  try {
+    realtimeSocket.send(JSON.stringify(data));
+  } catch (_) {}
+}
+
+function handleRealtimeMessage(evt){
+  if (!evt || typeof evt.data !== 'string') return;
+  let msg;
+  try {
+    msg = JSON.parse(evt.data);
+  } catch (_) {
+    return;
+  }
+  if (!msg || typeof msg !== 'object') return;
+
+  if (msg.type === 'ready') {
+    realtimeAttempt = 0;
+    return;
+  }
+  if (msg.type === 'ping') {
+    sendRealtime({ type: 'pong', ts: Date.now() });
+    return;
+  }
+  if (msg.type === 'event') {
+    handleRealtimeEvent(msg);
+    return;
+  }
+}
+
+function handleRealtimeEvent(message){
+  if (!message || typeof message !== 'object') return;
+  const payload = message.payload || {};
+  if (!payload || typeof payload !== 'object') return;
+
+  if (payload.kind === 'message') {
+    const ctx = payload.context || 'room';
+    if (ctx === 'room') {
+      const slug = payload.room || 'general';
+      if (currentDM == null && slug && slug === currentRoom) {
+        triggerRealtimePoll(true);
+      } else {
+        scheduleRealtimeUnread();
+      }
+    } else if (ctx === 'dm') {
+      const target = Number(payload.recipient_id || 0);
+      const sender = Number(payload.sender_id || 0);
+      const active = currentDM != null ? Number(currentDM) : null;
+      if (active != null && (active === target || active === sender)) {
+        triggerRealtimePoll(true);
+      } else {
+        scheduleRealtimeUnread();
+      }
+    } else {
+      scheduleRealtimeUnread();
+    }
+  }
+}
+
+function triggerRealtimePoll(forceCold){
+  if (forceCold == null) forceCold = false;
+  const now = Date.now();
+  if (now < realtimePollCooldownUntil) return;
+  realtimePollCooldownUntil = now + 1200;
+  const state = desiredStreamState?.();
+  if (!state) return;
+
+  if (POLL_IS_LEADER) {
+    performPoll(forceCold, { allowSuspended: true }).catch(()=>{});
+  } else {
+    requestLeaderSync(forceCold);
+  }
+}
+
+function scheduleRealtimeUnread(delayMs){
+  if (!Number.isFinite(delayMs) || delayMs == null) delayMs = 900;
+  if (realtimeUnreadTimer) return;
+  realtimeUnreadTimer = setTimeout(() => {
+    realtimeUnreadTimer = null;
+    refreshUsersAndUnread().catch(()=>{});
+  }, Math.max(300, delayMs));
+}
+
+function closeRealtime(){
+  stopRealtimeTimer();
+  if (realtimeSocket) {
+    try { realtimeSocket.close(); } catch(_) {}
+    realtimeSocket = null;
+  }
+}
 
 function signalMultiTabReady(){
   if (multiTabReadyResolve) {
@@ -3777,7 +3965,11 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('online', () => {
+  pollActive().catch(()=>{});
+  restartStream();
+  if (realtimeSupported()) startRealtime(500);
+});
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -4832,6 +5024,10 @@ window.addEventListener('pagehide', beaconPing, { capture: true });
 window.addEventListener('beforeunload', beaconPing, { capture: true });
 // Some browsers fire 'freeze' when putting a page in BFCache
 window.addEventListener('freeze', beaconPing, { capture: true });
+window.addEventListener('pagehide', () => closeRealtime(), { capture: true });
+window.addEventListener('beforeunload', () => closeRealtime(), { capture: true });
+window.addEventListener('freeze', () => closeRealtime(), { capture: true });
+window.addEventListener('offline', () => closeRealtime());
 
 async function refreshUsersAndUnread(){
   try {
@@ -4864,6 +5060,10 @@ async function init(){
     await unreadPromise;
   } catch (e) {
     // optionally log e
+  }
+
+  if (realtimeSupported()) {
+    startRealtime();
   }
 
   maybeToggleFab();

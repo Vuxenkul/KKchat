@@ -732,6 +732,42 @@ add_action('rest_api_init', function () {
     'permission_callback' => '__return_true',
   ]);
 
+  register_rest_route($ns, '/ws/token', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login();
+      kkchat_assert_not_blocked_or_fail();
+      nocache_headers();
+
+      if (!kkchat_realtime_enabled()) {
+        kkchat_json(['ok' => false, 'err' => 'ws_disabled'], 403);
+      }
+
+      $userId = kkchat_current_user_id();
+      $meta = [
+        'is_guest' => kkchat_is_guest() ? 1 : 0,
+        'is_admin' => kkchat_is_admin() ? 1 : 0,
+      ];
+      $token  = kkchat_realtime_issue_token($userId, ['global'], $meta);
+      if (!$token || empty($token['url'])) {
+        kkchat_json(['ok' => false, 'err' => 'ws_token_failed'], 500);
+      }
+
+      $heartbeat = (int) apply_filters('kkchat_websocket_client_heartbeat', 25);
+      if ($heartbeat <= 0) { $heartbeat = 25; }
+
+      kkchat_json([
+        'ok'        => true,
+        'token'     => $token['token'],
+        'url'       => $token['url'],
+        'expires'   => $token['expires'],
+        'channels'  => $token['channels'],
+        'heartbeat' => $heartbeat,
+      ]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
 
   register_rest_route($ns, '/logout', [
     'methods'  => ['GET','POST'],
@@ -1697,6 +1733,23 @@ register_rest_route($ns, '/fetch', [
       ));
     }
     
+    $eventPayload = [
+      'kind'        => 'message',
+      'context'     => $recipient !== null ? 'dm' : 'room',
+      'room'        => $recipient === null ? $room : null,
+      'recipient_id'=> $recipient,
+      'sender_id'   => $me_id,
+      'message_id'  => $mid,
+    ];
+
+    kkchat_realtime_publish('global', $eventPayload);
+    if ($recipient !== null) {
+      kkchat_realtime_publish('dm:' . (int) $recipient, $eventPayload);
+      kkchat_realtime_publish('dm:' . (int) $me_id, $eventPayload);
+    } elseif ($room !== null) {
+      kkchat_realtime_publish('room:' . kkchat_realtime_sanitize_channel($room), $eventPayload);
+    }
+
     kkchat_json(['ok'=>true,'id'=>$mid]);
 
     },

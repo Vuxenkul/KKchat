@@ -2,7 +2,7 @@
 /**
  * Plugin Name: KKchat
  * Description: Lightweight public chat + DMs with rooms, unread, autoscroll lock, scheduled banners, and moderation (admin usernames, kick with duration & cause, IP ban, backend unblock). Adds Word Rules (forbid/watchlist) with auto-kick/IP ban and admin UI. Admins see live typing previews. Includes backend logs (searchable by username) with sender/recipient IPs and manual IP ban. Admin sidebar has a ðŸ§¾ button to open an overlay with the selected user's full message history (with IPs).
- * Version: 1.7.0
+ * Version: 1.8.0
  * Author: KK
  * Text Domain: kkchat
  */
@@ -35,6 +35,7 @@ function kkchat_tables(){
     'rules'       => $p.'rules',      // ← was kkchat_word_rules
     'reports'     => $p.'reports',
     'user_blocks' => $p.'user_blocks',
+    'realtime_events' => $p.'realtime_events',
   ];
 }
 
@@ -885,6 +886,7 @@ if (!function_exists('kkchat_rest_logout')) {
  * Load modules
  * ------------------------------ */
 require_once KKCHAT_PATH.'inc/schema.php';      // activation/deactivation, dbDelta, upgrade, cron
+require_once KKCHAT_PATH.'inc/realtime.php';    // websocket helpers & tokens
 require_once KKCHAT_PATH.'inc/rest.php';        // all REST routes (public + admin)
 if (is_admin()) {
   require_once KKCHAT_PATH.'inc/admin-pages.php'; // admin screens

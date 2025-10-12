@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '7');
+  define('KKCHAT_DB_VERSION', '8');
 }
 
 /**
@@ -180,10 +180,20 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     KEY `idx_active` (`active`)
   ) $charset;";
 
+  $sql10 = "CREATE TABLE IF NOT EXISTS `{$t['realtime_events']}` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `channel` VARCHAR(191) NOT NULL,
+    `payload` LONGTEXT NOT NULL,
+    `created_at` INT UNSIGNED NOT NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_channel` (`channel`),
+    KEY `idx_created` (`created_at`)
+  ) $charset;";
+
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
   dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4);
   dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8);
-  dbDelta($sql9);
+  dbDelta($sql9); dbDelta($sql10);
 
   // Seed default room if none exists
   $has_rooms = (int)$wpdb->get_var("SELECT COUNT(*) FROM `{$t['rooms']}`");
