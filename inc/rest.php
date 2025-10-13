@@ -25,12 +25,11 @@ add_action('rest_api_init', function () {
      * @param int   $now           Current unix timestamp for freshness/TTL checks.
      * @param int   $window        Seconds of recency to include (<=0 disables the cutoff).
      * @param array $admin_names   Lower-cased admin WP usernames for flagging.
-     * @param array $opts          Optional flags: include_typing, include_flagged.
+     * @param array $opts          Optional flags: include_flagged.
      */
     function kkchat_public_presence_snapshot(int $now, int $window, array $admin_names, array $opts = []): array {
       global $wpdb; $t = kkchat_tables();
 
-      $includeTyping  = !empty($opts['include_typing']);
       $includeFlagged = !empty($opts['include_flagged']);
 
       $limit = (int) apply_filters('kkchat_public_presence_limit', 400);
@@ -39,12 +38,6 @@ add_action('rest_api_init', function () {
 
       $cols = ['id','name','gender','wp_username'];
       if ($includeFlagged) { $cols[] = 'watch_flag'; }
-      if ($includeTyping) {
-        $cols[] = 'typing_text';
-        $cols[] = 'typing_room';
-        $cols[] = 'typing_to';
-        $cols[] = 'typing_at';
-      }
 
       $select = implode(',', $cols);
 
@@ -53,8 +46,7 @@ add_action('rest_api_init', function () {
       if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
         $bucket   = max(1, $cacheTtl);
         $cacheKey = sprintf(
-          'presence:%s:%s:%d:%d:%d',
-          $includeTyping ? 't1' : 't0',
+          'presence:%s:%d:%d:%d',
           $includeFlagged ? 'f1' : 'f0',
           $window,
           $limit,
@@ -100,19 +92,6 @@ add_action('rest_api_init', function () {
 
         if ($includeFlagged) {
           $entry['flagged'] = !empty($r['watch_flag']) ? 1 : 0;
-        }
-
-        if ($includeTyping) {
-          $typing = null;
-          if (!empty($r['typing_text']) && (int) ($r['typing_at'] ?? 0) > $now - 8) {
-            $typing = [
-              'text' => (string) ($r['typing_text'] ?? ''),
-              'room' => ($r['typing_room'] ?? '') !== '' ? (string) $r['typing_room'] : null,
-              'to'   => isset($r['typing_to']) ? (int) $r['typing_to'] : null,
-              'at'   => (int) ($r['typing_at'] ?? 0),
-            ];
-          }
-          $entry['typing'] = $typing;
         }
 
         if ($entry['id'] > 0) {
@@ -201,22 +180,44 @@ add_action('rest_api_init', function () {
             AND %d - watch_flag_at > %d",
         $now, kkchat_watch_reset_after()
       ));
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL
-          WHERE typing_at IS NOT NULL AND %d - typing_at > 10",
-        $now
-      ));
-
       $admin_names = kkchat_admin_usernames();
       $presence    = [];
       if ($is_admin_viewer) {
         $presence_rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username,last_seen
-               FROM {$t['users']}
-              WHERE %d - last_seen <= %d
-              ORDER BY name_lc ASC
+            "SELECT u.id,
+                    u.name,
+                    u.gender,
+                    u.watch_flag,
+                    u.wp_username,
+                    u.last_seen,
+                    lm.last_content,
+                    lm.last_room,
+                    lm.last_recipient_id,
+                    lm.last_recipient_name,
+                    lm.last_kind,
+                    lm.last_created_at
+               FROM {$t['users']} u
+          LEFT JOIN (
+                SELECT m.sender_id,
+                       SUBSTRING(m.content, 1, 200) AS last_content,
+                       m.room AS last_room,
+                       m.recipient_id AS last_recipient_id,
+                       m.recipient_name AS last_recipient_name,
+                       m.kind AS last_kind,
+                       m.created_at AS last_created_at
+                  FROM {$t['messages']} m
+            INNER JOIN (
+                      SELECT sender_id, MAX(id) AS last_id
+                        FROM {$t['messages']}
+                       WHERE hidden_at IS NULL
+                    GROUP BY sender_id
+                    ) latest
+                    ON latest.sender_id = m.sender_id AND latest.last_id = m.id
+                 WHERE m.hidden_at IS NULL
+              ) lm ON lm.sender_id = u.id
+              WHERE %d - u.last_seen <= %d
+              ORDER BY u.name_lc ASC
               LIMIT %d",
             $now,
             max(30, (int) apply_filters('kkchat_presence_active_sec', 60)),
@@ -226,30 +227,36 @@ add_action('rest_api_init', function () {
         ) ?: [];
 
         foreach ($presence_rows as $r) {
-          $typing = null;
-          if (!empty($r['typing_text']) && (int) $r['typing_at'] > $now - 8) {
-            $typing = [
-              'text' => (string) ($r['typing_text'] ?? ''),
-              'room' => ($r['typing_room'] ?? '') !== '' ? (string) $r['typing_room'] : null,
-              'to'   => isset($r['typing_to']) ? (int) $r['typing_to'] : null,
-              'at'   => (int) ($r['typing_at'] ?? 0),
+          $lastMsg = null;
+          if (
+            isset($r['last_content']) ||
+            isset($r['last_room']) ||
+            isset($r['last_recipient_id']) ||
+            isset($r['last_kind'])
+          ) {
+            $lastMsg = [
+              'text'            => (string) ($r['last_content'] ?? ''),
+              'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
+              'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
+              'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
+              'kind'            => (string) ($r['last_kind'] ?? 'chat'),
+              'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
             ];
           }
 
           $presence[] = [
-            'id'       => (int) ($r['id'] ?? 0),
-            'name'     => (string) ($r['name'] ?? ''),
-            'gender'   => (string) ($r['gender'] ?? ''),
-            'typing'   => $typing,
-            'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
-            'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-            'last_seen'=> (int) ($r['last_seen'] ?? 0),
+            'id'            => (int) ($r['id'] ?? 0),
+            'name'          => (string) ($r['name'] ?? ''),
+            'gender'        => (string) ($r['gender'] ?? ''),
+            'flagged'       => !empty($r['watch_flag']) ? 1 : 0,
+            'is_admin'      => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+            'last_seen'     => (int) ($r['last_seen'] ?? 0),
+            'last_message'  => $lastMsg,
           ];
         }
       } else {
         $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
         $presence = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [
-          'include_typing'  => false,
           'include_flagged' => false,
         ]);
       }
@@ -1038,9 +1045,6 @@ register_rest_route($ns, '/users', [
     $is_admin_viewer = kkchat_is_admin();
     $admin_names     = kkchat_admin_usernames();
 
-    // Query param (read-only); allow "1", 1, true-ish.
-    $typingOnly = ((string) $req->get_param('typing_only') === '1');
-
     // Public presence lists should stay lean — limit non-admin views to
     // recently active users (default: last 2 minutes).
     $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
@@ -1071,75 +1075,77 @@ register_rest_route($ns, '/users', [
       )
     );
 
-    // ADMIN: typing-only slice (last 8s)
-    if ($is_admin_viewer && $typingOnly) {
-      $rows = $wpdb->get_results(
-        $wpdb->prepare(
-          "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username
-             FROM {$t['users']}
-            WHERE typing_at IS NOT NULL
-              AND %d - typing_at <= 8
-         ORDER BY name ASC",
-          $now
-        ),
-        ARRAY_A
-      );
-
-      $out = [];
-      foreach ($rows ?? [] as $r) {
-        $out[] = [
-          'id'       => (int) $r['id'],
-          'name'     => (string) $r['name'],
-          'gender'   => (string) ($r['gender'] ?? ''),
-          'typing'   => [
-            'text' => (string) ($r['typing_text'] ?? ''),
-            'room' => ($r['typing_room'] ?? '') !== '' ? (string) $r['typing_room'] : null,
-            'to'   => isset($r['typing_to']) ? (int) $r['typing_to'] : null,
-            'at'   => (int) ($r['typing_at'] ?? 0),
-          ],
-          'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
-          'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-        ];
-      }
-      return kkchat_json($out);
-    }
-
-    // ADMIN: full presence with recent typing
     if ($is_admin_viewer) {
       $rows = $wpdb->get_results(
-        "SELECT id,name,gender,typing_text,typing_room,typing_to,typing_at,watch_flag,wp_username
-           FROM {$t['users']}
-       ORDER BY name ASC",
+        "SELECT u.id,
+                u.name,
+                u.gender,
+                u.watch_flag,
+                u.wp_username,
+                u.last_seen,
+                lm.last_content,
+                lm.last_room,
+                lm.last_recipient_id,
+                lm.last_recipient_name,
+                lm.last_kind,
+                lm.last_created_at
+           FROM {$t['users']} u
+      LEFT JOIN (
+            SELECT m.sender_id,
+                   SUBSTRING(m.content, 1, 200) AS last_content,
+                   m.room AS last_room,
+                   m.recipient_id AS last_recipient_id,
+                   m.recipient_name AS last_recipient_name,
+                   m.kind AS last_kind,
+                   m.created_at AS last_created_at
+              FROM {$t['messages']} m
+        INNER JOIN (
+                  SELECT sender_id, MAX(id) AS last_id
+                    FROM {$t['messages']}
+                   WHERE hidden_at IS NULL
+                GROUP BY sender_id
+                ) latest
+                ON latest.sender_id = m.sender_id AND latest.last_id = m.id
+             WHERE m.hidden_at IS NULL
+          ) lm ON lm.sender_id = u.id
+       ORDER BY u.name ASC",
         ARRAY_A
       );
 
       $out = [];
       foreach ($rows ?? [] as $r) {
-        $typing = null;
-        if (!empty($r['typing_text']) && (int) $r['typing_at'] > $now - 8) {
-          $typing = [
-            'text' => (string) $r['typing_text'],
-            'room' => ($r['typing_room'] ?? '') !== '' ? (string) $r['typing_room'] : null,
-            'to'   => isset($r['typing_to']) ? (int) $r['typing_to'] : null,
-            'at'   => (int) $r['typing_at'],
+        $lastMsg = null;
+        if (
+          isset($r['last_content']) ||
+          isset($r['last_room']) ||
+          isset($r['last_recipient_id']) ||
+          isset($r['last_kind'])
+        ) {
+          $lastMsg = [
+            'text'            => (string) ($r['last_content'] ?? ''),
+            'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
+            'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
+            'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
+            'kind'            => (string) ($r['last_kind'] ?? 'chat'),
+            'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
           ];
         }
 
         $out[] = [
-          'id'       => (int) $r['id'],
-          'name'     => (string) $r['name'],
-          'gender'   => (string) ($r['gender'] ?? ''),
-          'typing'   => $typing,
-          'flagged'  => !empty($r['watch_flag']) ? 1 : 0,
-          'is_admin' => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+          'id'           => (int) $r['id'],
+          'name'         => (string) $r['name'],
+          'gender'       => (string) ($r['gender'] ?? ''),
+          'flagged'      => !empty($r['watch_flag']) ? 1 : 0,
+          'is_admin'     => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+          'last_seen'    => (int) ($r['last_seen'] ?? 0),
+          'last_message' => $lastMsg,
         ];
       }
       return kkchat_json($out);
     }
 
-    // NON-ADMIN: no typing detail, minimal fields
+    // NON-ADMIN: minimal fields
     $rows = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [
-      'include_typing'  => false,
       'include_flagged' => false,
     ]);
 
@@ -1189,20 +1195,6 @@ register_rest_route($ns, '/ping', [
             AND %d - watch_flag_at > %d",
         $now,
         kkchat_watch_reset_after()
-      )
-    );
-
-    // Clear stale typing previews (>10s)
-    $wpdb->query(
-      $wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET typing_text = NULL,
-                typing_room = NULL,
-                typing_to   = NULL,
-                typing_at   = NULL
-          WHERE typing_at IS NOT NULL
-            AND %d - typing_at > 10",
-        $now
       )
     );
 
@@ -1595,8 +1587,6 @@ register_rest_route($ns, '/fetch', [
         $me_id, $content_hash, $now - max(1,$window)
       ));
       if ($dupe_id > 0) {
-        $wpdb->query($wpdb->prepare("UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL WHERE id=%d", $me_id));
-
         // Auto-kick repeated duplicate attempts (non-admins)
         if (!kkchat_is_admin()) {
           if (!isset($_SESSION['kk_dupe'])) $_SESSION['kk_dupe'] = [];
@@ -1665,38 +1655,6 @@ register_rest_route($ns, '/fetch', [
 
       $mid = (int)$wpdb->insert_id;
 
-    // Write a short-lived preview so admins see the last sent message (room or DM).
-    // It expires via the existing 8–10s cleanup in /users, /sync and /ping.
-    if ($kind === 'chat') {
-      $preview = mb_substr(trim((string)$txt), 0, 200);
-      // Prefer a fresh timestamp; $now is already set above, but reusing is fine.
-      $ts = time();
-    
-      if ($recipient !== null) {
-        // DM context
-        $wpdb->query($wpdb->prepare(
-          "UPDATE {$t['users']}
-              SET typing_text=%s, typing_room=NULL, typing_to=%d, typing_at=%d
-            WHERE id=%d",
-          $preview, (int)$recipient, $ts, (int)$me_id
-        ));
-      } else {
-        // Room context
-        $wpdb->query($wpdb->prepare(
-          "UPDATE {$t['users']}
-              SET typing_text=%s, typing_room=%s, typing_to=NULL, typing_at=%d
-            WHERE id=%d",
-          $preview, $room, $ts, (int)$me_id
-        ));
-      }
-    } else {
-      // Non-text messages: keep typing fields blank
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL WHERE id=%d",
-        (int)$me_id
-      ));
-    }
-    
     kkchat_json(['ok'=>true,'id'=>$mid]);
 
     },
@@ -1797,81 +1755,6 @@ register_rest_route($ns, '/reads/mark', [
   'permission_callback' => '__return_true',
 ]);
 
-
-  /* =========================================================
-   *                     Typing
-   * ========================================================= */
-
-  register_rest_route($ns, '/typing', [
-    'methods'  => 'POST',
-    'callback' => function(WP_REST_Request $req){
-      kkchat_require_login(); kkchat_assert_not_blocked_or_fail(); kkchat_check_csrf_or_fail($req);
-      nocache_headers();
-
-      global $wpdb; $t = kkchat_tables();
-      $me = kkchat_current_user_id();
-      $ctx = (string)$req->get_param('context'); // 'public' | 'dm'
-      $text = trim((string)$req->get_param('text'));
-      $text = mb_substr($text, 0, 200);
-      $now  = time();
-
-      $typing_room = null; $typing_to = null;
-
-      if ($ctx === 'public') {
-        $room = kkchat_sanitize_room_slug((string)$req->get_param('room'));
-        if ($room==='') $room='general';
-        $typing_room = $room;
-      } elseif ($ctx === 'dm') {
-        $to = (int)$req->get_param('to');
-        if ($to>0) $typing_to = $to;
-      } else {
-        kkchat_json(['ok'=>false,'err'=>'bad_ctx'], 400);
-      }
-
-      // live watchlist flag while typing (non-admins only)
-      if (!kkchat_is_admin() && $text !== '') {
-        foreach (kkchat_rules_active() as $r) {
-          if (($r['kind'] ?? 'forbid') === 'watch' && kkchat_rule_matches($r, $text)) {
-            $wpdb->update($t['users'], ['watch_flag'=>1,'watch_flag_at'=>$now], ['id'=>$me], ['%d','%d'], ['%d']);
-            break;
-          }
-        }
-      }
-
-      if ($text === '') {
-        $wpdb->query($wpdb->prepare(
-          "UPDATE {$t['users']} SET typing_text=NULL, typing_room=NULL, typing_to=NULL, typing_at=NULL WHERE id=%d", $me
-        ));
-        return kkchat_json(['ok'=>true]);
-      }
-
-      $sql = "UPDATE {$t['users']} SET typing_text=%s, ";
-      $args = [$text];
-
-      if ($typing_room === null) {
-        $sql .= "typing_room=NULL, ";
-      } else {
-        $sql .= "typing_room=%s, ";
-        $args[] = $typing_room;
-      }
-
-      if ($typing_to === null) {
-        $sql .= "typing_to=NULL, ";
-      } else {
-        $sql .= "typing_to=%d, ";
-        $args[] = $typing_to;
-      }
-
-      $sql .= "typing_at=%d WHERE id=%d";
-      $args[] = $now;
-      $args[] = $me;
-
-      $wpdb->query($wpdb->prepare($sql, ...$args));
-
-      kkchat_json(['ok'=>true]);
-    },
-    'permission_callback' => '__return_true',
-  ]);
 
   /* =========================================================
    *                     User Reports
