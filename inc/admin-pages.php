@@ -1,6 +1,51 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+function kkchat_admin_parse_video_content($raw){
+  if (!is_string($raw) || trim($raw) === '') return null;
+  $data = json_decode($raw, true);
+  if (!is_array($data)) return null;
+
+  $url = (string) ($data['url'] ?? '');
+  if ($url === '') return null;
+
+  return [
+    'url'       => $url,
+    'thumbnail' => (string) ($data['thumbnail'] ?? ''),
+    'duration'  => isset($data['duration']) ? (float) $data['duration'] : null,
+    'size'      => isset($data['size']) ? (int) $data['size'] : null,
+    'mime'      => (string) ($data['mime'] ?? ''),
+  ];
+}
+
+function kkchat_admin_format_duration($seconds){
+  $seconds = (float) $seconds;
+  if ($seconds <= 0) return '';
+  $hours = (int) floor($seconds / 3600);
+  $minutes = (int) floor(($seconds % 3600) / 60);
+  $secs = (int) round($seconds % 60);
+  if ($hours > 0) {
+    return sprintf('%d:%02d:%02d', $hours, $minutes, $secs);
+  }
+  return sprintf('%d:%02d', $minutes, $secs);
+}
+
+function kkchat_admin_format_filesize($bytes){
+  $bytes = (int) $bytes;
+  if ($bytes <= 0) return '';
+  if (function_exists('size_format')) {
+    return size_format($bytes, 2);
+  }
+  $units = ['B','KB','MB','GB','TB'];
+  $i = 0;
+  $value = (float) $bytes;
+  while ($value >= 1024 && $i < count($units) - 1) {
+    $value /= 1024;
+    $i++;
+  }
+  return sprintf('%.2f %s', $value, $units[$i]);
+}
+
 /* ============================================================
  * Admin-post handler: IP-block direkt från Loggar (fixar blank sida)
  * – Formuläret postar till admin-post.php?action=kkchat_logs_ipban
@@ -1777,6 +1822,23 @@ function kkchat_admin_logs_page() {
                   if ($m->kind === 'image' && $is_image_url($m->content)) {
                     $full = esc_url($m->content);
                     echo '<img src="'.$full.'" alt="Bild #'.(int)$m->id.'" class="kkchat-thumb" data-full="'.$full.'" loading="lazy">';
+                  } elseif ($m->kind === 'video') {
+                    $video = kkchat_admin_parse_video_content($m->content);
+                    if ($video) {
+                      $vurl = esc_url($video['url']);
+                      $thumb = $video['thumbnail'] ? esc_url($video['thumbnail']) : '';
+                      $duration = $video['duration'] ? kkchat_admin_format_duration($video['duration']) : '';
+                      $sizeLabel = $video['size'] ? kkchat_admin_format_filesize($video['size']) : '';
+                      echo '<a href="'.$vurl.'" target="_blank" rel="noopener" class="button">Öppna video</a>';
+                      if ($thumb) {
+                        echo '<div><img src="'.$thumb.'" alt="Videominiatyr #'.(int)$m->id.'" class="kkchat-thumb" style="max-width:220px;max-height:160px;object-fit:cover;border-radius:8px;border:1px solid #d1d5db;" loading="lazy"></div>';
+                      }
+                      if ($duration || $sizeLabel) {
+                        echo '<div class="description">'.esc_html(trim($duration . ($duration && $sizeLabel ? ' · ' : '') . $sizeLabel)).'</div>';
+                      }
+                    } else {
+                      echo esc_html($m->content);
+                    }
                   } else {
                     echo $m->content; // redan escapat vid skrivning
                   }

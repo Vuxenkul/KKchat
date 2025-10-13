@@ -859,6 +859,218 @@ add_action('rest_api_init', function () {
     'permission_callback' => '__return_true',
   ]);
 
+  /* =========================================================
+   *                     Video uploads (direct-to-object)
+   * ========================================================= */
+
+  register_rest_route($ns, '/video/upload-url', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login(); kkchat_assert_not_blocked_or_fail(); kkchat_check_csrf_or_fail($req);
+      nocache_headers();
+
+      $cfg = kkchat_video_upload_config();
+      if (!kkchat_video_is_configured($cfg)) {
+        kkchat_json(['ok' => false, 'err' => 'video_disabled'], 503);
+      }
+
+      $gap  = (int) apply_filters('kkchat_video_upload_min_gap', 5);
+      $last = (int) ($_SESSION['kk_last_video_upload_at'] ?? 0);
+      if ($gap > 0 && time() - $last < $gap) {
+        kkchat_json(['ok' => false, 'err' => 'too_fast'], 429);
+      }
+
+      $max_bytes = max(0, (int) ($cfg['max_bytes'] ?? 0));
+
+      $filename = sanitize_file_name((string) $req->get_param('filename'));
+      $mime     = strtolower(trim((string) $req->get_param('mime')));
+      $size     = (int) $req->get_param('size');
+
+      if ($size <= 0) {
+        kkchat_json(['ok' => false, 'err' => 'bad_size'], 400);
+      }
+      if ($max_bytes > 0 && $size > $max_bytes) {
+        kkchat_json(['ok' => false, 'err' => 'too_large', 'max' => $max_bytes], 413);
+      }
+
+      $allowed = kkchat_video_allowed_mimes($cfg);
+      if ($mime === '' || !in_array($mime, $allowed, true)) {
+        kkchat_json(['ok' => false, 'err' => 'bad_type'], 400);
+      }
+
+      $ext = kkchat_video_extension_for_mime($mime);
+      if (!$ext && $filename !== '') {
+        $extCandidate = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+        if ($extCandidate !== '') {
+          $ext = '.' . preg_replace('/[^a-z0-9]/', '', $extCandidate);
+        }
+      }
+      if (!$ext) {
+        $ext = '.mp4';
+      }
+
+      $prefix = trim((string) ($cfg['prefix'] ?? 'kkchat/videos'), '/');
+      $base   = $prefix === '' ? '' : ($prefix . '/');
+      $key    = $base . gmdate('Y/m/') . bin2hex(random_bytes(16)) . $ext;
+
+      $signed = kkchat_video_presign($cfg, 'PUT', $key, [
+        'headers' => ['Content-Type' => $mime ?: 'application/octet-stream'],
+        'expires' => max(60, (int) ($cfg['presign_ttl'] ?? 900)),
+      ]);
+      if (is_wp_error($signed)) {
+        kkchat_json(['ok' => false, 'err' => $signed->get_error_code()], 500);
+      }
+
+      $token      = bin2hex(random_bytes(24));
+      $token_hash = hash('sha256', $token);
+      $now        = time();
+      $me         = kkchat_current_user_id();
+      $expires_at = $now + max(300, (int) ($cfg['upload_expires'] ?? 3600));
+
+      $public_url = kkchat_video_public_url($key, $cfg);
+
+      global $wpdb; $t = kkchat_tables();
+      $wpdb->insert($t['videos'], [
+        'created_at'       => $now,
+        'updated_at'       => $now,
+        'uploader_id'      => $me,
+        'object_key'       => $key,
+        'expected_bytes'   => $size,
+        'expected_mime'    => $mime,
+        'status'           => 'pending_upload',
+        'upload_token_hash'=> $token_hash,
+        'upload_expires_at'=> $expires_at,
+        'public_url'       => $public_url,
+      ], ['%d','%d','%d','%s','%d','%s','%s','%s','%d','%s']);
+
+      $asset_id = (int) $wpdb->insert_id;
+      if ($asset_id <= 0) {
+        kkchat_json(['ok' => false, 'err' => 'db_insert_failed'], 500);
+      }
+
+      $_SESSION['kk_last_video_upload_at'] = time();
+      kkchat_close_session_if_open();
+
+      kkchat_json([
+        'ok'     => true,
+        'upload' => [
+          'url'     => $signed['url'],
+          'method'  => 'PUT',
+          'headers' => $signed['headers'] + ['Content-Type' => $mime ?: 'application/octet-stream'],
+          'expires' => $expires_at,
+        ],
+        'asset'  => [
+          'id'        => $asset_id,
+          'key'       => $key,
+          'status'    => 'pending_upload',
+          'max_bytes' => $max_bytes ?: null,
+          'url'       => $public_url,
+        ],
+        'token'  => $token,
+      ]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
+  register_rest_route($ns, '/video/assets/(?P<id>\d+)', [
+    'methods'  => 'GET',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login(); kkchat_assert_not_blocked_or_fail();
+      nocache_headers();
+
+      $id    = (int) $req['id'];
+      $token = (string) $req->get_param('token');
+      if ($id <= 0 || $token === '') {
+        kkchat_json(['ok' => false, 'err' => 'bad_request'], 400);
+      }
+
+      global $wpdb; $t = kkchat_tables();
+      $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['videos']} WHERE id = %d", $id), ARRAY_A);
+      if (!$row) {
+        kkchat_json(['ok' => false, 'err' => 'not_found'], 404);
+      }
+
+      $me = kkchat_current_user_id();
+      if ($me <= 0) {
+        kkchat_json(['ok' => false, 'err' => 'not_logged_in'], 401);
+      }
+      if ((int) $row['uploader_id'] !== $me && !kkchat_is_admin()) {
+        kkchat_json(['ok' => false, 'err' => 'forbidden'], 403);
+      }
+
+      $hash = (string) ($row['upload_token_hash'] ?? '');
+      if ($hash !== '' && !hash_equals($hash, hash('sha256', $token))) {
+        kkchat_json(['ok' => false, 'err' => 'bad_token'], 403);
+      }
+
+      $asset = kkchat_video_asset_payload($row);
+      kkchat_json(['ok' => true, 'asset' => $asset]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
+  register_rest_route($ns, '/video/storage-event', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      nocache_headers();
+
+      $cfg = kkchat_video_upload_config();
+      if (!kkchat_video_is_configured($cfg)) {
+        kkchat_json(['ok' => false, 'err' => 'video_disabled'], 503);
+      }
+
+      $secret = (string) ($cfg['webhook_secret'] ?? '');
+      if ($secret !== '') {
+        $header = (string) $req->get_header('x-kkchat-video-secret');
+        if ($header === '' || !hash_equals($secret, $header)) {
+          kkchat_json(['ok' => false, 'err' => 'forbidden'], 403);
+        }
+      }
+
+      $payload = $req->get_json_params();
+      if (!is_array($payload)) {
+        $body = (string) $req->get_body();
+        $payload = json_decode($body, true);
+      }
+      if (!is_array($payload)) {
+        kkchat_json(['ok' => false, 'err' => 'bad_payload'], 400);
+      }
+
+      $records = [];
+      if (!empty($payload['Records']) && is_array($payload['Records'])) {
+        foreach ($payload['Records'] as $rec) {
+          $records[] = kkchat_video_normalize_record($rec);
+        }
+      } else {
+        $records[] = kkchat_video_normalize_record($payload);
+      }
+
+      $processed = 0;
+      $errors    = [];
+      foreach ($records as $rec) {
+        if (!is_array($rec)) { continue; }
+        $res = kkchat_video_worker_handle_event($rec);
+        if (is_wp_error($res)) {
+          $errors[] = [
+            'code'    => $res->get_error_code(),
+            'message' => $res->get_error_message(),
+            'key'     => $rec['key'] ?? ($rec['s3']['object']['key'] ?? ''),
+          ];
+        } else {
+          $processed++;
+        }
+      }
+
+      $status = empty($errors) ? 200 : 207; // Multi-status if partial failures
+      kkchat_json([
+        'ok'        => empty($errors),
+        'processed' => $processed,
+        'errors'    => $errors,
+      ], $status);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
 
 /* ---------- MENTION HELPERS ---------- */
 
@@ -1427,12 +1639,17 @@ register_rest_route($ns, '/fetch', [
       $me_id = kkchat_current_user_id();
       $me_nm = kkchat_current_user_name();
 
-      // Kind: 'chat' (default) or 'image'
-      $kind = (string)$req->get_param('kind');
-      $kind = ($kind === 'image') ? 'image' : 'chat';
+      // Kind: 'chat', 'image', or 'video'
+      $kind = strtolower((string)$req->get_param('kind'));
+      if (!in_array($kind, ['chat','image','video'], true)) {
+        $kind = 'chat';
+      }
 
       $txt = '';
       $image_url = '';
+      $video_asset_row = null;
+      $video_asset_id  = 0;
+
       if ($kind === 'image') {
         $image_url = esc_url_raw((string)$req->get_param('image_url'));
         if ($image_url === '') kkchat_json(['ok'=>false,'err'=>'bad_image'], 400);
@@ -1460,6 +1677,39 @@ register_rest_route($ns, '/fetch', [
           kkchat_json(['ok'=>false,'err'=>'image_missing'], 400);
         }
         if (!file_exists($fpath)) kkchat_json(['ok'=>false,'err'=>'image_missing'], 400);
+
+      } elseif ($kind === 'video') {
+        $video_asset_id = (int) $req->get_param('video_asset_id');
+        $video_token    = (string) $req->get_param('video_token');
+        if ($video_asset_id <= 0 || $video_token === '') {
+          kkchat_json(['ok' => false, 'err' => 'bad_video'], 400);
+        }
+
+        $video_asset_row = $wpdb->get_row(
+          $wpdb->prepare("SELECT * FROM {$t['videos']} WHERE id = %d", $video_asset_id),
+          ARRAY_A
+        );
+        if (!$video_asset_row) {
+          kkchat_json(['ok' => false, 'err' => 'video_not_found'], 404);
+        }
+
+        if ((int) $video_asset_row['uploader_id'] !== $me_id && !kkchat_is_admin()) {
+          kkchat_json(['ok' => false, 'err' => 'video_forbidden'], 403);
+        }
+
+        $token_hash = (string) ($video_asset_row['upload_token_hash'] ?? '');
+        if ($token_hash === '' || !hash_equals($token_hash, hash('sha256', $video_token))) {
+          kkchat_json(['ok' => false, 'err' => 'bad_token'], 403);
+        }
+
+        $status = (string) ($video_asset_row['status'] ?? '');
+        if ($status !== 'ready') {
+          kkchat_json(['ok' => false, 'err' => 'video_not_ready'], 409);
+        }
+
+        if (!empty($video_asset_row['message_id'])) {
+          kkchat_json(['ok' => false, 'err' => 'video_already_used'], 409);
+        }
 
       } else {
         $txt = trim((string)$req->get_param('content'));
@@ -1571,6 +1821,14 @@ register_rest_route($ns, '/fetch', [
       if ($kind === 'image') {
         $content = esc_url_raw($image_url);
         $raw     = 'image:' . $content;
+      } elseif ($kind === 'video') {
+        $payload = kkchat_video_asset_payload($video_asset_row ?: []);
+        $payload['status'] = 'ready';
+        $content = wp_json_encode($payload, JSON_UNESCAPED_SLASHES);
+        if (!is_string($content) || $content === '') {
+          kkchat_json(['ok' => false, 'err' => 'video_payload_failed'], 500);
+        }
+        $raw = 'video:' . $video_asset_id;
       } else {
         $content = $txt;
         $raw     = trim($txt);
@@ -1655,7 +1913,22 @@ register_rest_route($ns, '/fetch', [
 
       $mid = (int)$wpdb->insert_id;
 
-    kkchat_json(['ok'=>true,'id'=>$mid]);
+      if ($kind === 'video' && $video_asset_row) {
+        $wpdb->update(
+          $t['videos'],
+          [
+            'status'            => 'attached',
+            'message_id'        => $mid,
+            'upload_token_hash' => null,
+            'updated_at'        => time(),
+          ],
+          ['id' => (int) $video_asset_row['id']],
+          ['%s','%d','%s','%d'],
+          ['%d']
+        );
+      }
+
+      kkchat_json(['ok'=>true,'id'=>$mid]);
 
     },
     'permission_callback' => '__return_true',

@@ -38,7 +38,9 @@ add_shortcode('kkchat', function () {
     $mention_audio = esc_url($plugin_root_url . 'assets/mention.mp3');
         $report_audio  = esc_url($plugin_root_url . 'assets/report.mp3'); // NEW file
 
-    
+  $video_cfg      = kkchat_video_upload_config();
+
+
   wp_enqueue_style('kkchat');
   ob_start(); ?>
 
@@ -299,13 +301,15 @@ f.addEventListener('submit', async (ev)=>{
                 <div class="input-actions-menu" data-attach-menu hidden role="menu" aria-hidden="true">
                   <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem">🖼️ Ladda upp bild</button>
                   <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem">📷 Öppna kamera</button>
+                  <button type="button" class="input-actions-item" id="kk-pubVideoBtn" data-attach-item role="menuitem">🎥 Ladda upp video</button>
                   <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem">👤 Nämn någon</button>
                 </div>
               </div>
 
-              <!-- Hidden inputs (one for upload picker, one that hints camera on mobile) -->
+              <!-- Hidden inputs (upload picker, camera capture, and video picker) -->
               <input type="file" accept="image/*" id="kk-pubImg" style="display:none">
               <input type="file" accept="image/*" capture="environment" id="kk-pubCam" style="display:none">
+              <input type="file" accept="video/*" id="kk-pubVideo" style="display:none">
 
               <textarea name="content" placeholder="Skriv ett meddelande…" autocomplete="off"></textarea>
               <button>💬</button>
@@ -420,6 +424,9 @@ f.addEventListener('submit', async (ev)=>{
   const ADMIN_LINKS = <?= wp_json_encode($admin_links) ?>;
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
+  const VIDEO_UPLOAD_ENABLED = <?= kkchat_video_is_configured($video_cfg) ? 'true' : 'false' ?>;
+  const VIDEO_MAX_BYTES = <?= (int) max(0, (int)($video_cfg['max_bytes'] ?? 0)) ?>;
+  const VIDEO_ALLOWED_MIME = <?= wp_json_encode(array_values(kkchat_video_allowed_mimes($video_cfg))) ?>;
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -576,10 +583,17 @@ f.addEventListener('submit', async (ev)=>{
   let LAST_REPORT_MAX_ID = 0; // rising-edge anchor
 
 // New buttons/inputs
-const pubCamBtn = document.getElementById('kk-pubCamBtn');
-const pubUpBtn  = document.getElementById('kk-pubUpBtn');
-const pubImgInp = document.getElementById('kk-pubImg');
-const pubCamInp = document.getElementById('kk-pubCam');
+const pubCamBtn   = document.getElementById('kk-pubCamBtn');
+const pubUpBtn    = document.getElementById('kk-pubUpBtn');
+const pubVideoBtn = document.getElementById('kk-pubVideoBtn');
+const pubImgInp   = document.getElementById('kk-pubImg');
+const pubCamInp   = document.getElementById('kk-pubCam');
+const pubVideoInp = document.getElementById('kk-pubVideo');
+
+if (pubVideoBtn && !VIDEO_UPLOAD_ENABLED) {
+  pubVideoBtn.disabled = true;
+  pubVideoBtn.setAttribute('title', 'Video-uppladdning är inte aktiverad');
+}
 const pubTA     = pubForm?.querySelector('textarea');
 const mentionBtn = document.getElementById('kk-mentionBtn');
 
@@ -1730,6 +1744,26 @@ async function doLogout(){
       ${metaHTML}
     </li>`;
   }
+  if ((m.kind||'chat') === 'video'){
+    const data = parseVideoPayload(m.content);
+    if (data && data.url){
+      const url = escAttr(String(data.url));
+      const type = data.mime ? ` type="${escAttr(String(data.mime))}"` : '';
+      const poster = data.thumbnail ? ` poster="${escAttr(String(data.thumbnail))}"` : '';
+      const meta = videoMetaText(data);
+      const metaLine = meta ? `<div class="videoinfo small">${esc(meta)}</div>` : '';
+      return `<li class="item ${sid===ME_ID?'me':'them'}${roleClass}" data-id="${mid}" data-sid="${sid}" data-sname="${escAttr(who)}">
+        <div class="bubble video">
+          <video class="vidmsg" controls preload="metadata"${poster}>
+            <source src="${url}"${type}>
+            Din webbläsare kan inte spela upp videon.
+          </video>
+          ${metaLine}
+        </div>
+        ${metaHTML}
+      </li>`;
+    }
+  }
   const txt = String(m.content||'');
   const isMention = textMentionsName?.(txt, ME_NM) && sid !== ME_ID;
   return `<li class="item ${sid===ME_ID?'me':'them'}${roleClass}" data-id="${mid}" data-sid="${sid}" data-sname="${escAttr(who)}">
@@ -1821,6 +1855,7 @@ function applyCache(key){
     });
 
     watchNewImages(pubList);
+    watchNewVideos(pubList);
 
     if (AUTO_SCROLL && dist < 20) scrollToBottom(pubList, false);
     return true;
@@ -1950,6 +1985,15 @@ function watchNewImages(container){
   });
 }
 
+function watchNewVideos(container){
+  container.querySelectorAll('video.vidmsg:not([data-watch])').forEach(video=>{
+    video.dataset.watch = '1';
+    video.addEventListener('loadeddata', ()=>{
+      if (AUTO_SCROLL || atBottom(container)) scrollToBottom(container, false);
+    }, { once: true });
+  });
+}
+
 // How many <li.item> to keep per cached view
 const CACHE_CAP = 120;
 
@@ -2036,6 +2080,24 @@ function renderList(el, items){
         bubbleHTML = `<div class="bubble img">
           <img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async">
         </div>`;
+      } else if ((m.kind||'chat') === 'video') {
+        const data = parseVideoPayload(m.content);
+        if (data && data.url){
+          const url = escAttr(String(data.url));
+          const type = data.mime ? ` type="${escAttr(String(data.mime))}"` : '';
+          const poster = data.thumbnail ? ` poster="${escAttr(String(data.thumbnail))}"` : '';
+          const meta = videoMetaText(data);
+          const metaLine = meta ? `<div class="videoinfo small">${esc(meta)}</div>` : '';
+          bubbleHTML = `<div class="bubble video">
+            <video class="vidmsg" controls preload="metadata"${poster}>
+              <source src="${url}"${type}>
+              Din webbläsare kan inte spela upp videon.
+            </video>
+            ${metaLine}
+          </div>`;
+        } else {
+          bubbleHTML = `<div class="bubble">${esc(String(m.content||''))}</div>`;
+        }
       } else {
         const txt = String(m.content||'');
         const isMentionToMe = textMentionsName(txt, ME_NM) && m.sender_id !== ME_ID;
@@ -2067,6 +2129,7 @@ function renderList(el, items){
     el.dataset.last = String(maxId);
 
     watchNewImages(el);
+    watchNewVideos(el);
 
     const shouldSnap = (AUTO_SCROLL || wasAtBottom);
     if (shouldSnap) scrollToBottom(el, false);
@@ -2358,7 +2421,8 @@ let PREV_UNREAD_PER  = {};
 
   const kind = String(info.kind || 'chat').toLowerCase();
   const isImage = kind === 'image';
-  const icon = isImage ? '📷' : '💬';
+  const isVideo = kind === 'video';
+  const icon = isVideo ? '🎥' : (isImage ? '📷' : '💬');
 
   let ctx = '';
   if (info.to) {
@@ -2369,7 +2433,7 @@ let PREV_UNREAD_PER  = {};
   }
 
   const rawText = String(info.text || '').trim();
-  let text = isImage ? '[bild]' : rawText;
+  let text = isVideo ? '[video]' : (isImage ? '[bild]' : rawText);
   if (!text) text = '…';
 
   const ts = Number(info.time);
@@ -2633,8 +2697,13 @@ function coerceLastMessage(raw){
   };
 
   const meaningfulText = normalized.text.trim();
-  if (!meaningfulText && !normalized.room && !normalized.to && normalized.kind.toLowerCase() !== 'image') {
+  const kindLower = normalized.kind.toLowerCase();
+  if (!meaningfulText && !normalized.room && !normalized.to && kindLower !== 'image' && kindLower !== 'video') {
     return null;
+  }
+
+  if (!meaningfulText && kindLower === 'video') {
+    normalized.text = '[video]';
   }
 
   return normalized;
@@ -2647,7 +2716,7 @@ function updateLastMessageFromMessage(m){
 
   const kind = String(m?.kind || 'chat');
   const info = {
-    text: kind === 'image' ? '' : String(m?.content || '').trim().slice(0, 200),
+    text: kind === 'image' ? '' : (kind === 'video' ? '[video]' : String(m?.content || '').trim().slice(0, 200)),
     room: m?.recipient_id == null ? (m?.room || null) : null,
     to:   m?.recipient_id != null && Number(m.recipient_id) > 0 ? Number(m.recipient_id) : null,
     recipient_name: m?.recipient_name ? String(m.recipient_name) : null,
@@ -3735,6 +3804,7 @@ function handleStreamSync(js, context){
     renderList(pubList, items);
     markVisible(pubList);
     watchNewImages(pubList);
+    watchNewVideos(pubList);
     updateReceipts(pubList, items, /*isDM=*/false);
 
     if (items.length && (AUTO_SCROLL || wasAtBottom)) {
@@ -3772,6 +3842,7 @@ function handleStreamSync(js, context){
     renderList(pubList, items);
     markVisible(pubList);
     watchNewImages(pubList);
+    watchNewVideos(pubList);
     updateReceipts(pubList, items, /*isDM=*/true);
 
     if (items.length && (AUTO_SCROLL || wasAtBottom)) {
@@ -3998,6 +4069,7 @@ document.addEventListener('click', (e)=>{
 
 pubForm.addEventListener('submit', hideMentionBox);
 (document.getElementById('kk-pubImg')||{}).addEventListener?.('change', hideMentionBox);
+(document.getElementById('kk-pubVideo')||{}).addEventListener?.('change', hideMentionBox);
 
   function bindEnterToSend(textarea, form){
     if (!textarea || !form) return;
@@ -4185,11 +4257,169 @@ const TARGET_MAX_BYTES = 3.2 * 1024 * 1024;   // smaller target payload
 const MAX_DIM_PX       = 1280;                // downscale a bit more
 const JPEG_QUALITY_INIT= 0.80;                // slightly lower default
 const JPEG_QUALITY_MIN = 0.6;
+const VIDEO_POLL_INTERVAL_MS = 4000;
+const VIDEO_POLL_TIMEOUT_MS  = 180000;
 
 function validateImageFileBasics(file){
   if (!file) return 'Ingen fil vald';
   if (!/^image\//.test(file.type || '')) return 'Endast bildfiler tillåtna';
   return '';
+}
+
+function formatBytes(bytes){
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const units = ['B','KB','MB','GB','TB'];
+  let value = n;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1){
+    value /= 1024;
+    unit++;
+  }
+  const decimals = value >= 100 || unit === 0 ? 0 : (value >= 10 ? 1 : 2);
+  return `${value.toFixed(decimals)} ${units[unit]}`;
+}
+
+function formatVideoDuration(seconds){
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const total = Math.round(n);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (hours > 0){
+    return `${hours}:${String(minutes).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+  }
+  return `${minutes}:${String(secs).padStart(2,'0')}`;
+}
+
+function parseVideoPayload(raw){
+  if (!raw) return null;
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!obj || typeof obj !== 'object') return null;
+    return obj;
+  } catch(_) {
+    return null;
+  }
+}
+
+function videoMetaText(data){
+  if (!data || typeof data !== 'object') return '';
+  const parts = [];
+  const durationText = formatVideoDuration(data.duration);
+  if (durationText) parts.push(durationText);
+  if (data.size) {
+    const sizeText = formatBytes(data.size);
+    if (sizeText) parts.push(sizeText);
+  }
+  return parts.join(' · ');
+}
+
+function validateVideoFileBasics(file){
+  if (!VIDEO_UPLOAD_ENABLED) return 'Video-uppladdning är inte aktiverad';
+  if (!file) return 'Ingen video vald';
+  if (!(file instanceof File)) return 'Ogiltig video';
+  const type = String(file.type || '').toLowerCase();
+  const allowed = Array.isArray(VIDEO_ALLOWED_MIME) ? VIDEO_ALLOWED_MIME.map(x => String(x).toLowerCase()) : [];
+  if (allowed.length > 0 && !allowed.includes(type)){
+    return 'Videotypen stöds inte';
+  }
+  const size = Number(file.size || 0);
+  if (VIDEO_MAX_BYTES > 0 && size > VIDEO_MAX_BYTES){
+    const label = formatBytes(VIDEO_MAX_BYTES);
+    return label ? `Videon är för stor (max ${label})` : 'Videon är för stor';
+  }
+  return '';
+}
+
+async function createVideoUploadSession(file){
+  const payload = {
+    csrf_token: CSRF,
+    filename: file?.name || 'video',
+    size: file?.size || 0,
+    mime: file?.type || ''
+  };
+
+  const headers = { ...h, 'Content-Type': 'application/json' };
+  const resp = await fetch(API + '/video/upload-url', {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const js = await resp.json().catch(()=>({}));
+  if (!resp.ok || !js.ok){
+    const err = js.err || 'Kunde inte förbereda uppladdning';
+    if (err === 'too_large' && VIDEO_MAX_BYTES > 0) {
+      const label = formatBytes(VIDEO_MAX_BYTES);
+      throw new Error(label ? `Videon är för stor (max ${label})` : 'Videon är för stor');
+    }
+    throw new Error(err);
+  }
+  return js;
+}
+
+async function uploadVideoToStorage(upload, file){
+  if (!upload || !upload.url) throw new Error('Saknar uppladdnings-URL');
+  const headers = Object.assign({}, upload.headers || {});
+  if (!headers['Content-Type']) headers['Content-Type'] = file?.type || 'application/octet-stream';
+  const method = (upload.method || 'PUT').toUpperCase();
+  const resp = await fetch(upload.url, { method, headers, body: file });
+  if (!resp.ok){
+    throw new Error('Kunde inte ladda upp video');
+  }
+  return true;
+}
+
+async function waitForVideoAssetReady(assetId, token){
+  const start = Date.now();
+  while (Date.now() - start < VIDEO_POLL_TIMEOUT_MS){
+    const resp = await fetch(`${API}/video/assets/${assetId}?token=${encodeURIComponent(token)}`, {
+      credentials: 'include',
+      headers: h
+    });
+    const js = await resp.json().catch(()=>({}));
+    if (!resp.ok || !js.ok){
+      throw new Error(js.err || 'Video-status misslyckades');
+    }
+    const asset = js.asset || {};
+    const status = String(asset.status || '').toLowerCase();
+    if (status === 'ready' || status === 'attached' || status === 'published'){
+      return asset;
+    }
+    if (status === 'failed'){
+      const message = asset.failure_message || asset.failure || 'Videon avvisades';
+      throw new Error(message);
+    }
+    await new Promise(res => setTimeout(res, VIDEO_POLL_INTERVAL_MS));
+  }
+  throw new Error('Videon tog för lång tid att bearbeta');
+}
+
+async function sendVideoMessage(assetId, token){
+  const fd = new FormData();
+  fd.append('csrf_token', CSRF);
+  fd.append('kind', 'video');
+  fd.append('video_asset_id', String(assetId));
+  fd.append('video_token', token);
+  if (currentDM) fd.append('recipient_id', String(currentDM));
+  else fd.append('room', currentRoom);
+
+  const resp = await fetch(API + '/message', {
+    method: 'POST',
+    body: fd,
+    credentials: 'include',
+    headers: h
+  });
+  const js = await resp.json().catch(()=>({}));
+  if (!resp.ok || !js.ok){
+    throw new Error(js.cause || js.err || 'Kunde inte skicka video');
+  }
+  if (js.deduped){
+    throw new Error('Spam - Duplicerad video avvisades.');
+  }
+  return true;
 }
 
 // Load an image for canvas (respects EXIF orientation where supported)
@@ -4344,6 +4574,41 @@ pubImgInp?.addEventListener('change', async ()=>{
     if (ok) { await pollActive(); showToast('Bild skickad'); }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
+  }
+});
+
+pubVideoBtn?.addEventListener('click', () => {
+  closeAttachmentMenu();
+  if (!VIDEO_UPLOAD_ENABLED) {
+    showToast('Video-uppladdning är inte aktiverad.');
+    return;
+  }
+  pubVideoInp?.click();
+});
+
+pubVideoInp?.addEventListener('change', async () => {
+  const file = pubVideoInp.files?.[0];
+  pubVideoInp.value = '';
+  if (!file) return;
+
+  const err = validateVideoFileBasics(file);
+  if (err) { showToast(err); return; }
+
+  try {
+    showToast('Förbereder video…');
+    const session = await createVideoUploadSession(file);
+    const assetId = Number(session?.asset?.id || 0);
+    const token   = session?.token || '';
+    if (!assetId || !token) throw new Error('Saknar videoinformation');
+    showToast('Laddar upp video…');
+    await uploadVideoToStorage(session.upload, file);
+    showToast('Bearbetar video…');
+    await waitForVideoAssetReady(assetId, token);
+    showToast('Skickar video…');
+    const ok = await sendVideoMessage(assetId, token);
+    if (ok) { await pollActive(); showToast('Video skickad'); }
+  } catch (e) {
+    showToast(e?.message || 'Videouppladdning misslyckades');
   }
 });
 
@@ -4652,9 +4917,23 @@ jumpBtn.addEventListener('click', ()=>{
 
     const right = document.createElement('div');
 
-    const contentHTML = (m.kind||'chat') === 'image'
-      ? `<img class="imgmsg" src="${escAttr(String(m.content || ''))}" alt="Bild" style="max-width:220px;max-height:160px;border:1px solid #e5e7eb;border-radius:8px;cursor:zoom-in">`
-      : `<div style="white-space:pre-wrap">${esc(String(m.content || ''))}</div>`;
+    let contentHTML;
+    if ((m.kind||'chat') === 'image') {
+      contentHTML = `<img class="imgmsg" src="${escAttr(String(m.content || ''))}" alt="Bild" style="max-width:220px;max-height:160px;border:1px solid #e5e7eb;border-radius:8px;cursor:zoom-in">`;
+    } else if ((m.kind||'chat') === 'video') {
+      const data = parseVideoPayload(m.content);
+      if (data && data.url) {
+        const url = escAttr(String(data.url));
+        const thumb = data.thumbnail ? `<img src="${escAttr(String(data.thumbnail))}" alt="Videominiatyr" style="max-width:220px;max-height:160px;object-fit:cover;border-radius:8px;border:1px solid #d1d5db;display:block;margin-bottom:6px">` : '';
+        const meta = videoMetaText(data);
+        const metaHtml = meta ? `<div class="description">${esc(meta)}</div>` : '';
+        contentHTML = `<div>${thumb}<a href="${url}" target="_blank" rel="noopener" class="button">Öppna video</a>${metaHtml}</div>`;
+      } else {
+        contentHTML = `<div style="white-space:pre-wrap">${esc(String(m.content || ''))}</div>`;
+      }
+    } else {
+      contentHTML = `<div style="white-space:pre-wrap">${esc(String(m.content || ''))}</div>`;
+    }
 
     const headMeta =
       `<div class="meta">

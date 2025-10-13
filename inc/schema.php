@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '8');
+  define('KKCHAT_DB_VERSION', '9');
 }
 
 /**
@@ -176,10 +176,39 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     KEY `idx_active` (`active`)
   ) $charset;";
 
+  $videos_table = $t['videos'];
+  $sql10 = "CREATE TABLE IF NOT EXISTS `{$videos_table}` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `created_at` INT UNSIGNED NOT NULL,
+    `updated_at` INT UNSIGNED NOT NULL,
+    `processed_at` INT UNSIGNED NULL,
+    `uploader_id` INT UNSIGNED NOT NULL,
+    `object_key` VARCHAR(255) NOT NULL,
+    `object_size` BIGINT UNSIGNED NULL,
+    `expected_bytes` BIGINT UNSIGNED NULL,
+    `expected_mime` VARCHAR(128) NULL,
+    `mime_type` VARCHAR(128) NULL,
+    `status` VARCHAR(32) NOT NULL DEFAULT 'pending_upload',
+    `duration_seconds` DECIMAL(10,2) NULL,
+    `thumbnail_key` VARCHAR(255) NULL,
+    `thumbnail_url` TEXT NULL,
+    `public_url` TEXT NULL,
+    `failure_code` VARCHAR(64) NULL,
+    `failure_message` TEXT NULL,
+    `upload_token_hash` CHAR(64) NULL,
+    `upload_expires_at` INT UNSIGNED NULL,
+    `message_id` BIGINT UNSIGNED NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_status` (`status`),
+    KEY `idx_uploader_status` (`uploader_id`,`status`),
+    KEY `idx_message` (`message_id`),
+    KEY `idx_object_key` (`object_key`(191))
+  ) $charset;";
+
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
   dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4);
   dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8);
-  dbDelta($sql9);
+  dbDelta($sql9); dbDelta($sql10);
 
   // Remove legacy typing columns if they linger after dbDelta
   foreach (['typing_text', 'typing_room', 'typing_to', 'typing_at'] as $col) {
@@ -275,6 +304,40 @@ function kkchat_maybe_migrate(){
     if (!$has_index('idx_recipient_sender_id')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`)");
     }
+  }
+
+  if (!kkchat_table_exists($t['videos'])) {
+    $charset = $wpdb->get_charset_collate();
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    $tbl = $t['videos'];
+    $sql = "CREATE TABLE IF NOT EXISTS `{$tbl}` (
+      `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      `created_at` INT UNSIGNED NOT NULL,
+      `updated_at` INT UNSIGNED NOT NULL,
+      `processed_at` INT UNSIGNED NULL,
+      `uploader_id` INT UNSIGNED NOT NULL,
+      `object_key` VARCHAR(255) NOT NULL,
+      `object_size` BIGINT UNSIGNED NULL,
+      `expected_bytes` BIGINT UNSIGNED NULL,
+      `expected_mime` VARCHAR(128) NULL,
+      `mime_type` VARCHAR(128) NULL,
+      `status` VARCHAR(32) NOT NULL DEFAULT 'pending_upload',
+      `duration_seconds` DECIMAL(10,2) NULL,
+      `thumbnail_key` VARCHAR(255) NULL,
+      `thumbnail_url` TEXT NULL,
+      `public_url` TEXT NULL,
+      `failure_code` VARCHAR(64) NULL,
+      `failure_message` TEXT NULL,
+      `upload_token_hash` CHAR(64) NULL,
+      `upload_expires_at` INT UNSIGNED NULL,
+      `message_id` BIGINT UNSIGNED NULL,
+      PRIMARY KEY (`id`),
+      KEY `idx_status` (`status`),
+      KEY `idx_uploader_status` (`uploader_id`,`status`),
+      KEY `idx_message` (`message_id`),
+      KEY `idx_object_key` (`object_key`(191))
+    ) $charset;";
+    dbDelta($sql);
   }
 
   // 3) Save version so we don’t re-run unnecessarily
