@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name: KKchat
- * Description: Lightweight public chat + DMs with rooms, unread, autoscroll lock, scheduled banners, and moderation (admin usernames, kick with duration & cause, IP ban, backend unblock). Adds Word Rules (forbid/watchlist) with auto-kick/IP ban and admin UI. Admins see live typing previews. Includes backend logs (searchable by username) with sender/recipient IPs and manual IP ban. Admin sidebar has a ðŸ§¾ button to open an overlay with the selected user's full message history (with IPs).
+ * Description: Lightweight public chat + DMs with rooms, unread, autoscroll lock, scheduled banners, and moderation (admin usernames, kick with duration & cause, IP ban, backend unblock). Adds Word Rules (forbid/watchlist) with auto-kick/IP ban and admin UI. Admins see the latest message each user sent. Includes backend logs (searchable by username) with sender/recipient IPs and manual IP ban. Admin sidebar has a ðŸ§¾ button to open an overlay with the selected user's full message history (with IPs).
  * Version: 1.7.0
  * Author: KK
  * Text Domain: kkchat
@@ -52,10 +52,6 @@ function kkchat_ensure_users_table() {
     `last_seen` INT UNSIGNED NOT NULL,
     `ip` VARCHAR(45) DEFAULT NULL,
     `wp_username` VARCHAR(64) DEFAULT NULL,
-    `typing_text` VARCHAR(200) DEFAULT NULL,
-    `typing_room` VARCHAR(64) DEFAULT NULL,
-    `typing_to` INT UNSIGNED DEFAULT NULL,
-    `typing_at` INT UNSIGNED DEFAULT NULL,
     `watch_flag` TINYINT(1) NOT NULL DEFAULT 0,
     `watch_flag_at` INT UNSIGNED NULL,
     PRIMARY KEY (`id`),

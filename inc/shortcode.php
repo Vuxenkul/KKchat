@@ -2053,7 +2053,7 @@ function renderList(el, items){
     // Admin: show a 6s preview under the sender for newly arrived messages
     if (IS_ADMIN) {
       const isNew = Number(m.id) > lastSeen;
-      if (isNew) setPreviewFromMessage(m);
+      if (isNew) updateLastMessageFromMessage(m);
     }
 
     appendedCount++;
@@ -2239,6 +2239,7 @@ function markVisible(listEl){
 
 
   let USERS=[]; let UNREAD_PER={};
+const LAST_MESSAGE_CACHE = new Map(); // userId -> last message summary
   let lastPubCounts = 0, lastDMCounts = 0;
   let DM_UNREAD_TOTAL = 0;
   let ROOM_UNREAD = {};              
@@ -2350,14 +2351,36 @@ let PREV_UNREAD_PER  = {};
 }
 
 
-  function typingLine(u){
-  if (!IS_ADMIN || !u?.typing || !u.typing.text) return '';
-  const t = u.typing;
-  const icon = t.preview ? '💬' : '✍️';
+  function lastMessageLine(u){
+  if (!IS_ADMIN) return '';
+  const info = resolveLastMessage(u);
+  if (!info) return '';
+
+  const kind = String(info.kind || 'chat').toLowerCase();
+  const isImage = kind === 'image';
+  const icon = isImage ? '📷' : '💬';
+
   let ctx = '';
-  if (t.room) ctx = `#${t.room}`;
-  else if (t.to) ctx = `DM→ ${esc(nameById(t.to))}`;
-  return `<div class="typing-prev">${icon} ${ctx ? esc(ctx)+': ' : ''}<i>${esc(t.text)}</i></div>`;
+  if (info.to) {
+    const name = info.recipient_name || nameById(info.to) || `#${info.to}`;
+    ctx = `DM→ ${name}`;
+  } else if (info.room) {
+    ctx = `#${info.room}`;
+  }
+
+  const rawText = String(info.text || '').trim();
+  let text = isImage ? '[bild]' : rawText;
+  if (!text) text = '…';
+
+  const ts = Number(info.time);
+  const timeLabel = Number.isFinite(ts) && ts > 0
+    ? new Date(ts * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+    : '';
+
+  const ctxPart = ctx ? `${esc(ctx)}: ` : '';
+  const timePart = timeLabel ? ` <span class="last-msg-time">${esc(timeLabel)}</span>` : '';
+
+  return `<div class="last-msg-prev">${icon} ${ctxPart}<i>${esc(text)}</i>${timePart}</div>`;
 }
 
 
@@ -2419,7 +2442,7 @@ function userRow(u){
         </div>
       </div>
       <div class="user-actions">${badge}${dmBtn}${blockBtn}${reportBtn}${modBtns}${logoutSelfBtn}</div>
-      ${typingLine(u)}
+      ${lastMessageLine(u)}
     </div>`;
 
 }
@@ -2554,55 +2577,87 @@ userListEl.addEventListener('click', async (e)=>{
 });
 
 
-// --- Admin “last-sent preview” (6s) ----------------------------------------
-const PREVIEW_TTL_MS = 6000;
-const PREVIEW_MAP    = new Map();  // userId -> typing-like object
-const PREVIEW_TIMER  = new Map();  // userId -> timeout handle
-
-function reapplyPreviews(){
-  if (!IS_ADMIN || !Array.isArray(USERS)) return;
-  USERS = USERS.map(u => {
-    const p = PREVIEW_MAP.get(Number(u.id)) || null;
-    return p ? { ...u, typing: p } : u;
-  });
+// --- Admin last-message helpers ----------------------------------------
+function cacheLastMessage(id, info){
+  const key = Number(id);
+  if (!Number.isFinite(key)) return;
+  if (info) {
+    LAST_MESSAGE_CACHE.set(key, info);
+  } else {
+    LAST_MESSAGE_CACHE.delete(key);
+  }
 }
 
-function clearPreviewFor(userId){
-  const id = Number(userId);
-  const t  = PREVIEW_TIMER.get(id);
-  if (t) clearTimeout(t);
-  PREVIEW_TIMER.delete(id);
-  PREVIEW_MAP.delete(id);
-  USERS = USERS.map(u => (Number(u.id) === id ? { ...u, typing: null } : u));
-  renderUsers();
+function resolveLastMessage(u){
+  if (!u) return null;
+  const id = Number(u.id ?? u.user_id ?? 0);
+  if (!Number.isFinite(id) || id <= 0) return null;
+
+  let info = null;
+  if (u.last_message && typeof u.last_message === 'object') {
+    info = coerceLastMessage({ last_message: u.last_message });
+  }
+
+  if (!info) {
+    info = LAST_MESSAGE_CACHE.get(id) || null;
+  }
+
+  if (info) {
+    LAST_MESSAGE_CACHE.set(id, info);
+    return info;
+  }
+
+  return null;
 }
 
-function setPreviewFromMessage(m){
-  if (!IS_ADMIN) return;
-  const sid = Number(m?.sender_id);
-  if (!Number.isFinite(sid) || sid === ME_ID) return;
+function coerceLastMessage(raw){
+  if (!raw || typeof raw !== 'object') return null;
+  const src = raw.last_message && typeof raw.last_message === 'object'
+    ? raw.last_message
+    : raw;
 
-  // derive a short text from the message
-  const rawText = (m?.kind === 'image')
-    ? '📷 [bild]'
-    : String(m?.content || '').trim();
-  if (!rawText) return;
+  const roomVal = src.room ?? src.last_room ?? null;
+  const toVal = src.to ?? src.recipient_id ?? src.last_recipient_id ?? null;
+  const kindVal = src.kind ?? src.last_kind ?? 'chat';
+  const timeVal = src.time ?? src.last_created_at ?? src.created_at ?? null;
+  const textVal = src.text ?? src.content ?? src.last_content ?? '';
+  const recipName = src.recipient_name ?? src.last_recipient_name ?? null;
 
-  const obj = {
-    text: rawText,
-    room: (m?.recipient_id == null) ? (m?.room || null) : null,
-    to:   (m?.recipient_id != null) ? Number(m.recipient_id) : null,
-    at:   Math.floor(Date.now()/1000),
-    preview: 1 // flag so UI can use a different icon if desired
+  const normalized = {
+    text: String(textVal || '').slice(0, 200),
+    room: roomVal ? String(roomVal) : null,
+    to: Number.isFinite(Number(toVal)) && Number(toVal) > 0 ? Number(toVal) : null,
+    recipient_name: recipName ? String(recipName) : null,
+    kind: String(kindVal || 'chat'),
+    time: Number.isFinite(Number(timeVal)) ? Math.floor(Number(timeVal)) : null,
   };
 
-  PREVIEW_MAP.set(sid, obj);
-  // reset 6s timer per user
-  if (PREVIEW_TIMER.get(sid)) clearTimeout(PREVIEW_TIMER.get(sid));
-  PREVIEW_TIMER.set(sid, setTimeout(() => clearPreviewFor(sid), PREVIEW_TTL_MS));
+  const meaningfulText = normalized.text.trim();
+  if (!meaningfulText && !normalized.room && !normalized.to && normalized.kind.toLowerCase() !== 'image') {
+    return null;
+  }
 
-  // merge into USERS and re-render sidebar immediately
-  USERS = USERS.map(u => (Number(u.id) === sid ? { ...u, typing: obj } : u));
+  return normalized;
+}
+
+function updateLastMessageFromMessage(m){
+  if (!IS_ADMIN) return;
+  const sid = Number(m?.sender_id);
+  if (!Number.isFinite(sid) || sid <= 0 || sid === ME_ID) return;
+
+  const kind = String(m?.kind || 'chat');
+  const info = {
+    text: kind === 'image' ? '' : String(m?.content || '').trim().slice(0, 200),
+    room: m?.recipient_id == null ? (m?.room || null) : null,
+    to:   m?.recipient_id != null && Number(m.recipient_id) > 0 ? Number(m.recipient_id) : null,
+    recipient_name: m?.recipient_name ? String(m.recipient_name) : null,
+    kind,
+    time: Number.isFinite(Number(m?.time)) ? Number(m.time)
+        : (Number.isFinite(Number(m?.created_at)) ? Number(m.created_at) : Math.floor(Date.now()/1000)),
+  };
+
+  cacheLastMessage(sid, info);
+  USERS = USERS.map(u => (Number(u.id) === sid ? { ...u, last_message: info } : u));
   renderUsers();
 }
 
@@ -2635,13 +2690,12 @@ function normalizeUsersPayload(raw){
       name = alt || (id ? `#${id}` : '');
     }
 
-    const typing =
-      u.typing ? u.typing :
-      (u.typing_text || u.typing_room || u.typing_to) ? {
-        text: u.typing_text || '',
-        room: u.typing_room || null,
-        to:   u.typing_to   || null
-      } : null;
+    let last_message = coerceLastMessage(u);
+    if (!last_message) {
+      const cached = LAST_MESSAGE_CACHE.get(id) || null;
+      if (cached) last_message = cached;
+    }
+    if (last_message) cacheLastMessage(id, last_message);
 
     return {
       id,
@@ -2649,9 +2703,9 @@ function normalizeUsersPayload(raw){
       gender: u.gender ?? u.category ?? '',
       is_admin: !!(u.is_admin ?? u.admin ?? u.isAdmin),
       flagged: (Number(u.flagged ?? u.watchlist ?? u.watch_flag ?? 0) ? 1 : 0),
-      typing
+      last_message
     };
-  }).filter(u => u.id); 
+  }).filter(u => u.id);
 
   const dedup = new Map();
   rows.forEach(u => dedup.set(u.id, u));
@@ -3669,7 +3723,6 @@ function handleStreamSync(js, context){
   }
 
   applySyncPayload(js);
-  reapplyPreviews();
 
   const prevLast    = +pubList.dataset.last || -1;
   const isCold      = prevLast < 0;

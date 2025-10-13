@@ -718,7 +718,7 @@ html, body { margin: 0; height: 100%; }
 }
 #kkchat-root .modgrp { display: inline-flex; align-items: center; gap: 0px; }
 
-#kkchat-root .typing-prev {
+#kkchat-root .last-msg-prev {
   grid-column: 1/-1;
   margin-top: 6px;
   color: #6b7280;
@@ -726,6 +726,10 @@ html, body { margin: 0; height: 100%; }
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+#kkchat-root .last-msg-prev .last-msg-time {
+  color: #9ca3af;
 }
 
 #kkchat-root .user[data-flag="1"] { background: #fff1f2; border-left: 4px solid #b91c1c; }
