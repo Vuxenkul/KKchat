@@ -41,6 +41,8 @@ function kkchat_handle_logs_ipban() {
   $target_user_id = null;
   $target_name = null;
   $target_wp_username = null;
+  $posted_name = sanitize_text_field($_POST['user_name'] ?? '');
+  $posted_wp_username = sanitize_text_field($_POST['user_wp_username'] ?? '');
 
   // 1) Om user_id skickas med (vi har det från loggraden) – använd det
   $uid = isset($_POST['user_id']) ? (int)$_POST['user_id'] : 0;
@@ -54,6 +56,13 @@ function kkchat_handle_logs_ipban() {
   }
 
   // 2) Annars, härleda från senaste loggrad på denna IP (avsändare/mottagare)
+  if (($target_name === null || $target_name === '') && $posted_name !== '') {
+    $target_name = $posted_name;
+  }
+  if (($target_wp_username === null || $target_wp_username === '') && $posted_wp_username !== '') {
+    $target_wp_username = $posted_wp_username;
+  }
+
   if ($target_user_id === null && $target_name === null && $target_wp_username === null) {
     $m = $wpdb->get_row($wpdb->prepare(
       "SELECT sender_id, sender_name
@@ -338,7 +347,12 @@ function kkchat_admin_media_page() {
             <a class="button" href="<?php echo esc_url( admin_url('admin.php?page=kkchat_admin_logs&q=%23'.(int)$m->id) ); ?>">Visa i Loggar</a>
 
             <?php if ($m->sender_ip): ?>
-              <button type="button" class="button" onclick="kkBanIPFromLogs('<?php echo esc_js($m->sender_ip); ?>', '<?php echo esc_js($m->sender_name ?: 'användare'); ?>')">Blockera IP</button>
+              <button type="button" class="button"
+                      data-ip="<?php echo esc_attr($m->sender_ip); ?>"
+                      data-user-id="<?php echo (int)$m->sender_id; ?>"
+                      data-user-name="<?php echo esc_attr($m->sender_name); ?>"
+                      data-who="<?php echo esc_attr($m->sender_name ?: 'användare'); ?>"
+                      onclick="kkBanIPFromLogs(this)">Blockera IP</button>
             <?php endif; ?>
 
             <form method="post" onsubmit="return confirm('Säker?');" style="display:inline;margin:0">
@@ -418,6 +432,9 @@ endif;
       <input type="hidden" name="ip" value="">
       <input type="hidden" name="minutes" value="">
       <input type="hidden" name="cause" value="">
+      <input type="hidden" name="user_id" value="">
+      <input type="hidden" name="user_name" value="">
+      <input type="hidden" name="user_wp_username" value="">
     </form>
 
     <!-- lightbox & IP-ban prompt -->
@@ -429,9 +446,25 @@ endif;
     <script>
       (function(){
         // IP-block prompt (reuse Logs behavior)
-        window.kkBanIPFromLogs = function(ip, who) {
-          if (!ip) return;
-          var title = 'Blockera ' + ip + ' (' + (who || 'användare') + ')';
+        window.kkBanIPFromLogs = function(source, whoLabel) {
+          var data = {
+            ip: '',
+            who: whoLabel || '',
+            userId: '',
+            userName: '',
+            wpUsername: ''
+          };
+          if (source && typeof source === 'object' && source.dataset) {
+            data.ip = source.dataset.ip || '';
+            if (!data.who && source.dataset.who) data.who = source.dataset.who;
+            data.userId = source.dataset.userId || '';
+            data.userName = source.dataset.userName || '';
+            data.wpUsername = source.dataset.wpUsername || '';
+          } else if (typeof source === 'string') {
+            data.ip = source;
+          }
+          if (!data.ip) return;
+          var title = 'Blockera ' + data.ip + ' (' + (data.who || 'användare') + ')';
           var minutesStr = window.prompt(title + '\n\nTid i minuter (0 = för alltid):', '0');
           if (minutesStr === null) return;
           var minutes = parseInt(minutesStr, 10);
@@ -440,9 +473,16 @@ endif;
           if (reason === null) return;
           var f = document.getElementById('kkbanip_form');
           if (!f) return;
-          f.querySelector('input[name="ip"]').value = ip;
-          f.querySelector('input[name="minutes"]').value = String(minutes);
-          f.querySelector('input[name="cause"]').value = reason || '';
+          var setVal = function(name, value) {
+            var input = f.querySelector('input[name="' + name + '"]');
+            if (input) input.value = value || '';
+          };
+          setVal('ip', data.ip);
+          setVal('minutes', String(minutes));
+          setVal('cause', reason || '');
+          setVal('user_id', data.userId);
+          setVal('user_name', data.userName);
+          setVal('user_wp_username', data.wpUsername);
           f.submit();
         };
 
@@ -862,8 +902,36 @@ function kkchat_admin_moderation_page(){
   }
 
   $admins_txt = (string)get_option('kkchat_admin_users','');
-  $active = $wpdb->get_results("SELECT * FROM {$t['blocks']} WHERE active=1 ORDER BY created_at DESC");
-  $recent = $wpdb->get_results("SELECT * FROM {$t['blocks']} ORDER BY created_at DESC LIMIT 100");
+
+  $active_per  = 50;
+  $recent_per  = 50;
+  $active_page = max(1, (int)($_GET['active_page'] ?? 1));
+  $recent_page = max(1, (int)($_GET['recent_page'] ?? 1));
+
+  $active_total = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$t['blocks']} WHERE active=1");
+  $active_pages = max(1, (int)ceil($active_total / $active_per));
+  if ($active_page > $active_pages) $active_page = $active_pages;
+  $active_offset = ($active_page - 1) * $active_per;
+  $active = [];
+  if ($active_total > 0) {
+    $active = $wpdb->get_results($wpdb->prepare(
+      "SELECT * FROM {$t['blocks']} WHERE active=1 ORDER BY created_at DESC LIMIT %d OFFSET %d",
+      $active_per, $active_offset
+    ));
+  }
+
+  $recent_total = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$t['blocks']}");
+  $recent_pages = max(1, (int)ceil($recent_total / $recent_per));
+  if ($recent_page > $recent_pages) $recent_page = $recent_pages;
+  $recent_offset = ($recent_page - 1) * $recent_per;
+  $recent = [];
+  if ($recent_total > 0) {
+    $recent = $wpdb->get_results($wpdb->prepare(
+      "SELECT * FROM {$t['blocks']} ORDER BY created_at DESC LIMIT %d OFFSET %d",
+      $recent_per, $recent_offset
+    ));
+  }
+
   $moderation_base = menu_page_url('kkchat_moderation', false);
   ?>
   <div class="wrap">
@@ -887,6 +955,16 @@ function kkchat_admin_moderation_page(){
     </form>
 
     <h2>Aktiva blockeringar</h2>
+    <?php
+      $active_count = is_array($active) || $active instanceof Countable ? count($active) : 0;
+      if ($active_total > 0 && $active_count > 0):
+        $active_from = $active_offset + 1;
+        $active_to   = $active_offset + $active_count;
+    ?>
+      <p class="description">Visar <?php echo (int)$active_from; ?>–<?php echo (int)min($active_to, $active_total); ?> av <?php echo (int)$active_total; ?> (sida <?php echo (int)$active_page; ?> av <?php echo (int)$active_pages; ?>)</p>
+    <?php elseif ($active_total > 0): ?>
+      <p class="description">Inga poster på denna sida.</p>
+    <?php endif; ?>
     <table class="widefat striped">
       <thead><tr><th>ID</th><th>Typ</th><th>Mål</th><th>IP</th><th>Orsak</th><th>Av</th><th>Skapad</th><th>Löper ut</th><th>Åtgärd</th></tr></thead>
       <tbody>
@@ -910,8 +988,38 @@ function kkchat_admin_moderation_page(){
       <?php endif; ?>
       </tbody>
     </table>
+    <?php if ($active_pages > 1):
+      $active_prev = $active_page > 1 ? add_query_arg(['active_page' => $active_page - 1, 'recent_page' => $recent_page], $moderation_base) : '';
+      $active_next = $active_page < $active_pages ? add_query_arg(['active_page' => $active_page + 1, 'recent_page' => $recent_page], $moderation_base) : '';
+    ?>
+      <div class="tablenav" style="margin:10px 0 20px">
+        <div class="tablenav-pages" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <?php if ($active_prev): ?>
+            <a class="button" href="<?php echo esc_url($active_prev); ?>">&laquo; Föregående</a>
+          <?php else: ?>
+            <span class="tablenav-pages-navspan">&laquo; Föregående</span>
+          <?php endif; ?>
+          <span class="pagination-links">Sida <?php echo (int)$active_page; ?> av <?php echo (int)$active_pages; ?></span>
+          <?php if ($active_next): ?>
+            <a class="button" href="<?php echo esc_url($active_next); ?>">Nästa &raquo;</a>
+          <?php else: ?>
+            <span class="tablenav-pages-navspan">Nästa &raquo;</span>
+          <?php endif; ?>
+        </div>
+      </div>
+    <?php endif; ?>
 
-    <h2>Senaste åtgärder (100)</h2>
+    <h2>Senaste åtgärder</h2>
+    <?php
+      $recent_count = is_array($recent) || $recent instanceof Countable ? count($recent) : 0;
+      if ($recent_total > 0 && $recent_count > 0):
+        $recent_from = $recent_offset + 1;
+        $recent_to   = $recent_offset + $recent_count;
+    ?>
+      <p class="description">Visar <?php echo (int)$recent_from; ?>–<?php echo (int)min($recent_to, $recent_total); ?> av <?php echo (int)$recent_total; ?> (sida <?php echo (int)$recent_page; ?> av <?php echo (int)$recent_pages; ?>)</p>
+    <?php elseif ($recent_total > 0): ?>
+      <p class="description">Inga poster på denna sida.</p>
+    <?php endif; ?>
     <table class="widefat striped">
       <thead><tr><th>ID</th><th>Typ</th><th>Mål</th><th>IP</th><th>Orsak</th><th>Av</th><th>Skapad</th><th>Löper ut</th><th>Aktiv</th></tr></thead>
       <tbody>
@@ -932,6 +1040,26 @@ function kkchat_admin_moderation_page(){
       <?php endif; ?>
       </tbody>
     </table>
+    <?php if ($recent_pages > 1):
+      $recent_prev = $recent_page > 1 ? add_query_arg(['active_page' => $active_page, 'recent_page' => $recent_page - 1], $moderation_base) : '';
+      $recent_next = $recent_page < $recent_pages ? add_query_arg(['active_page' => $active_page, 'recent_page' => $recent_page + 1], $moderation_base) : '';
+    ?>
+      <div class="tablenav" style="margin:10px 0 20px">
+        <div class="tablenav-pages" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <?php if ($recent_prev): ?>
+            <a class="button" href="<?php echo esc_url($recent_prev); ?>">&laquo; Föregående</a>
+          <?php else: ?>
+            <span class="tablenav-pages-navspan">&laquo; Föregående</span>
+          <?php endif; ?>
+          <span class="pagination-links">Sida <?php echo (int)$recent_page; ?> av <?php echo (int)$recent_pages; ?></span>
+          <?php if ($recent_next): ?>
+            <a class="button" href="<?php echo esc_url($recent_next); ?>">Nästa &raquo;</a>
+          <?php else: ?>
+            <span class="tablenav-pages-navspan">Nästa &raquo;</span>
+          <?php endif; ?>
+        </div>
+      </div>
+    <?php endif; ?>
   </div>
   <?php
 }
@@ -1473,6 +1601,9 @@ function kkchat_admin_logs_page() {
           <input type="hidden" name="ip" value="">
           <input type="hidden" name="minutes" value="">
           <input type="hidden" name="cause" value="">
+          <input type="hidden" name="user_id" value="">
+          <input type="hidden" name="user_name" value="">
+          <input type="hidden" name="user_wp_username" value="">
         </form>
 
         <!-- Stilar: miniatyr + lightbox + samtal -->
@@ -1613,7 +1744,11 @@ function kkchat_admin_logs_page() {
                 <?php if (!empty($m->sender_ip)): ?>
                   <code><?php echo esc_html($m->sender_ip); ?></code>
                   <button type="button" class="button" style="margin-left:6px"
-                          onclick="kkBanIPFromLogs('<?php echo esc_js($m->sender_ip); ?>','avsändare')">Blockera IP</button>
+                          data-ip="<?php echo esc_attr($m->sender_ip); ?>"
+                          data-user-id="<?php echo (int)$m->sender_id; ?>"
+                          data-user-name="<?php echo esc_attr($m->sender_name); ?>"
+                          data-who="avsändare"
+                          onclick="kkBanIPFromLogs(this)">Blockera IP</button>
                 <?php else: ?>
                   <span class="description">—</span>
                 <?php endif; ?>
@@ -1625,7 +1760,11 @@ function kkchat_admin_logs_page() {
                   <?php if (!empty($m->recipient_ip)): ?>
                     <code><?php echo esc_html($m->recipient_ip); ?></code>
                     <button type="button" class="button" style="margin-left:6px"
-                            onclick="kkBanIPFromLogs('<?php echo esc_js($m->recipient_ip); ?>','mottagare')">Blockera IP</button>
+                            data-ip="<?php echo esc_attr($m->recipient_ip); ?>"
+                            data-user-id="<?php echo (int)$m->recipient_id; ?>"
+                            data-user-name="<?php echo esc_attr($m->recipient_name); ?>"
+                            data-who="mottagare"
+                            onclick="kkBanIPFromLogs(this)">Blockera IP</button>
                   <?php else: ?>
                     <span class="description">—</span>
                   <?php endif; ?>
@@ -1691,9 +1830,25 @@ function kkchat_admin_logs_page() {
         <script>
           (function(){
             // IP-block prompt
-            window.kkBanIPFromLogs = function(ip, who) {
-              if (!ip) return;
-              var title = 'Blockera ' + ip + ' (' + (who || 'användare') + ')';
+            window.kkBanIPFromLogs = function(source, whoLabel) {
+              var data = {
+                ip: '',
+                who: whoLabel || '',
+                userId: '',
+                userName: '',
+                wpUsername: ''
+              };
+              if (source && typeof source === 'object' && source.dataset) {
+                data.ip = source.dataset.ip || '';
+                if (!data.who && source.dataset.who) data.who = source.dataset.who;
+                data.userId = source.dataset.userId || '';
+                data.userName = source.dataset.userName || '';
+                data.wpUsername = source.dataset.wpUsername || '';
+              } else if (typeof source === 'string') {
+                data.ip = source;
+              }
+              if (!data.ip) return;
+              var title = 'Blockera ' + data.ip + ' (' + (data.who || 'användare') + ')';
               var minutesStr = window.prompt(title + '\n\nTid i minuter (0 = för alltid):', '0');
               if (minutesStr === null) return;
               var minutes = parseInt(minutesStr, 10);
@@ -1702,9 +1857,16 @@ function kkchat_admin_logs_page() {
               if (reason === null) return;
               var f = document.getElementById('kkbanip_form');
               if (!f) return;
-              f.querySelector('input[name="ip"]').value = ip;
-              f.querySelector('input[name="minutes"]').value = String(minutes);
-              f.querySelector('input[name="cause"]').value = reason || '';
+              var setVal = function(name, value) {
+                var input = f.querySelector('input[name="' + name + '"]');
+                if (input) input.value = value || '';
+              };
+              setVal('ip', data.ip);
+              setVal('minutes', String(minutes));
+              setVal('cause', reason || '');
+              setVal('user_id', data.userId);
+              setVal('user_name', data.userName);
+              setVal('user_wp_username', data.wpUsername);
               f.submit();
             };
 
