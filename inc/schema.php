@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '7');
+  define('KKCHAT_DB_VERSION', '8');
 }
 
 /**
@@ -75,10 +75,6 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `last_seen` INT UNSIGNED NOT NULL,
     `ip` VARCHAR(45) DEFAULT NULL,
     `wp_username` VARCHAR(64) DEFAULT NULL,
-    `typing_text` VARCHAR(200) DEFAULT NULL,
-    `typing_room` VARCHAR(64) DEFAULT NULL,
-    `typing_to` INT UNSIGNED DEFAULT NULL,
-    `typing_at` INT UNSIGNED DEFAULT NULL,
     `watch_flag` TINYINT(1) NOT NULL DEFAULT 0,
     `watch_flag_at` INT UNSIGNED NULL,
     PRIMARY KEY (`id`),
@@ -184,6 +180,13 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
   dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4);
   dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8);
   dbDelta($sql9);
+
+  // Remove legacy typing columns if they linger after dbDelta
+  foreach (['typing_text', 'typing_room', 'typing_to', 'typing_at'] as $col) {
+    if (kkchat_column_exists($t['users'], $col)) {
+      $wpdb->query("ALTER TABLE `{$t['users']}` DROP COLUMN `{$col}`");
+    }
+  }
 
   // Seed default room if none exists
   $has_rooms = (int)$wpdb->get_var("SELECT COUNT(*) FROM `{$t['rooms']}`");
@@ -498,10 +501,6 @@ function kkchat_maybe_upgrade_schema() {
       `last_seen` INT UNSIGNED NOT NULL,
       `ip` VARCHAR(45) DEFAULT NULL,
       `wp_username` VARCHAR(64) DEFAULT NULL,
-      `typing_text` VARCHAR(200) DEFAULT NULL,
-      `typing_room` VARCHAR(64) DEFAULT NULL,
-      `typing_to` INT UNSIGNED DEFAULT NULL,
-      `typing_at` INT UNSIGNED DEFAULT NULL,
       `watch_flag` TINYINT(1) NOT NULL DEFAULT 0,
       `watch_flag_at` INT UNSIGNED NULL,
       PRIMARY KEY (`id`),
@@ -735,20 +734,18 @@ function kkchat_maybe_upgrade_schema() {
   $has_wp = $wpdb->get_var("SHOW COLUMNS FROM {$t['users']} LIKE 'wp_username'");
   if (!$has_wp) { @ $wpdb->query("ALTER TABLE {$t['users']} ADD `wp_username` VARCHAR(64) DEFAULT NULL, ADD KEY `idx_wpuser` (`wp_username`)"); }
 
-  $has_ttext = $wpdb->get_var("SHOW COLUMNS FROM {$t['users']} LIKE 'typing_text'");
-  if (!$has_ttext) {
-    @ $wpdb->query("ALTER TABLE {$t['users']}
-      ADD `typing_text` VARCHAR(200) DEFAULT NULL,
-      ADD `typing_room` VARCHAR(64) DEFAULT NULL,
-      ADD `typing_to` INT UNSIGNED DEFAULT NULL,
-      ADD `typing_at` INT UNSIGNED DEFAULT NULL");
-  }
-
   $has_wf = $wpdb->get_var("SHOW COLUMNS FROM {$t['users']} LIKE 'watch_flag'");
   if (!$has_wf) {
     @ $wpdb->query("ALTER TABLE {$t['users']}
       ADD `watch_flag` TINYINT(1) NOT NULL DEFAULT 0,
       ADD `watch_flag_at` INT UNSIGNED NULL");
+  }
+
+  // users: drop legacy typing columns (formerly used by /typing endpoint)
+  foreach (['typing_text', 'typing_room', 'typing_to', 'typing_at'] as $col) {
+    if (kkchat_column_exists($t['users'], $col)) {
+      @ $wpdb->query("ALTER TABLE {$t['users']} DROP COLUMN `{$col}`");
+    }
   }
 
   /* =========================
