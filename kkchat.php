@@ -123,69 +123,12 @@ function kkchat_json($data, int $code = 200) {
 
   exit;
 }
-/**
- * Release the global wpdb connection so long-running requests (e.g. long poll)
- * do not keep MySQL connections open while idling. Falls back gracefully if
- * the current WP version lacks wpdb::close().
- */
-function kkchat_wpdb_close_connection(): void {
-  global $wpdb;
-  if (empty($wpdb)) { return; }
-
-  if (method_exists($wpdb, 'close')) {
-    $wpdb->close();
-    return;
-  }
-
-  if (isset($wpdb->dbh) && $wpdb->dbh) {
-    // Handle both mysqli and legacy mysql extensions defensively.
-    if (!empty($wpdb->use_mysqli) && class_exists('mysqli') && $wpdb->dbh instanceof mysqli) {
-      @mysqli_close($wpdb->dbh);
-    } elseif (is_resource($wpdb->dbh) && function_exists('mysql_close')) {
-      @mysql_close($wpdb->dbh);
-    }
-
-    $wpdb->dbh          = null;
-    $wpdb->ready        = false;
-    $wpdb->has_connected = false;
-  }
-}
-
-/** Ensure the global wpdb connection is ready after an intentional close(). */
-function kkchat_wpdb_reconnect_if_needed(): void {
-  global $wpdb;
-  if (empty($wpdb)) { return; }
-
-  if (method_exists($wpdb, 'check_connection')) {
-    $wpdb->check_connection(false);
-    return;
-  }
-
-  if (empty($wpdb->dbh) && method_exists($wpdb, 'db_connect')) {
-    $wpdb->db_connect(false);
-  }
-}
-
 /** SECURITY: use ENT_QUOTES so attributes are safe too. */
 function kkchat_html_esc($s){ return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'); }
 
 /* ------------------------------
  * Duplicate-prevention helpers (turbo)
  * ------------------------------ */
-function kkchat_normalize_text(string $s): string {
-  // UtgÃ¥r frÃ¥n rÃ¥text (inte HTML-escaped)
-  $s = html_entity_decode($s, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8');
-  // Normalisera URL:er sÃ¥ inte "samma lÃ¤nk" med olika tracking rÃ¤knas som olika
-  $s = preg_replace('~https?://\S+~iu', 'url', $s);
-  // SlÃ¥ ihop upprepade skiljetecken (!!!!!, ???, â€¦)
-  $s = preg_replace('~([!?.,â€¦])\1{1,}~u', '$1', $s);
-  // Komprimera whitespace
-  $s = preg_replace('~\s+~u', ' ', $s);
-  // Trim + till gemener
-  $s = trim(mb_strtolower($s, 'UTF-8'));
-  return $s;
-}
-
 // Tunables
 function kkchat_dupe_window_seconds(): int   { return (int) apply_filters('kkchat_dupe_window_seconds',   (int) get_option('kkchat_dupe_window_seconds', 120)); }
 function kkchat_dupe_fast_seconds(): int     { return (int) apply_filters('kkchat_dupe_fast_seconds',     (int) get_option('kkchat_dupe_fast_seconds', 30)); }

@@ -269,8 +269,6 @@
 html, body { margin: 0; height: 100%; }
 #kkchat-root * { box-sizing: border-box; }
 
-#toast-container>.toast-error { display: none; }
-
 #kkchat-root li.item.pending { opacity: .6; }
 #kkchat-root li.item.pending .small .receipt::after { content: '  •  sending…'; }
 #kkchat-root li.item.error { background: #fff5f5; }
@@ -1199,14 +1197,10 @@ html, body { margin: 0; height: 100%; }
   border-radius: 12px;
   font-weight: 600;
 }
-#kkchat-root .side-toggle .chev { float: right; transition: transform .2s ease; }
-
 @media (max-width: 900px) {
   #kkchat-root .side-toggle { display: block; margin-bottom: 8px; }
   #kkchat-root #kk-leftWrap { display: none; }
   #kkchat-root #kk-sidebar.open #kk-leftWrap { display: flex; }
-  #kkchat-root #kk-sidebar.open .side-toggle .chev { transform: rotate(180deg); }
-
   #kkchat-root .sidebar { display: none !important; }
 
   #kkchat-root #kk-sidebar #kk-leftWrap { display: none !important; }
