@@ -1272,12 +1272,18 @@ async function runPrefetchTick(){
   }
 }
 
-function openStream(forceCold = false){
+function openStream(forceCold = false, options = {}){
   if (POLL_SUSPENDED || MULTITAB_LOCKED) return;
   const state = desiredStreamState();
   if (!state) return;
 
-  ensureLeader(false);
+  const { forceLeader = false } = options || {};
+
+  if (forceCold || forceLeader) {
+    ensureLeader(true);
+  } else {
+    ensureLeader(false);
+  }
   if (!POLL_IS_LEADER) { return; }
 
   if (forceCold) {
@@ -1285,7 +1291,7 @@ function openStream(forceCold = false){
   }
 
   stopStream();
-  performPoll(forceCold).catch(()=>{});
+  performPoll(forceCold, options).catch(()=>{});
 }
 
 function suspendStream(){
@@ -1293,17 +1299,17 @@ function suspendStream(){
   stopStream();
 }
 
-function resumeStream(){
+function resumeStream(options = {}){
   if (!POLL_SUSPENDED) return;
   if (MULTITAB_LOCKED) return;
   POLL_SUSPENDED = false;
-  openStream();
+  openStream(false, options);
 }
 
-function restartStream(){
+function restartStream(options = {}){
   stopStream();
   if (!POLL_SUSPENDED) {
-    openStream(true);
+    openStream(true, options);
   }
 }
 
@@ -3965,12 +3971,12 @@ function handleStreamSync(js, context){
 }
 
 async function pollActive(forceCold = false, options = {}){
-  const { allowSuspended = false } = options || {};
+  const { allowSuspended = false, forceLeader = false } = options || {};
   if (MULTITAB_LOCKED) return;
   const state = desiredStreamState();
   if (!state) return;
 
-  if (forceCold) {
+  if (forceCold || forceLeader) {
     ensureLeader(true);
   } else {
     ensureLeader(false);
@@ -3999,14 +4005,14 @@ document.addEventListener('visibilitychange', () => {
   } else {
     POLL_HIDDEN_SINCE = 0;
     stopBackgroundPolling();
-    resumeStream();
+    resumeStream({ forceLeader: true });
     noteUserActivity(true);
-    pollActive().catch(()=>{});
+    pollActive(false, { forceLeader: true }).catch(()=>{});
   }
 });
 
-window.addEventListener('focus',  () => { noteUserActivity(true); pollActive().catch(()=>{}); restartStream(); });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => { noteUserActivity(true); pollActive(false, { forceLeader: true }).catch(()=>{}); restartStream({ forceLeader: true }); });
+window.addEventListener('online', () => { pollActive(false, { forceLeader: true }).catch(()=>{}); restartStream({ forceLeader: true }); });
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
