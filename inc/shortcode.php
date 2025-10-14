@@ -114,24 +114,7 @@ add_shortcode('kkchat', function () {
           if (f && f.elements) { for (const el of f.elements) el.disabled = !!on; }
         }
 
-
-    function jumpToBottom(list){
-  if (!list) return;
-
-  const root = document.getElementById('kkchat-root');
-  root?.classList.remove('smooth');
-
-  requestAnimationFrame(()=>{
-    list.scrollTop = list.scrollHeight;
-    requestAnimationFrame(()=>{
-      list.scrollTop = list.scrollHeight;
-
-      root?.classList.add('smooth');
-    });
-  });
-}
-
-f.addEventListener('submit', async (ev)=>{
+  f.addEventListener('submit', async (ev)=>{
   ev.preventDefault();
   const fd = new FormData(f);
   fd.append('csrf_token', "<?= $csrf ?>");
@@ -1561,42 +1544,41 @@ async function doLogout(){
   const fd = new FormData();
   fd.append('csrf_token', CSRF);
 
-  let ok = false, err = '';
+  let ok = false;
+  let err = '';
 
-  try{
-    const r = await fetch(API + '/logout', {
+  const send = async (withHeaders = true) => {
+    const options = {
       method: 'POST',
       body: fd,
-      credentials: 'include',
-      headers: h
-    });
-    if (r.ok) {
-      const js = await r.json().catch(()=>({}));
-      ok = (js?.ok !== false); 
-      err = js?.err || '';
-    } else if (r.status === 403) {
-
-      const r2 = await fetch(API + '/logout', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include'
-      });
-      const js2 = await r2.json().catch(()=>({}));
-      ok = r2.ok && (js2?.ok !== false);
-      err = js2?.err || '';
+      credentials: 'include'
+    };
+    if (withHeaders) {
+      options.headers = h;
     }
-  }catch(_){
+    const resp = await fetch(API + '/logout', options);
+    const js = await resp.json().catch(() => ({}));
+    return { resp, js };
+  };
 
-    try{
-      const r3 = await fetch(API + '/logout', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include'
-      });
-      const js3 = await r3.json().catch(()=>({}));
-      ok = r3.ok && (js3?.ok !== false);
-      err = js3?.err || '';
-    }catch(_){}
+  try {
+    const first = await send(true);
+    if (first.resp.ok) {
+      ok = (first.js?.ok !== false);
+      err = first.js?.err || '';
+    } else if (first.resp.status === 403) {
+      try {
+        const second = await send(false);
+        ok = second.resp.ok && (second.js?.ok !== false);
+        err = second.js?.err || first.js?.err || '';
+      } catch (innerErr) {
+        err = innerErr?.message || first.js?.err || '';
+      }
+    } else {
+      err = first.js?.err || '';
+    }
+  } catch (networkErr) {
+    err = networkErr?.message || '';
   }
 
   clearLocalState();
@@ -1996,6 +1978,7 @@ function watchNewVideos(container){
 
 // How many <li.item> to keep per cached view
 const CACHE_CAP = 120;
+const LOCALLY_HIDDEN_IDS = new Set();
 
 /**
  * Clamp an HTML string that contains <li class="item">…</li> rows
@@ -2031,14 +2014,19 @@ function renderList(el, items){
     if (kind.indexOf('mod_') === 0) {
       try {
         const data = JSON.parse(m.content || '{}');
-        if (data && data.action === 'hide' && data.id) {
-          const el = document.querySelector(`li.item[data-id="${Number(data.id)}"]`);
-          if (el) {
-            el.remove();
+        const hiddenId = Number(data?.id);
+        if (data && data.action === 'hide' && Number.isFinite(hiddenId)) {
+          if (LOCALLY_HIDDEN_IDS.has(hiddenId)) {
+            LOCALLY_HIDDEN_IDS.delete(hiddenId);
+            return;
+          }
+          const target = el.querySelector(`li.item[data-id="${hiddenId}"]`);
+          if (target) {
+            target.remove();
             try {
               ROOM_CACHE.set(activeCacheKey(), {
-                last: +pubList.dataset.last || -1,
-                html: pubList.innerHTML
+                last: +el.dataset.last || -1,
+                html: el.innerHTML
               });
             } catch(_) {}
           }
@@ -2780,52 +2768,6 @@ function normalizeUsersPayload(raw){
   rows.forEach(u => dedup.set(u.id, u));
   return [...dedup.values()];
 }
-async function roomHasMentionSince(slug){
-  try{
-    const js = await fetchJSON(`${API}/fetch?public=1&room=${encodeURIComponent(slug)}&limit=30`);
-    if (!Array.isArray(js)) return false;
-
-    return js.some(m => {
-      const txt = String(m?.content || m?.text || m?.body || '');
-      const sid = Number(m?.sender_id ?? m?.user_id ?? m?.author_id ?? 0);
-      if (sid === Number(ME_ID)) return false;
-
-      // try strict helper first
-      let hit = false;
-      try { if (typeof textMentionsName === 'function') hit = !!textMentionsName(txt, ME_NM); } catch(_) {}
-
-      // then a permissive fallback (handles punctuation)
-      if (!hit) {
-        const safe = String(ME_NM||'').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (safe) {
-          const re = new RegExp(`(^|\\W)@${safe}(?=\\W|$)`, 'i');
-          hit = re.test(txt);
-        }
-      }
-      return hit;
-    });
-  } catch(_) {
-    return false;
-  }
-}
-
-function kkIsActiveSource(slugOrDmKey){
-  // Prefer your existing room/DM active-state check:
-  if (typeof isActiveRoom === 'function') return isActiveRoom(slugOrDmKey);
-  // Fallback: compare against a global/current slug if you have one:
-  if (window.currentRoomSlug) return window.currentRoomSlug === slugOrDmKey;
-  return false;
-}
-
-function kkAnyPassiveMentionBump(js){
-  const bumps = js.mention_bumps || {};
-  for (const [key, val] of Object.entries(bumps)) {
-    if (val && !kkIsActiveSource(key)) return true;
-  }
-  return false;
-}
-
-
 function applySyncPayload(js){
   if (js && Array.isArray(js.events)) {
     let mergedMessages = [];
@@ -2978,7 +2920,7 @@ function applySyncPayload(js){
       if (AUTO_OPEN_DM_ON_NEW && currentDM == null) {
         const first = dmIncr.find(did => !isBlocked(+did));
         if (first) {
-          try { openDM(Number(first)); } catch(_) {}
+          openDM(Number(first)).catch(err => console.warn('auto open DM failed', err));
         }
       }
     }catch(_){}
@@ -3018,8 +2960,6 @@ function applySyncPayload(js){
 let ROOMS = [];
 let currentRoom = 'lobby';
 let currentDM = null;
-let LAST_OPEN_DM = null;
-
   function defaultRoomSlug(){
 
     const gen = ROOMS.find(r=> r.slug==='lobby' && r.allowed);
@@ -3146,6 +3086,8 @@ actHide?.addEventListener('click', async ()=>{
 
     if (r.ok && js.ok){
 
+      LOCALLY_HIDDEN_IDS.add(mid);
+
       try {
         MSG_TARGET.li?.remove();
 
@@ -3221,9 +3163,7 @@ pubList.addEventListener('click', (e)=>{
 });
 
 actDm?.addEventListener('click', ()=>{
-  try { openDM(MSG_TARGET.id); } catch(_) { 
-    currentDM = MSG_TARGET.id; renderRoomTabs(); showView('vPublic'); setComposerAccess();
-  }
+  openDM(MSG_TARGET.id).catch(err => console.error('Failed to open DM', err));
   closeMsgSheet();
 });
 actReport?.addEventListener('click', async ()=>{
@@ -3268,9 +3208,7 @@ actBlock?.addEventListener('click', async ()=>{
   }catch(_){ alert('Tekniskt fel'); }
 });
 imgActDm?.addEventListener('click', ()=>{
-  try { openDM(MSG_TARGET.id); } catch(_) {
-    currentDM = MSG_TARGET.id; renderRoomTabs(); showView('vPublic'); setComposerAccess();
-  }
+  openDM(MSG_TARGET.id).catch(err => console.error('Failed to open DM from image', err));
   closeImagePreview();
 });
 
@@ -3756,29 +3694,6 @@ roomsListEl?.addEventListener('click', async (e) => {
       for (let i = 0; i < removeCount; i++) items[i].remove();
     }
   }
-function safeAutoScroll(container, renderUpdates) {
-
-  const wasAtBottom = atBottom(container);       
-  const prevHeight  = container.scrollHeight;
-
-  renderUpdates();
-
-  const grew = container.scrollHeight > prevHeight;
-
-  if (grew && (AUTO_SCROLL || wasAtBottom)) {
-    scrollToBottom(container, false);
-  }
-}
-
-function didAppendNew(payload, prevLast) {
-  if (!Array.isArray(payload) || payload.length === 0) return false;
-  for (let i = payload.length - 1; i >= 0; i--) {
-    const id = Number(payload[i]?.id);
-    if (Number.isFinite(id) && id > prevLast) return true;
-  }
-  return false;
-}
-
 function handleStreamSync(js, context){
   if (!js || typeof js !== 'object') return;
 
@@ -3894,14 +3809,15 @@ document.addEventListener('visibilitychange', () => {
     scheduleBackgroundPoll();
   } else {
     POLL_HIDDEN_SINCE = 0;
+    requestImmediatePing();
     stopBackgroundPolling();
     resumeStream();
     pollActive().catch(()=>{});
   }
 });
 
-window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => { requestImmediatePing(); pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('online', () => { requestImmediatePing(); pollActive().catch(()=>{}); restartStream(); });
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -3921,7 +3837,6 @@ async function openDM(id) {
 
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
-  LAST_OPEN_DM = currentDM;
   UNREAD_PER[currentDM] = 0;
 
   // Recompute total DM unread so the left badge updates immediately
@@ -4196,7 +4111,7 @@ function appendPendingMessage(text){
   const mm = String(now.getMinutes()).padStart(2,'0');
   li.innerHTML = `
     <div class="msg"><div class="bubble chat">${escapeHtml(text)}</div></div>
-    <div class="small"><span class="time">${hh}:${mm}</span> <span class="receipt">✓</span></div>
+    <div class="small"><span class="time">${hh}:${mm}</span> <span class="receipt">Skickad</span></div>
   `;
 
   const list = document.getElementById('kk-pubList');
@@ -4526,9 +4441,6 @@ async function compressImageIfNeeded(file){
 
 
 async function uploadImage(file){
-  const err = validateImageFileBasics(file); // ← was validateImageFile(...)
-  if (err){ showToast(err); throw new Error(err); }
-
   const fd = new FormData();
   fd.append('csrf_token', CSRF);
   fd.append('file', file, file.name || 'upload.jpg');
@@ -4733,56 +4645,6 @@ jumpBtn.addEventListener('click', ()=>{
     });
   }
   bindCopy(pubList);
-
-(function(){
-  async function touch(){
-    try { await fetch(API + '/ping', { credentials:'include', headers:h }); } catch(_){}
-  }
-
-  touch();
-
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) touch(); });
-  window.addEventListener('focus',  touch);
-  window.addEventListener('online', touch);
-
-  let pingTimer = null;
-
-  let pollFallbackTimer = null;
-  let pollFallbackBusy  = false;
-
-  function maybePollActiveFallback(){
-    if (pollFallbackBusy) return;
-    if (document.visibilityState === 'hidden') return;
-
-    pollFallbackBusy = true;
-    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
-  }
-
-  function ensurePollFallback(){
-    if (pollFallbackTimer) return;
-    pollFallbackTimer = setInterval(maybePollActiveFallback, 45000);
-    setTimeout(maybePollActiveFallback, 1000);
-  }
-
-  ensurePollFallback();
-
-  function schedulePingFallback(){
-    clearInterval(pingTimer);
-    pingTimer = setInterval(()=>{
-      touch();
-      if (document.visibilityState === 'hidden') return;
-      if (POLL_IS_LEADER) {
-        maybePollActiveFallback();
-      }
-    }, 120000); // 2 minutes
-  }
-
-  schedulePingFallback();
-  document.addEventListener('visibilitychange', schedulePingFallback);
-  window.addEventListener('online', schedulePingFallback);
-  window.addEventListener('focus', schedulePingFallback);
-
-})();
 
   let LOG_USER_ID = null;
   let LOG_BEFORE  = 0;
@@ -5137,6 +4999,20 @@ function stopKeepAlive() {
   }
 }
 
+const MANUAL_PING_COOLDOWN_MS = 25000;
+let lastManualPingAt = 0;
+
+function requestImmediatePing() {
+  const now = Date.now();
+  if (now - lastManualPingAt < MANUAL_PING_COOLDOWN_MS) {
+    startKeepAlive();
+    return;
+  }
+  lastManualPingAt = now;
+  stopKeepAlive();
+  pingOnce().catch(()=>{});
+}
+
 // POST beacon works reliably when the tab is hidden or closing.
 // We allowed POST on /ping above.
 function beaconPing() {
@@ -5155,7 +5031,7 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     beaconPing();
   } else {
-    startKeepAlive(); // ensure loop restarts when visible again
+    requestImmediatePing(); // ensure loop restarts when visible again
   }
 });
 
