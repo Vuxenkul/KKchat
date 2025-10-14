@@ -2,7 +2,7 @@
 if (!defined('ABSPATH')) exit;
 
 add_shortcode('kkchat', function () {
-  $ns = esc_js( wp_make_link_relative( rest_url('kkchat/v1') ) );
+  $api_base = untrailingslashit(rest_url('kkchat/v1'));
   $csrf = esc_js($_SESSION['kkchat_csrf'] ?? '');
   $me_logged = isset($_SESSION['kkchat_user_id'], $_SESSION['kkchat_user_name']);
   if ($me_logged && empty($_SESSION['kkchat_seen_at_public'])) $_SESSION['kkchat_seen_at_public'] = time();
@@ -121,8 +121,39 @@ add_shortcode('kkchat', function () {
     </div>
     <script>
     (function(){
-      const API = "<?= $ns ?>";
+      const API_BASE = <?= wp_json_encode($api_base) ?>;
       const REST_NONCE = "<?= $rest_nonce ?>";
+      function apiUrl(path = '', params = null) {
+        const url = new URL(API_BASE, window.location.origin);
+        const cleanPath = String(path || '').replace(/^\/+/, '');
+        if (url.searchParams.has('rest_route')) {
+          const route = url.searchParams.get('rest_route') || '';
+          const trimmed = route.replace(/\/+$/, '');
+          url.searchParams.set('rest_route', cleanPath ? `${trimmed}/${cleanPath}` : trimmed);
+        } else if (cleanPath) {
+          const basePath = url.pathname.replace(/\/+$/, '');
+          url.pathname = `${basePath}/${cleanPath}`.replace(/\/{2,}/g, '/');
+        }
+
+        const appendParam = (key, value) => {
+          if (value === undefined || value === null) return;
+          if (Array.isArray(value)) {
+            value.forEach(v => appendParam(key, v));
+            return;
+          }
+          url.searchParams.append(key, value);
+        };
+
+        if (params instanceof URLSearchParams) {
+          params.forEach((value, key) => appendParam(key, value));
+        } else if (typeof params === 'string' && params !== '') {
+          new URLSearchParams(params.replace(/^\?/, '')).forEach((value, key) => appendParam(key, value));
+        } else if (params && typeof params === 'object') {
+          Object.entries(params).forEach(([key, value]) => appendParam(key, value));
+        }
+
+        return url.toString();
+      }
       const f=document.getElementById('kk-loginForm');
       const e=document.getElementById('kk-loginErr');
       const loginBox = document.querySelector('.login');
@@ -162,7 +193,7 @@ f.addEventListener('submit', async (ev)=>{
   e.textContent = '';
 
   try{
-    const r = await fetch(API+'/login', {
+    const r = await fetch(apiUrl('login'), {
       method:'POST',
       body: fd,
       credentials:'include',
@@ -432,9 +463,40 @@ f.addEventListener('submit', async (ev)=>{
 
 <script>
 (function(){
-  const API = "<?= $ns ?>";
+  const API_BASE = <?= wp_json_encode($api_base) ?>;
   const CSRF = "<?= $csrf ?>";
   const REST_NONCE = "<?= $rest_nonce ?>";
+  function apiUrl(path = '', params = null) {
+    const url = new URL(API_BASE, window.location.origin);
+    const cleanPath = String(path || '').replace(/^\/+/, '');
+    if (url.searchParams.has('rest_route')) {
+      const route = url.searchParams.get('rest_route') || '';
+      const trimmed = route.replace(/\/+$/, '');
+      url.searchParams.set('rest_route', cleanPath ? `${trimmed}/${cleanPath}` : trimmed);
+    } else if (cleanPath) {
+      const basePath = url.pathname.replace(/\/+$/, '');
+      url.pathname = `${basePath}/${cleanPath}`.replace(/\/{2,}/g, '/');
+    }
+
+    const appendParam = (key, value) => {
+      if (value === undefined || value === null) return;
+      if (Array.isArray(value)) {
+        value.forEach(v => appendParam(key, v));
+        return;
+      }
+      url.searchParams.append(key, value);
+    };
+
+    if (params instanceof URLSearchParams) {
+      params.forEach((value, key) => appendParam(key, value));
+    } else if (typeof params === 'string' && params !== '') {
+      new URLSearchParams(params.replace(/^\?/, '')).forEach((value, key) => appendParam(key, value));
+    } else if (params && typeof params === 'object') {
+      Object.entries(params).forEach(([key, value]) => appendParam(key, value));
+    }
+
+    return url.toString();
+  }
   const ME_ID = <?= (int)$me_id ?>;
   const ME_NM = <?= json_encode($me_nm) ?>;
   const OPEN_DM_USER = <?= $open_dm ?>;
@@ -756,7 +818,7 @@ async function markDMSeen(ids) {
     const fd = new FormData()
     fd.append('csrf_token', CSRF); 
     for (const id of ids) fd.append('dms[]', String(id));
-    await fetch(`${API}/reads/mark`, {
+    await fetch(apiUrl('reads/mark'), {
       method: 'POST',
       credentials: 'include',
       body: fd
@@ -775,7 +837,7 @@ async function markPublicSeen(ts) {
     const fd = new FormData();
     fd.append('csrf_token', CSRF); 
     fd.append('public_since', String(ts));
-    await fetch(`${API}/reads/mark`, {
+    await fetch(apiUrl('reads/mark'), {
       method: 'POST',
       credentials: 'include',
       body: fd
@@ -1500,7 +1562,7 @@ async function performPoll(forceCold = false, options = {}){
     headers.set('If-None-Match', etag);
   }
 
-  const url = `${API}/sync?${params.toString()}`;
+  const url = apiUrl('sync', params);
 
   POLL_BUSY = true;
   try {
@@ -1643,7 +1705,7 @@ async function doLogout(){
   let ok = false, err = '';
 
   try{
-    const r = await fetch(API + '/logout', {
+    const r = await fetch(apiUrl('logout'), {
       method: 'POST',
       body: fd,
       credentials: 'include',
@@ -1655,7 +1717,7 @@ async function doLogout(){
       err = js?.err || '';
     } else if (r.status === 403) {
 
-      const r2 = await fetch(API + '/logout', {
+      const r2 = await fetch(apiUrl('logout'), {
         method: 'POST',
         body: fd,
         credentials: 'include'
@@ -1667,7 +1729,7 @@ async function doLogout(){
   }catch(_){
 
     try{
-      const r3 = await fetch(API + '/logout', {
+      const r3 = await fetch(apiUrl('logout'), {
         method: 'POST',
         body: fd,
         credentials: 'include'
@@ -1848,7 +1910,7 @@ async function prefetchRoom(slug){
     const params = new URLSearchParams({
       public:'1', room: slug, since: String(since), limit:'30'
     });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+    const items = await fetchJSON(apiUrl('fetch', params));
 
     if (!Array.isArray(items) || items.length === 0) return;
 
@@ -1870,7 +1932,7 @@ async function prefetchDM(userId){
     const params = new URLSearchParams({
       to: String(userId), since: String(since), limit:'10'
     });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+    const items = await fetchJSON(apiUrl('fetch', params));
 
     if (!Array.isArray(items) || items.length === 0) return;
 
@@ -1939,7 +2001,7 @@ function applyCache(key){
 
   async function refreshBlocked(){
     try{
-      const js = await fetchJSON(API + '/block/list');
+      const js = await fetchJSON(apiUrl('block/list'));
       const ids = (js?.ids || js?.blocked_ids || []);
       BLOCKED = new Set((Array.isArray(ids)?ids:[]).map(Number));
 
@@ -1990,7 +2052,7 @@ function applyCache(key){
         params.set('room', target.room);
       }
 
-      const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
+      const items = await fetchJSON(apiUrl('fetch', params));
       if (!Array.isArray(items) || !items.length) return false;
 
       handleStreamSync({ messages: items }, target);
@@ -2584,7 +2646,7 @@ userListEl.addEventListener('click', async (e)=>{
     fd.append('csrf_token', CSRF);
     fd.append('target_id', String(id));
     try{
-      const r  = await fetch(API + '/block/toggle', { method:'POST', body: fd, credentials:'include', headers:h });
+      const r  = await fetch(apiUrl('block/toggle'), { method:'POST', body: fd, credentials:'include', headers:h });
       const js = await r.json().catch(()=>({}));
       if (r.ok && js.ok) {
         if (js.now_blocked) BLOCKED.add(id); else BLOCKED.delete(id);
@@ -2624,7 +2686,7 @@ userListEl.addEventListener('click', async (e)=>{
     fd.append('reason', reason);
 
     try{
-      const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
+      const r  = await fetch(apiUrl('report'), { method:'POST', body: fd, credentials:'include', headers:h });
       const js = await r.json().catch(()=>({}));
       if (r.ok && js.ok) {
         showToast('Rapporten är skickad. Tack!');
@@ -2644,9 +2706,17 @@ userListEl.addEventListener('click', async (e)=>{
     if (!mins || mins<1) return;
     const cause = prompt('Orsak (valfritt):','')||'';
     const fd = new FormData(); fd.append('csrf_token', CSRF); fd.append('user_id', id); fd.append('minutes', String(mins)); fd.append('cause', cause);
-    const r = await fetch(API+'/moderate/kick', {method:'POST', body:fd, credentials:'include', headers:h});
+    const r = await fetch(apiUrl('moderate/kick'), {method:'POST', body:fd, credentials:'include', headers:h});
     const js = await r.json().catch(()=>({}));
-    if (js.ok){ showToast('Kickad'); applySyncPayload(await fetchJSON(`${API}/sync?public=1&room=${encodeURIComponent(currentRoom)}&since=${pubList.dataset.last||-1}`)); }  else { alert('Misslyckades: '+(js.err||'error')); }
+    if (js.ok){
+      showToast('Kickad');
+      const syncParams = new URLSearchParams({
+        public: '1',
+        room: currentRoom,
+        since: String(pubList.dataset.last || -1)
+      });
+      applySyncPayload(await fetchJSON(apiUrl('sync', syncParams)));
+    }  else { alert('Misslyckades: '+(js.err||'error')); }
     return;
   }
 
@@ -2661,9 +2731,17 @@ userListEl.addEventListener('click', async (e)=>{
     fd.append('user_id', id);
     fd.append('minutes', String(mins));
     fd.append('cause', cause);
-    const r  = await fetch(API+'/moderate/ipban', {method:'POST', body: fd, credentials:'include', headers:h});
+    const r  = await fetch(apiUrl('moderate/ipban'), {method:'POST', body: fd, credentials:'include', headers:h});
     const js = await r.json().catch(()=>({}));
-    if (js.ok){ showToast('IP-bannad'); applySyncPayload(await fetchJSON(`${API}/sync?public=1&room=${encodeURIComponent(currentRoom)}&since=${pubList.dataset.last||-1}`)); }
+    if (js.ok){
+      showToast('IP-bannad');
+      const syncParams = new URLSearchParams({
+        public: '1',
+        room: currentRoom,
+        since: String(pubList.dataset.last || -1)
+      });
+      applySyncPayload(await fetchJSON(apiUrl('sync', syncParams)));
+    }
  else { alert('Misslyckades: '+(js.err||'error')); }
     return;
   }
@@ -2806,7 +2884,11 @@ function normalizeUsersPayload(raw){
 }
 async function roomHasMentionSince(slug){
   try{
-    const js = await fetchJSON(`${API}/fetch?public=1&room=${encodeURIComponent(slug)}&limit=30`);
+    const js = await fetchJSON(apiUrl('fetch', {
+      public: '1',
+      room: slug,
+      limit: '30'
+    }));
     if (!Array.isArray(js)) return false;
 
     return js.some(m => {
@@ -3160,7 +3242,7 @@ actHide?.addEventListener('click', async ()=>{
   if (cause) fd.append('cause', cause);
 
   try{
-    const r  = await fetch(API + '/moderate/hide-message', {
+    const r  = await fetch(apiUrl('moderate/hide-message'), {
       method: 'POST',
       body: fd,
       credentials: 'include',
@@ -3260,7 +3342,7 @@ actReport?.addEventListener('click', async ()=>{
   fd.append('reported_id', String(MSG_TARGET.id));
   fd.append('reason', reason);
   try{
-    const r = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
+    const r = await fetch(apiUrl('report'), { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
     if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeMsgSheet(); }
     else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
@@ -3270,7 +3352,7 @@ actBlock?.addEventListener('click', async ()=>{
   const id = MSG_TARGET.id;
   const fd = new FormData(); fd.append('csrf_token', CSRF); fd.append('target_id', String(id));
   try{
-    const r  = await fetch(API + '/block/toggle', { method:'POST', body: fd, credentials:'include', headers:h });
+    const r  = await fetch(apiUrl('block/toggle'), { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
     if (r.ok && js.ok) {
       if (js.now_blocked) {
@@ -3310,7 +3392,7 @@ imgActReport?.addEventListener('click', async ()=>{
   fd.append('reason', reason);
 
   try{
-    const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
+    const r  = await fetch(apiUrl('report'), { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
     if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeImagePreview(); }
     else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
@@ -3321,7 +3403,7 @@ imgActBlock?.addEventListener('click', async ()=>{
   const id = MSG_TARGET.id;
   const fd = new FormData(); fd.append('csrf_token', CSRF); fd.append('target_id', String(id));
   try{
-    const r  = await fetch(API + '/block/toggle', { method:'POST', body: fd, credentials:'include', headers:h });
+    const r  = await fetch(apiUrl('block/toggle'), { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
     if (r.ok && js.ok) {
       if (js.now_blocked) {
@@ -3747,7 +3829,7 @@ roomsListEl?.addEventListener('click', async (e) => {
 
 
   async function loadRooms(){
-    const rs = await fetchJSON(API+'/rooms');
+    const rs = await fetchJSON(apiUrl('rooms'));
     ROOMS = Array.isArray(rs) ? rs : [];
     ensureJoinedBaseline();
 
@@ -4248,7 +4330,7 @@ pubForm.addEventListener('submit', async (e)=>{
   const pending = appendPendingMessage(txt);
 
   try{
-    const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
+    const r  = await fetch(apiUrl('message'), { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
 
     if (!r.ok || !js.ok) {
@@ -4397,7 +4479,7 @@ async function uploadImage(file){
   fd.append('csrf_token', CSRF);
   fd.append('file', file, file.name || 'upload.jpg');
 
-  const r  = await fetch(API + '/upload', { method:'POST', body: fd, credentials:'include', headers:h });
+  const r  = await fetch(apiUrl('upload'), { method:'POST', body: fd, credentials:'include', headers:h });
   const js = await r.json().catch(()=>({}));
   if (!r.ok || !js.ok) {
     const msg = js.err || 'Uppladdning misslyckades';
@@ -4413,7 +4495,7 @@ async function uploadImage(file){
     fd.append('image_url', url);
     if (currentDM) fd.append('recipient_id', String(currentDM));
     else fd.append('room', currentRoom);
-    const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
+    const r  = await fetch(apiUrl('message'), { method:'POST', body: fd, credentials:'include', headers:h });
     const js = await r.json().catch(()=>({}));
     if (!r.ok || !js.ok) { showToast(js.cause || js.err || 'Kunde inte skicka bild'); return false; }
     if (js.deduped) { showToast('Spam - Duplicerad bild avvisades.'); return false; }
@@ -4565,7 +4647,7 @@ jumpBtn.addEventListener('click', ()=>{
 
 (function(){
   async function touch(){
-    try { await fetch(API + '/ping', { credentials:'include', headers:h }); } catch(_){}
+    try { await fetch(apiUrl('ping'), { credentials:'include', headers:h }); } catch(_){}
   }
 
   touch();
@@ -4680,7 +4762,7 @@ jumpBtn.addEventListener('click', ()=>{
 
   async function loadReports(){
     if (!IS_ADMIN || !reportListEl) return;
-    const js = await fetchJSON(`${API}/reports?status=open`);
+    const js = await fetchJSON(apiUrl('reports', { status: 'open' }));
     if (js && js.ok && Array.isArray(js.rows)) {
       renderReports(js.rows);
     }
@@ -4696,7 +4778,7 @@ jumpBtn.addEventListener('click', ()=>{
       fd.append('csrf_token', CSRF);
       fd.append('id', String(id));
       try{
-        const r  = await fetch(`${API}/reports/resolve`, { method:'POST', body:fd, credentials:'include', headers:h });
+        const r  = await fetch(apiUrl('reports/resolve'), { method:'POST', body:fd, credentials:'include', headers:h });
         const js = await r.json().catch(()=>({}));
         if (r.ok && js.ok){
           reportListEl.querySelector(`.report[data-id="${id}"]`)?.remove();
@@ -4714,7 +4796,7 @@ jumpBtn.addEventListener('click', ()=>{
       fd.append('csrf_token', CSRF);
       fd.append('id', String(id));
       try{
-        const r  = await fetch(`${API}/reports/delete`, { method:'POST', body:fd, credentials:'include', headers:h });
+        const r  = await fetch(apiUrl('reports/delete'), { method:'POST', body:fd, credentials:'include', headers:h });
         const js = await r.json().catch(()=>({}));
         if (r.ok && js.ok){
           reportListEl.querySelector(`.report[data-id="${id}"]`)?.remove();
@@ -4810,10 +4892,10 @@ logList?.addEventListener('click', async (e) => {
     if (cause) fd.append('cause', cause);
   }
 
-  const url = hideBtn ? '/moderate/hide-message' : '/moderate/unhide-message';
+  const endpoint = hideBtn ? 'moderate/hide-message' : 'moderate/unhide-message';
 
   try {
-    const r  = await fetch(API + url, { method:'POST', body: fd, credentials:'include', headers: h });
+    const r  = await fetch(apiUrl(endpoint), { method:'POST', body: fd, credentials:'include', headers: h });
     const js = await r.json().catch(() => ({}));
 
     if (!(r.ok && js.ok)) {
@@ -4867,7 +4949,9 @@ logList?.addEventListener('click', async (e) => {
     if (!IS_ADMIN || !LOG_USER_ID || LOG_BUSY) return;
     LOG_BUSY = true;
     try{
-      const js  = await fetchJSON(`${API}/admin/user-messages?user_id=${LOG_USER_ID}&limit=60${LOG_BEFORE?`&before_id=${LOG_BEFORE}`:''}`);
+      const params = new URLSearchParams({ user_id: String(LOG_USER_ID), limit: '60' });
+      if (LOG_BEFORE) params.set('before_id', String(LOG_BEFORE));
+      const js  = await fetchJSON(apiUrl('admin/user-messages', params));
       if (!js || js.ok === false){ alert(js?.err || 'Kunde inte hämta loggar'); return; }
       const rows = js.rows || [];
       renderLogRows(rows);
@@ -4880,7 +4964,9 @@ logList?.addEventListener('click', async (e) => {
 
 
 // ===== Keep-alive ping (works in background) =================
-const PING_URL = `${API}/ping`;
+function buildPingUrl() {
+  return apiUrl('ping', { ts: String(Date.now()) });
+}
 
 // Ping every ~55–63s. Background tabs throttle timers, but this cadence
 // plus beacons on hide/close keep presence alive under typical 120s TTL.
@@ -4909,7 +4995,7 @@ function scheduleKeepAlive() {
 
 async function pingOnce() {
   try {
-    const r  = await fetch(`${PING_URL}?ts=${Date.now()}`, {
+    const r  = await fetch(buildPingUrl(), {
       method: 'GET',
       credentials: 'include',
       cache: 'no-store',
@@ -4955,7 +5041,7 @@ function stopKeepAlive() {
 // POST beacon works reliably when the tab is hidden or closing.
 // We allowed POST on /ping above.
 function beaconPing() {
-  const url = `${PING_URL}?ts=${Date.now()}`;
+  const url = buildPingUrl();
   if (navigator.sendBeacon) {
     const blob = new Blob(['{}'], { type: 'application/json' });
     navigator.sendBeacon(url, blob);
