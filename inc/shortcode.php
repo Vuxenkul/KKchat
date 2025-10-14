@@ -1952,7 +1952,6 @@ function applyCache(key){
   }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-  function initials(n){ return (n||'').trim().split(' ').filter(Boolean).map(s=>s[0]||'').join('').slice(0,2).toUpperCase(); }
 
    function atBottom(el){
    const bottomDist = el.scrollHeight - el.scrollTop - el.clientHeight;
@@ -2809,35 +2808,6 @@ function normalizeUsersPayload(raw){
   rows.forEach(u => dedup.set(u.id, u));
   return [...dedup.values()];
 }
-async function roomHasMentionSince(slug){
-  try{
-    const js = await fetchJSON(`${API}/fetch?public=1&room=${encodeURIComponent(slug)}&limit=30`);
-    if (!Array.isArray(js)) return false;
-
-    return js.some(m => {
-      const txt = String(m?.content || m?.text || m?.body || '');
-      const sid = Number(m?.sender_id ?? m?.user_id ?? m?.author_id ?? 0);
-      if (sid === Number(ME_ID)) return false;
-
-      // try strict helper first
-      let hit = false;
-      try { if (typeof textMentionsName === 'function') hit = !!textMentionsName(txt, ME_NM); } catch(_) {}
-
-      // then a permissive fallback (handles punctuation)
-      if (!hit) {
-        const safe = String(ME_NM||'').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        if (safe) {
-          const re = new RegExp(`(^|\\W)@${safe}(?=\\W|$)`, 'i');
-          hit = re.test(txt);
-        }
-      }
-      return hit;
-    });
-  } catch(_) {
-    return false;
-  }
-}
-
 function kkIsActiveSource(slugOrDmKey){
   // Prefer your existing room/DM active-state check:
   if (typeof isActiveRoom === 'function') return isActiveRoom(slugOrDmKey);
@@ -2845,15 +2815,6 @@ function kkIsActiveSource(slugOrDmKey){
   if (window.currentRoomSlug) return window.currentRoomSlug === slugOrDmKey;
   return false;
 }
-
-function kkAnyPassiveMentionBump(js){
-  const bumps = js.mention_bumps || {};
-  for (const [key, val] of Object.entries(bumps)) {
-    if (val && !kkIsActiveSource(key)) return true;
-  }
-  return false;
-}
-
 
 function applySyncPayload(js){
   if (js && Array.isArray(js.events)) {
@@ -3770,29 +3731,6 @@ roomsListEl?.addEventListener('click', async (e) => {
       for (let i = 0; i < removeCount; i++) items[i].remove();
     }
   }
-function safeAutoScroll(container, renderUpdates) {
-
-  const wasAtBottom = atBottom(container);       
-  const prevHeight  = container.scrollHeight;
-
-  renderUpdates();
-
-  const grew = container.scrollHeight > prevHeight;
-
-  if (grew && (AUTO_SCROLL || wasAtBottom)) {
-    scrollToBottom(container, false);
-  }
-}
-
-function didAppendNew(payload, prevLast) {
-  if (!Array.isArray(payload) || payload.length === 0) return false;
-  for (let i = payload.length - 1; i >= 0; i--) {
-    const id = Number(payload[i]?.id);
-    if (Number.isFinite(id) && id > prevLast) return true;
-  }
-  return false;
-}
-
 function handleStreamSync(js, context){
   if (!js || typeof js !== 'object') return;
 
