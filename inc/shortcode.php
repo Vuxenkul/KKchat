@@ -3764,7 +3764,10 @@ roomsListEl?.addEventListener('click', async (e) => {
   function updateLeftCounts(){
     try{
       const userCnt = USERS.length;
-      const roomCnt = [...JOINED].length;
+      // Sum unread counts for the rooms the user has active tabs for.
+      const roomCnt = [...JOINED]
+        .map(slug => Number(ROOM_UNREAD?.[slug] ?? 0) || 0)
+        .reduce((sum, n) => sum + (n > 0 ? n : 0), 0);
       const dmCnt   = DM_UNREAD_TOTAL;
       if (countUsersEl) countUsersEl.textContent = String(userCnt);
       if (countRoomsEl) countRoomsEl.textContent = String(roomCnt);
