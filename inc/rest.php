@@ -28,6 +28,7 @@ add_action('rest_api_init', function () {
      * @param array $opts          Optional flags: include_flagged.
      */
     function kkchat_public_presence_snapshot(int $now, int $window, array $admin_names, array $opts = []): array {
+      kkchat_wpdb_reconnect_if_needed();
       global $wpdb; $t = kkchat_tables();
 
       $includeFlagged = !empty($opts['include_flagged']);
@@ -1181,6 +1182,7 @@ register_rest_route($ns, '/ping', [
     // Release the PHP session lock ASAP — ping is frequent
     kkchat_close_session_if_open();
 
+    kkchat_wpdb_reconnect_if_needed();
     global $wpdb;
     $t   = kkchat_tables();
     $now = time();
@@ -1424,6 +1426,7 @@ register_rest_route($ns, '/fetch', [
     'callback' => function (WP_REST_Request $req) {
       kkchat_require_login(); kkchat_assert_not_blocked_or_fail(); kkchat_check_csrf_or_fail($req);
       global $wpdb; $t = kkchat_tables();
+      kkchat_wpdb_reconnect_if_needed();
       $me_id = kkchat_current_user_id();
       $me_nm = kkchat_current_user_name();
 
@@ -1651,6 +1654,10 @@ register_rest_route($ns, '/fetch', [
       }
 
       $ok = $wpdb->insert($t['messages'], $data, $format);
+      if ($ok === false) {
+        kkchat_wpdb_reconnect_if_needed();
+        $ok = $wpdb->insert($t['messages'], $data, $format);
+      }
       if ($ok === false) kkchat_json(['ok'=>false,'err'=>'db_insert_failed'], 500);
 
       $mid = (int)$wpdb->insert_id;

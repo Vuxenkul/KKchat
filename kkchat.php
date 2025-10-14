@@ -296,6 +296,7 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
   $name_lc  = mb_strtolower($name, 'UTF-8');
 
   if ($refresh_presence) {
+    kkchat_wpdb_reconnect_if_needed();
     global $wpdb; $t = kkchat_tables();
 
     $gender  = (string) ($_SESSION['kkchat_gender'] ?? '');
@@ -326,6 +327,7 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
       $_SESSION['kkchat_user_id'] = $id;
     }
   } elseif ($id <= 0) {
+    kkchat_wpdb_reconnect_if_needed();
     global $wpdb; $t = kkchat_tables();
     $id = (int) $wpdb->get_var($wpdb->prepare(
       "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
