@@ -271,13 +271,15 @@ add_action('rest_api_init', function () {
         foreach ($blocked as $bid) { $params[] = (int) $bid; }
       }
       $sqlPriv =
-        "SELECT COUNT(*) FROM {$t['messages']} m
+        "SELECT COUNT(*) AS c, MAX(m.id) AS max_id FROM {$t['messages']} m
          LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
          WHERE m.recipient_id = %d
            AND r.user_id IS NULL
            AND m.hidden_at IS NULL
          $blkClause";
-      $totPriv = (int) $wpdb->get_var($wpdb->prepare($sqlPriv, ...$params));
+      $rowPriv = $wpdb->get_row($wpdb->prepare($sqlPriv, ...$params), ARRAY_A) ?: [];
+      $totPriv = (int) ($rowPriv['c'] ?? 0);
+      $latestPrivId = (int) ($rowPriv['max_id'] ?? 0);
 
       $paramsPub = [$me, $me, $since_pub, $guest];
       $blkClausePub = '';
@@ -286,7 +288,7 @@ add_action('rest_api_init', function () {
         foreach ($blocked as $bid) { $paramsPub[] = (int) $bid; }
       }
       $sqlPub =
-        "SELECT COUNT(*) FROM {$t['messages']} m
+        "SELECT COUNT(*) AS c, MAX(m.id) AS max_id FROM {$t['messages']} m
          LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
          LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
          WHERE m.recipient_id IS NULL
@@ -297,7 +299,9 @@ add_action('rest_api_init', function () {
            AND (%d = 0 OR rr.member_only = 0)
            AND m.hidden_at IS NULL
            $blkClausePub";
-      $totPub = (int) $wpdb->get_var($wpdb->prepare($sqlPub, ...$paramsPub));
+      $rowPub = $wpdb->get_row($wpdb->prepare($sqlPub, ...$paramsPub), ARRAY_A) ?: [];
+      $totPub = (int) ($rowPub['c'] ?? 0);
+      $latestPubId = (int) ($rowPub['max_id'] ?? 0);
 
       $paramsPer = [$me, $me];
       $blkPer = '';
@@ -306,7 +310,7 @@ add_action('rest_api_init', function () {
         foreach ($blocked as $bid) { $paramsPer[] = (int) $bid; }
       }
       $sqlPer =
-        "SELECT m.sender_id, COUNT(*) AS c
+        "SELECT m.sender_id, COUNT(*) AS c, MAX(m.id) AS max_id
            FROM {$t['messages']} m
      LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
           WHERE m.recipient_id = %d
@@ -315,8 +319,12 @@ add_action('rest_api_init', function () {
             $blkPer
        GROUP BY m.sender_id";
       $per = [];
+      $latestPerId = 0;
       $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
-      foreach ($rowsPer as $r) { $per[(int) $r['sender_id']] = (int) $r['c']; }
+      foreach ($rowsPer as $r) {
+        $per[(int) $r['sender_id']] = (int) $r['c'];
+        $latestPerId = max($latestPerId, (int) ($r['max_id'] ?? 0));
+      }
 
       $paramsRoom = [$me, $me, $since_pub, $guest];
       $blkRoom = '';
@@ -325,7 +333,7 @@ add_action('rest_api_init', function () {
         foreach ($blocked as $bid) { $paramsRoom[] = (int) $bid; }
       }
       $sqlRoom =
-        "SELECT m.room AS slug, COUNT(*) AS c
+        "SELECT m.room AS slug, COUNT(*) AS c, MAX(m.id) AS max_id
            FROM {$t['messages']} m
      LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
      LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
@@ -339,14 +347,26 @@ add_action('rest_api_init', function () {
             $blkRoom
        GROUP BY m.room";
       $perRoom = [];
+      $latestRoomId = 0;
       $rowsRoom = $wpdb->get_results($wpdb->prepare($sqlRoom, ...$paramsRoom), ARRAY_A) ?: [];
-      foreach ($rowsRoom as $r) { $perRoom[$r['slug']] = (int) $r['c']; }
+      foreach ($rowsRoom as $r) {
+        $perRoom[$r['slug']] = (int) $r['c'];
+        $latestRoomId = max($latestRoomId, (int) ($r['max_id'] ?? 0));
+      }
+
+      $unreadLatest = max(
+        $latestPrivId ?? 0,
+        $latestPubId ?? 0,
+        $latestPerId,
+        $latestRoomId
+      );
 
       $unread = [
         'totPriv' => $totPriv,
         'totPub'  => $totPub,
         'per'     => (object) $per,
         'rooms'   => (object) $perRoom,
+        'latest'  => $unreadLatest,
       ];
 
       $msgs = [];
@@ -545,18 +565,27 @@ add_action('rest_api_init', function () {
     }
   }
 
-  if (!function_exists('kkchat_sync_max_cursor')) {
-    function kkchat_sync_max_cursor(array $payload, int $current): int {
-      $max = $current;
-      foreach (($payload['messages'] ?? []) as $msg) {
-        $mid = isset($msg['id']) ? (int) $msg['id'] : null;
-        if ($mid !== null) {
-          $max = max($max, $mid);
+    if (!function_exists('kkchat_sync_max_cursor')) {
+      function kkchat_sync_max_cursor(array $payload, int $current): int {
+        $max = $current;
+        foreach (($payload['messages'] ?? []) as $msg) {
+          $mid = isset($msg['id']) ? (int) $msg['id'] : null;
+          if ($mid !== null) {
+            $max = max($max, $mid);
+          }
         }
+
+        $unread = $payload['unread'] ?? null;
+        if (is_array($unread)) {
+          $latest = isset($unread['latest']) ? (int) $unread['latest'] : 0;
+          $max = max($max, $latest);
+        } elseif (is_object($unread) && isset($unread->latest)) {
+          $max = max($max, (int) $unread->latest);
+        }
+
+        return $max;
       }
-      return $max;
     }
-  }
 
   if (!function_exists('kkchat_sync_retry_after_hint')) {
     function kkchat_sync_retry_after_hint(array $payload, array $ctx, bool $hasChanges): int {
