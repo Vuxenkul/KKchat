@@ -1558,45 +1558,28 @@ function playNotifOnce() {
 async function doLogout(){
   if (!confirm('Vill du logga ut?')) return;
 
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
+  let ok = false;
+  let err = '';
 
-  let ok = false, err = '';
-
-  try{
-    const r = await fetch(API + '/logout', {
-      method: 'POST',
-      body: fd,
-      credentials: 'include',
-      headers: h
-    });
-    if (r.ok) {
-      const js = await r.json().catch(()=>({}));
-      ok = (js?.ok !== false); 
-      err = js?.err || '';
-    } else if (r.status === 403) {
-
-      const r2 = await fetch(API + '/logout', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include'
-      });
-      const js2 = await r2.json().catch(()=>({}));
-      ok = r2.ok && (js2?.ok !== false);
-      err = js2?.err || '';
+  for (const includeHeaders of [true, false]) {
+    try {
+      const { response, json } = await apiPost('/logout', { csrf_token: CSRF }, { includeHeaders });
+      const success = response.ok && (json?.ok !== false);
+      if (success) {
+        ok = true;
+        break;
+      }
+      err = json?.err || err;
+      if (response.status === 403 && includeHeaders) {
+        continue;
+      }
+      break;
+    } catch (_) {
+      if (includeHeaders) {
+        continue;
+      }
+      break;
     }
-  }catch(_){
-
-    try{
-      const r3 = await fetch(API + '/logout', {
-        method: 'POST',
-        body: fd,
-        credentials: 'include'
-      });
-      const js3 = await r3.json().catch(()=>({}));
-      ok = r3.ok && (js3?.ok !== false);
-      err = js3?.err || '';
-    }catch(_){}
   }
 
   clearLocalState();
@@ -1917,6 +1900,32 @@ function applyCache(key){
       throw new Error('fetch '+url);
     }
     return r.json();
+  }
+
+  function buildFormData(fields){
+    if (fields instanceof FormData) return fields;
+    const fd = new FormData();
+    const entries = Object.entries(fields || {});
+    for (const [key, value] of entries) {
+      const v = value == null ? '' : value;
+      fd.append(key, typeof v === 'string' ? v : String(v));
+    }
+    return fd;
+  }
+
+  async function apiPost(path, fields, { includeHeaders = true } = {}){
+    const fd = buildFormData(fields);
+    const options = {
+      method: 'POST',
+      body: fd,
+      credentials: 'include'
+    };
+    if (includeHeaders) {
+      options.headers = h;
+    }
+    const response = await fetch(API + path, options);
+    const json = await response.json().catch(()=>({}));
+    return { response, json };
   }
 
   async function loadHistorySnapshot(state){
@@ -2533,6 +2542,39 @@ function userRow(u){
    renderUsers();
   });
 
+  function applyBlockState(id, nowBlocked, { closeActiveDm = false } = {}){
+    id = Number(id);
+    if (!Number.isFinite(id)) return;
+
+    if (nowBlocked) {
+      BLOCKED.add(id);
+      let dmHandled = false;
+      if (currentDM === id) {
+        if (closeActiveDm) {
+          closeDM(id);
+          dmHandled = true;
+        } else {
+          currentDM = null;
+          applyCache(activeCacheKey());
+          setComposerAccess();
+          showView('vPublic');
+        }
+      }
+      if (!dmHandled && ACTIVE_DMS.has(id)) {
+        ACTIVE_DMS.delete(id);
+        saveDMActive(ACTIVE_DMS);
+      }
+    } else {
+      BLOCKED.delete(id);
+    }
+
+    UNREAD_PER[id] = 0;
+    renderUsers();
+    renderDMSidebar();
+    renderRoomTabs();
+    updateLeftCounts();
+  }
+
 userListEl.addEventListener('click', async (e)=>{
 
   const lo = e.target.closest('[data-logout]');
@@ -2551,28 +2593,17 @@ userListEl.addEventListener('click', async (e)=>{
   const blk = e.target.closest('[data-block]');
   if (blk) {
     const id = +blk.dataset.block;
-    const fd = new FormData();
-    fd.append('csrf_token', CSRF);
-    fd.append('target_id', String(id));
     try{
-      const r  = await fetch(API + '/block/toggle', { method:'POST', body: fd, credentials:'include', headers:h });
-      const js = await r.json().catch(()=>({}));
-      if (r.ok && js.ok) {
-        if (js.now_blocked) BLOCKED.add(id); else BLOCKED.delete(id);
-
-        if (js.now_blocked && currentDM === id) {
-          currentDM = null;
-          applyCache(activeCacheKey());
-          setComposerAccess();
-          showView('vPublic');
-        }
-
-        UNREAD_PER[id] = 0;
-        if (isBlocked(id)) { ACTIVE_DMS.delete(id); saveDMActive(ACTIVE_DMS); }
-        renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
-        showToast(js.now_blocked ? 'Användare blockerad' : 'Användare avblockerad');
+      const { response, json } = await apiPost('/block/toggle', {
+        csrf_token: CSRF,
+        target_id: String(id)
+      });
+      if (response.ok && json.ok) {
+        const nowBlocked = !!json.now_blocked;
+        applyBlockState(id, nowBlocked);
+        showToast(nowBlocked ? 'Användare blockerad' : 'Användare avblockerad');
       } else {
-        const err = js.err || 'Kunde inte uppdatera blockering';
+        const err = json.err || 'Kunde inte uppdatera blockering';
         if (err === 'cant_block_admin') alert('Du kan inte blockera en admin.');
         else alert(err);
       }
@@ -2589,18 +2620,16 @@ userListEl.addEventListener('click', async (e)=>{
     reason = (reason || '').trim();
     if (!reason) { alert('Du måste ange en anledning.'); return; }
 
-    const fd = new FormData();
-    fd.append('csrf_token', CSRF);
-    fd.append('reported_id', String(id));
-    fd.append('reason', reason);
-
     try{
-      const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-      const js = await r.json().catch(()=>({}));
-      if (r.ok && js.ok) {
+      const { response, json } = await apiPost('/report', {
+        csrf_token: CSRF,
+        reported_id: String(id),
+        reason
+      });
+      if (response.ok && json.ok) {
         showToast('Rapporten är skickad. Tack!');
       } else {
-        alert('Kunde inte skicka rapporten: ' + (js.err || r.status));
+        alert('Kunde inte skicka rapporten: ' + (json.err || response.status));
       }
     }catch(_){
       alert('Tekniskt fel vid rapportering.');
@@ -3231,37 +3260,30 @@ actReport?.addEventListener('click', async ()=>{
   if (reason == null) return;
   reason = (reason || '').trim();
   if (!reason) { alert('Du måste ange en anledning.'); return; }
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
-  fd.append('reported_id', String(MSG_TARGET.id));
-  fd.append('reason', reason);
   try{
-    const r = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeMsgSheet(); }
-    else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
+    const { response, json } = await apiPost('/report', {
+      csrf_token: CSRF,
+      reported_id: String(MSG_TARGET.id),
+      reason
+    });
+    if (response.ok && json.ok) { showToast('Rapporten är skickad. Tack!'); closeMsgSheet(); }
+    else { alert('Kunde inte skicka rapporten: ' + (json.err || response.status)); }
   }catch(_){ alert('Tekniskt fel vid rapportering.'); }
 });
 actBlock?.addEventListener('click', async ()=>{
   const id = MSG_TARGET.id;
-  const fd = new FormData(); fd.append('csrf_token', CSRF); fd.append('target_id', String(id));
   try{
-    const r  = await fetch(API + '/block/toggle', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) {
-      if (js.now_blocked) {
-        BLOCKED.add(id);
-        if (currentDM === id) closeDM(id);
-        showToast('Användare blockerad');
-      } else {
-        BLOCKED.delete(id);
-        showToast('Användare avblockerad');
-      }
-      UNREAD_PER[id] = 0;
-      renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
+    const { response, json } = await apiPost('/block/toggle', {
+      csrf_token: CSRF,
+      target_id: String(id)
+    });
+    if (response.ok && json.ok) {
+      const nowBlocked = !!json.now_blocked;
+      applyBlockState(id, nowBlocked, { closeActiveDm: true });
+      showToast(nowBlocked ? 'Användare blockerad' : 'Användare avblockerad');
       closeMsgSheet();
     } else {
-      const err = js.err || 'Kunde inte uppdatera blockering';
+      const err = json.err || 'Kunde inte uppdatera blockering';
       if (err === 'cant_block_admin') alert('Du kan inte blockera en admin.');
       else alert(err);
     }
@@ -3280,41 +3302,33 @@ imgActReport?.addEventListener('click', async ()=>{
   reason = (reason || '').trim();
   if (!reason) { alert('Du måste ange en anledning.'); return; }
 
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
-  fd.append('reported_id', String(MSG_TARGET.id));
-  fd.append('reason', reason);
-
   try{
-    const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeImagePreview(); }
-    else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
+    const { response, json } = await apiPost('/report', {
+      csrf_token: CSRF,
+      reported_id: String(MSG_TARGET.id),
+      reason
+    });
+    if (response.ok && json.ok) { showToast('Rapporten är skickad. Tack!'); closeImagePreview(); }
+    else { alert('Kunde inte skicka rapporten: ' + (json.err || response.status)); }
   }catch(_){ alert('Tekniskt fel vid rapportering.'); }
 });
 
 imgActBlock?.addEventListener('click', async ()=>{
   const id = MSG_TARGET.id;
-  const fd = new FormData(); fd.append('csrf_token', CSRF); fd.append('target_id', String(id));
   try{
-    const r  = await fetch(API + '/block/toggle', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) {
-      if (js.now_blocked) {
-        BLOCKED.add(id);
-        if (currentDM === id) closeDM(id);
-        showToast('Användare blockerad');
-      } else {
-        BLOCKED.delete(id);
-        showToast('Användare avblockerad');
-      }
-      UNREAD_PER[id] = 0;
-      renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
+    const { response, json } = await apiPost('/block/toggle', {
+      csrf_token: CSRF,
+      target_id: String(id)
+    });
+    if (response.ok && json.ok) {
+      const nowBlocked = !!json.now_blocked;
+      applyBlockState(id, nowBlocked, { closeActiveDm: true });
+      showToast(nowBlocked ? 'Användare blockerad' : 'Användare avblockerad');
 
       const blocked = isBlocked(id);
       imgActBlock.textContent = blocked ? '✅ Avblockera' : '⛔ Blockera';
     } else {
-      const err = js.err || 'Kunde inte uppdatera blockering';
+      const err = json.err || 'Kunde inte uppdatera blockering';
       if (err === 'cant_block_admin') alert('Du kan inte blockera en admin.');
       else alert(err);
     }
