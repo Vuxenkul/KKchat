@@ -30,6 +30,28 @@ add_shortcode('kkchat', function () {
     ];
   }
 
+  $poll_hidden_threshold = max(0, (int) get_option('kkchat_poll_hidden_threshold', 90));
+  $poll_hidden_delay     = max(0, (int) get_option('kkchat_poll_hidden_delay', 30));
+  $poll_hot_interval     = max(1, (int) get_option('kkchat_poll_hot_interval', 4));
+  $poll_medium_interval  = max($poll_hot_interval, (int) get_option('kkchat_poll_medium_interval', 8));
+  $poll_slow_interval    = max($poll_medium_interval, (int) get_option('kkchat_poll_slow_interval', 16));
+  $poll_medium_after     = max(0, (int) get_option('kkchat_poll_medium_after', 3));
+  $poll_slow_after       = max($poll_medium_after, (int) get_option('kkchat_poll_slow_after', 5));
+  $poll_extra_2g         = max(0, (int) get_option('kkchat_poll_extra_2g', 20));
+  $poll_extra_3g         = max(0, (int) get_option('kkchat_poll_extra_3g', 10));
+
+  $poll_settings = [
+    'hiddenThresholdMs' => $poll_hidden_threshold * 1000,
+    'hiddenDelayMs'     => $poll_hidden_delay * 1000,
+    'hotIntervalMs'     => $poll_hot_interval * 1000,
+    'mediumIntervalMs'  => $poll_medium_interval * 1000,
+    'slowIntervalMs'    => $poll_slow_interval * 1000,
+    'mediumAfterMs'     => $poll_medium_after * 60 * 1000,
+    'slowAfterMs'       => $poll_slow_after * 60 * 1000,
+    'extra2gMs'         => $poll_extra_2g * 1000,
+    'extra3gMs'         => $poll_extra_3g * 1000,
+  ];
+
   $rest_nonce = esc_js( wp_create_nonce('wp_rest') );
   $open_dm = isset($_GET['dm']) ? (int)$_GET['dm'] : 'null';
 
@@ -420,6 +442,7 @@ f.addEventListener('submit', async (ev)=>{
   const ADMIN_LINKS = <?= wp_json_encode($admin_links) ?>;
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
+  const POLL_SETTINGS = Object.freeze(<?= wp_json_encode($poll_settings) ?>);
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -446,6 +469,27 @@ f.addEventListener('submit', async (ev)=>{
     ev.preventDefault();
     claimActiveTab({ forceCold: true });
   });
+
+  const handleActivityEvent = () => noteUserActivity();
+  function addActivityListener(target, type, opts){
+    if (!target || typeof target.addEventListener !== 'function') return;
+    try {
+      target.addEventListener(type, handleActivityEvent, opts);
+    } catch (_) {
+      target.addEventListener(type, handleActivityEvent);
+    }
+  }
+
+  addActivityListener(document, 'pointerdown', { passive: true });
+  addActivityListener(document, 'touchstart', { passive: true });
+  addActivityListener(document, 'touchmove', { passive: true });
+  addActivityListener(document, 'wheel', { passive: true });
+  addActivityListener(document, 'mousemove', { passive: true });
+  addActivityListener(document, 'keydown');
+  addActivityListener(document, 'click');
+  addActivityListener(document, 'input');
+  addActivityListener(window, 'scroll', { passive: true });
+  addActivityListener(pubList, 'scroll', { passive: true });
 
     function safeEsc(s){
       const t = s == null ? '' : String(s);
@@ -765,6 +809,9 @@ let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
 let POLL_HIDDEN_SINCE = 0;
 let BACKGROUND_POLL_TIMER = null;
+let POLL_LAST_ACTIVITY_AT = Date.now();
+let POLL_LAST_SCHEDULED_MS = null;
+let POLL_ACTIVITY_SIGNAL_AT = 0;
 
 function stopBackgroundPolling(){
   if (BACKGROUND_POLL_TIMER) {
@@ -773,13 +820,35 @@ function stopBackgroundPolling(){
   }
 }
 
+function noteUserActivity(force = false){
+  const now = Date.now();
+  if (!force && now - POLL_ACTIVITY_SIGNAL_AT < 500) return;
+  POLL_ACTIVITY_SIGNAL_AT = now;
+  POLL_LAST_ACTIVITY_AT = now;
+
+  if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
+  if (document.visibilityState === 'hidden') return;
+
+  const hotMs = Number(POLL_SETTINGS?.hotIntervalMs) || 4000;
+  if (!POLL_TIMER) return;
+  if (!Number.isFinite(POLL_LAST_SCHEDULED_MS) || POLL_LAST_SCHEDULED_MS <= 0) return;
+  if (POLL_LAST_SCHEDULED_MS <= hotMs * 1.25) return;
+
+  scheduleStreamReconnect(hotMs);
+}
+
 function computeBackgroundPollDelay(){
+  const settings = POLL_SETTINGS || {};
   const hiddenSince = Number(POLL_HIDDEN_SINCE) || 0;
-  if (!hiddenSince) return 10000;
+  const hiddenThreshold = Number(settings.hiddenThresholdMs) || 90000;
+  const hiddenDelay = Math.max(1000, Number(settings.hiddenDelayMs) || 30000);
+  const mediumMs = Math.max(1000, Number(settings.mediumIntervalMs) || 8000);
+
+  if (!hiddenSince) return mediumMs;
+
   const inactiveMs = Math.max(0, Date.now() - hiddenSince);
-  if (inactiveMs < 5 * 60 * 1000) return 15000;
-  if (inactiveMs < 10 * 60 * 1000) return 60000;
-  return 120000;
+  if (inactiveMs >= hiddenThreshold) return hiddenDelay;
+  return mediumMs;
 }
 
 function scheduleBackgroundPoll(delay){
@@ -1056,6 +1125,7 @@ function stopStream(){
     clearTimeout(POLL_TIMER);
     POLL_TIMER = null;
   }
+  POLL_LAST_SCHEDULED_MS = null;
 }
 
 function scheduleStreamReconnect(delay){
@@ -1074,11 +1144,17 @@ function scheduleStreamReconnect(delay){
     wait = computePollDelay(hint);
   }
 
+  if (!Number.isFinite(wait) || wait <= 0) {
+    wait = Number(POLL_SETTINGS?.hotIntervalMs) || 4000;
+  }
+
   const jitter = 0.8 + Math.random() * 0.4;
   wait = Math.max(500, Math.round(wait * jitter));
+  POLL_LAST_SCHEDULED_MS = wait;
 
   POLL_TIMER = setTimeout(() => {
     POLL_TIMER = null;
+    POLL_LAST_SCHEDULED_MS = null;
     performPoll();
   }, wait);
 }
@@ -1258,34 +1334,51 @@ function handleLeaderStorage(value){
 
 function computePollDelay(hintMs){
   const now = Date.now();
-  let base;
-  const hiddenFor = document.visibilityState === 'hidden'
-    ? (POLL_HIDDEN_SINCE ? now - POLL_HIDDEN_SINCE : 0)
+  const settings = POLL_SETTINGS || {};
+  const hiddenThreshold = Number(settings.hiddenThresholdMs) || 90000;
+  const hiddenDelay = Number(settings.hiddenDelayMs) || 30000;
+  const hotMs = Number(settings.hotIntervalMs) || 4000;
+  const mediumMs = Number(settings.mediumIntervalMs) || 8000;
+  const slowMs = Number(settings.slowIntervalMs) || 16000;
+  const mediumAfterMs = Number(settings.mediumAfterMs) || 180000;
+  const slowAfterMs = Math.max(mediumAfterMs, Number(settings.slowAfterMs) || 300000);
+
+  const hiddenSince = Number(POLL_HIDDEN_SINCE) || 0;
+  const hiddenFor = document.visibilityState === 'hidden' && hiddenSince
+    ? now - hiddenSince
     : 0;
 
-  if (hiddenFor >= 90000) {
-    base = 30000;
-  }
-
-  if (base == null) {
+  let base;
+  if (document.visibilityState === 'hidden' && hiddenFor >= hiddenThreshold) {
+    base = hiddenDelay;
+  } else {
+    const activitySince = now - (Number(POLL_LAST_ACTIVITY_AT) || 0);
     if (now < POLL_HOT_UNTIL) {
-      base = 4000;
-    } else if (now - POLL_LAST_EVENT_AT < 480000) {
-      base = 8000;
+      base = hotMs;
+    } else if (!Number.isFinite(activitySince) || activitySince <= mediumAfterMs) {
+      base = hotMs;
+    } else if (activitySince <= slowAfterMs) {
+      base = mediumMs;
     } else {
-      base = 90000;
+      base = slowMs;
     }
   }
 
   const conn = navigator.connection?.effectiveType || '';
+  const extra2g = Number(settings.extra2gMs) || 20000;
+  const extra3g = Number(settings.extra3gMs) || 10000;
   if (/slow-2g|2g/i.test(conn)) {
-    base += 20000;
+    base += extra2g;
   } else if (/3g/i.test(conn)) {
-    base += 10000;
+    base += extra3g;
   }
 
   if (hintMs != null && Number.isFinite(hintMs)) {
     base = Math.max(base, hintMs);
+  }
+
+  if (!Number.isFinite(base) || base <= 0) {
+    base = hotMs;
   }
 
   return base;
@@ -3825,11 +3918,12 @@ document.addEventListener('visibilitychange', () => {
     POLL_HIDDEN_SINCE = 0;
     stopBackgroundPolling();
     resumeStream();
+    noteUserActivity(true);
     pollActive().catch(()=>{});
   }
 });
 
-window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => { noteUserActivity(true); pollActive().catch(()=>{}); restartStream(); });
 window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
 
 

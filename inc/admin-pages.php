@@ -522,12 +522,25 @@ function kkchat_admin_settings_page() {
   if (isset($_POST['kk_save_settings'])) {
     check_admin_referer($nonce_key);
 
-    $dupe_window_seconds   = max(1, (int)$_POST['dupe_window_seconds'] ?? 120);
-    $dupe_fast_seconds     = max(1, (int)$_POST['dupe_fast_seconds'] ?? 30);
-    $dupe_max_repeats      = max(1, (int)$_POST['dupe_max_repeats'] ?? 2);
-    $min_interval_seconds  = max(0, (int)$_POST['min_interval_seconds'] ?? 3); // 0 = av
-    $dupe_autokick_minutes = max(0, (int)$_POST['dupe_autokick_minutes'] ?? 1); // 0 = av
-    $dedupe_window         = max(1, (int)$_POST['dedupe_window'] ?? 10); // direkt-spamskydd
+    $dupe_window_seconds   = max(1, (int)($_POST['dupe_window_seconds'] ?? 120));
+    $dupe_fast_seconds     = max(1, (int)($_POST['dupe_fast_seconds'] ?? 30));
+    $dupe_max_repeats      = max(1, (int)($_POST['dupe_max_repeats'] ?? 2));
+    $min_interval_seconds  = max(0, (int)($_POST['min_interval_seconds'] ?? 3)); // 0 = av
+    $dupe_autokick_minutes = max(0, (int)($_POST['dupe_autokick_minutes'] ?? 1)); // 0 = av
+    $dedupe_window         = max(1, (int)($_POST['dedupe_window'] ?? 10)); // direkt-spamskydd
+
+    $poll_hidden_threshold = max(0, (int)($_POST['poll_hidden_threshold'] ?? 90));
+    $poll_hidden_delay     = max(0, (int)($_POST['poll_hidden_delay'] ?? 30));
+    $poll_hot_interval     = max(1, (int)($_POST['poll_hot_interval'] ?? 4));
+    $poll_medium_interval  = max(1, (int)($_POST['poll_medium_interval'] ?? 8));
+    $poll_slow_interval    = max(1, (int)($_POST['poll_slow_interval'] ?? 16));
+    $poll_medium_after     = max(0, (int)($_POST['poll_medium_after'] ?? 3));
+    $poll_slow_after       = max($poll_medium_after, (int)($_POST['poll_slow_after'] ?? 5));
+    $poll_extra_2g         = max(0, (int)($_POST['poll_extra_2g'] ?? 20));
+    $poll_extra_3g         = max(0, (int)($_POST['poll_extra_3g'] ?? 10));
+
+    $poll_medium_interval  = max($poll_hot_interval, $poll_medium_interval);
+    $poll_slow_interval    = max($poll_medium_interval, $poll_slow_interval);
 
     update_option('kkchat_dupe_window_seconds',   $dupe_window_seconds);
     update_option('kkchat_dupe_fast_seconds',     $dupe_fast_seconds);
@@ -535,6 +548,15 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_min_interval_seconds',  $min_interval_seconds);
     update_option('kkchat_dupe_autokick_minutes', $dupe_autokick_minutes);
     update_option('kkchat_dedupe_window',         $dedupe_window);
+    update_option('kkchat_poll_hidden_threshold', $poll_hidden_threshold);
+    update_option('kkchat_poll_hidden_delay',     $poll_hidden_delay);
+    update_option('kkchat_poll_hot_interval',     $poll_hot_interval);
+    update_option('kkchat_poll_medium_interval',  $poll_medium_interval);
+    update_option('kkchat_poll_slow_interval',    $poll_slow_interval);
+    update_option('kkchat_poll_medium_after',     $poll_medium_after);
+    update_option('kkchat_poll_slow_after',       $poll_slow_after);
+    update_option('kkchat_poll_extra_2g',         $poll_extra_2g);
+    update_option('kkchat_poll_extra_3g',         $poll_extra_3g);
 
     echo '<div class="updated"><p>Inställningar sparade.</p></div>';
   }
@@ -546,6 +568,15 @@ function kkchat_admin_settings_page() {
   $v_min_interval_seconds  = (int)get_option('kkchat_min_interval_seconds', 3);
   $v_dupe_autokick_minutes = (int)get_option('kkchat_dupe_autokick_minutes', 1);
   $v_dedupe_window         = (int)get_option('kkchat_dedupe_window', 10);
+  $v_poll_hidden_threshold = (int)get_option('kkchat_poll_hidden_threshold', 90);
+  $v_poll_hidden_delay     = (int)get_option('kkchat_poll_hidden_delay', 30);
+  $v_poll_hot_interval     = (int)get_option('kkchat_poll_hot_interval', 4);
+  $v_poll_medium_interval  = (int)get_option('kkchat_poll_medium_interval', 8);
+  $v_poll_slow_interval    = (int)get_option('kkchat_poll_slow_interval', 16);
+  $v_poll_medium_after     = (int)get_option('kkchat_poll_medium_after', 3);
+  $v_poll_slow_after       = (int)get_option('kkchat_poll_slow_after', 5);
+  $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
+  $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
   ?>
   <div class="wrap">
     <h1>KKchat – Inställningar</h1>
@@ -591,6 +622,72 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="dupe_autokick_minutes" name="dupe_autokick_minutes" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_dupe_autokick_minutes; ?>"> minuter
             <p class="description">0 = av. Annars kickas användaren i så här många minuter vid dubblett-spam.</p>
+          </td>
+        </tr>
+      </table>
+      <h2>Polling</h2>
+      <table class="form-table">
+        <tr>
+          <th><label for="poll_hidden_threshold">Dold flik – tröskel</label></th>
+          <td>
+            <input id="poll_hidden_threshold" name="poll_hidden_threshold" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_hidden_threshold; ?>"> sekunder
+            <p class="description">Efter så här många sekunder dold flik räknas som "borta".</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_hidden_delay">Dold flik – intervall</label></th>
+          <td>
+            <input id="poll_hidden_delay" name="poll_hidden_delay" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_hidden_delay; ?>"> sekunder
+            <p class="description">Så lång tid väntar vi mellan pollningar när fliken varit dold längre än tröskeln.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_hot_interval">Synlig flik – het polling</label></th>
+          <td>
+            <input id="poll_hot_interval" name="poll_hot_interval" type="number" class="small-text" min="1" step="1" value="<?php echo (int)$v_poll_hot_interval; ?>"> sekunder
+            <p class="description">Intervallet när användaren är aktiv eller nyss återvänt.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_medium_interval">Synlig flik – mellanläge</label></th>
+          <td>
+            <input id="poll_medium_interval" name="poll_medium_interval" type="number" class="small-text" min="1" step="1" value="<?php echo (int)$v_poll_medium_interval; ?>"> sekunder
+            <p class="description">Intervallet när senaste aktivitet var för 3–5 minuter sedan.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_slow_interval">Synlig flik – långsamt</label></th>
+          <td>
+            <input id="poll_slow_interval" name="poll_slow_interval" type="number" class="small-text" min="1" step="1" value="<?php echo (int)$v_poll_slow_interval; ?>"> sekunder
+            <p class="description">Intervallet när användaren varit inaktiv i över 5 minuter.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_medium_after">Aktivitet → mellanläge</label></th>
+          <td>
+            <input id="poll_medium_after" name="poll_medium_after" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_medium_after; ?>"> minuter
+            <p class="description">Efter så här många minuter utan aktivitet byter vi till mellanläget.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_slow_after">Aktivitet → långsamt</label></th>
+          <td>
+            <input id="poll_slow_after" name="poll_slow_after" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_slow_after; ?>"> minuter
+            <p class="description">Efter så här många minuter utan aktivitet byter vi till långsamt läge.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_extra_2g">Extra för 2G</label></th>
+          <td>
+            <input id="poll_extra_2g" name="poll_extra_2g" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_extra_2g; ?>"> sekunder
+            <p class="description">Addera så här många sekunder om anslutningen är 2G/slow-2G.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_extra_3g">Extra för 3G</label></th>
+          <td>
+            <input id="poll_extra_3g" name="poll_extra_3g" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_extra_3g; ?>"> sekunder
+            <p class="description">Addera så här många sekunder om anslutningen är 3G.</p>
           </td>
         </tr>
       </table>
