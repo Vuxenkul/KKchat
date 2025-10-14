@@ -1,0 +1,1358 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;600;800&display=swap');
+
+#kkchat-root .tab[aria-selected="true"] .tab-close {
+  color: #333333;
+}
+
+
+#kkchat-root .imgfoot.flex .btns #kk-img-act-dm,
+#kkchat-root .imgfoot.flex .btns #kk-img-act-report,
+#kkchat-root .imgfoot.flex .btns #kk-img-act-block,
+#kkchat-root .imgfoot.flex .btns #kk-imgOpen,
+#kkchat-root .imgfoot.flex .btns #kk-imgClose {
+  background: #000 !important;  /* example */
+  padding: 6px 10px !important;
+  font-size: 1rem !important;
+}
+
+
+
+/* Only change the layout INSIDE the text block */
+#kkchat-root .users .user-main {
+  display: flex;
+  align-items: stretch;     /* makes the icon column match the total text height */
+  gap: 8px;
+}
+
+/* Left icon column */
+#kkchat-root .users .user-gender-col {
+  align-self: stretch;      /* full height of name + gender */
+  width: 1.6em;             /* fixed, tidy column width */
+  display: flex;
+  align-items: center;      /* keep the svg nicely centered */
+}
+
+/* Neutralize the wrapper span from genderIconMarkup, and size the image */
+#kkchat-root .users .user-gender-col .bubble-gender { display: contents; }
+#kkchat-root .users .user-gender-col .bubble-gender-icon {
+  width: 100%;
+  height: 100%;             /* fills the full two-line height */
+  object-fit: contain;      /* preserves aspect ratio */
+  display: block;
+}
+
+/* Keep the name + gender text stacked as before */
+#kkchat-root .users .user-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;  /* nice vertical balance */
+}
+
+/* ===========================
+   Webcam modal
+   =========================== */
+
+#kk-camModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.85);
+  display: none;
+  z-index: 10002;
+}
+#kk-camModal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#kk-multiTabModal {
+    backdrop-filter: blur(10px);
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 10050;
+  padding: 20px;
+}
+#kk-multiTabModal.is-open {
+  display: flex;
+}
+#kk-multiTabModal[hidden] {
+  display: none !important;
+}
+#kk-multiTabModal .kk-multitab__box {
+  width: min(520px, 100%);
+  background: #fff;
+  color: #111;
+  border-radius: 16px;
+  padding: 28px 24px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+#kk-multiTabModal h2 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+#kk-multiTabModal p {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+#kk-multiTabModal .kk-multitab__btn {
+  align-self: center;
+  background: var(--brand, #111827);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 28px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+#kk-multiTabModal .kk-multitab__btn:focus {
+  outline: 3px solid rgba(59, 130, 246, 0.6);
+  outline-offset: 3px;
+}
+#kk-multiTabModal .kk-multitab__btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.25);
+}
+#kk-camBox {
+  width: min(96vw, 720px);
+  background: #111;
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#kk-camVideo {
+  width: 100%;
+  max-height: 60vh;
+  background: #000;
+  border-radius: 8px;
+}
+#kk-camBtns {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+#kk-camBtns button {
+  background: #fff;
+  color: #111;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 900;
+}
+
+/* Admin bubbles */
+#kkchat-root .list .item.them.admin .bubble:not(.img),
+#kkchat-root .list .item.me.admin  .bubble:not(.img) {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* ===========================
+   Tabs / mute icon / badges
+   =========================== */
+
+/* --- Mute icon inside tabs --- */
+#kkchat-root .tab .tab-mute {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  margin-left: -6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 1.4em;
+  line-height: 1;
+  vertical-align: middle;
+  opacity: .9;
+}
+#kkchat-root .tab .tab-mute[aria-pressed="true"] { opacity: .75; }
+#kkchat-root .tab[aria-selected="true"] .tab-mute { color: inherit; }
+#kkchat-root .tab .tab-mute:focus {
+  outline: 2px solid #94a3b8;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+#kkchat-root .logitem.hidden { opacity: .7; }
+#kkchat-root .badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-right: 6px;
+}
+#kkchat-root .badge-active { background: #e7f7e7; border: 1px solid #9acd9a; }
+#kkchat-root .badge-hidden { background: #fbeaea; border: 1px solid #e3a1a1; }
+#kkchat-root .meta .muted { color: #666; margin-left: 6px; }
+
+#kkchat-root .bubble.mention {
+  background: #f472b6 !important;
+  color: #fff;
+}
+#kkchat-root .them .bubble.mention { border-bottom-left-radius: 4px; }
+#kkchat-root .me .bubble.mention {
+  background: #ffb8db !important;
+  border-bottom-right-radius: 4px;
+}
+
+
+/* ===========================
+   Input bar / mention box
+   =========================== */
+
+#kkchat-root .inputbar {
+  position: sticky;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-bottom: calc(env(safe-area-inset-bottom) + 0px);
+}
+.kb-open #kkchat-root .inputbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--kb-offset, 0px);
+  z-index: 1000;
+}
+
+#kkchat-root .mentionbox {
+  position: absolute;
+  left: 52px;
+  bottom: 56px;
+  z-index: 1000;
+  display: none;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.15);
+  max-height: 240px;
+  overflow: auto;
+  min-width: 260px;
+}
+#kkchat-root .mentionbox[open] { display: block; }
+#kkchat-root .mentionbox .row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+#kkchat-root .mentionbox .row:hover,
+#kkchat-root .mentionbox .row[active] { background: #fef2f8; }
+#kkchat-root .mentionbox .nm { font-weight: 800; font-size: 15px; }
+
+
+/* ===========================
+   Fonts
+   =========================== */
+
+/* (imports moved to top) */
+
+
+/* ===========================
+   Base / resets / utilities
+   =========================== */
+
+html, body { margin: 0; height: 100%; }
+#kkchat-root * { box-sizing: border-box; }
+
+#toast-container>.toast-error { display: none; }
+
+#kkchat-root li.item.pending { opacity: .6; }
+#kkchat-root li.item.pending .small .receipt::after { content: '  •  sending…'; }
+#kkchat-root li.item.error { background: #fff5f5; }
+#kkchat-root li.item.error .small .receipt { color: #b91c1c; }
+
+#kkchat-root.nsfw-blur img.imgmsg { filter: blur(20px); }
+
+
+/* ===========================
+   App root / theme tokens
+   =========================== */
+
+#kkchat-root {
+  --brand: #E35754;
+  --brandD: #BA4643;
+  --accent: #549EE3;
+  --gold: #E35754;
+  --bg: #fff;
+  --ink: #333333;
+  --muted: #6b7280;
+  font-family: 'Lexend', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  color: var(--ink);
+  height: 95dvh;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 900px) {
+  #kkchat-root { height: 100svh; }
+  body:has(#kkchat-root) { overflow: hidden; }
+  #kkchat-root { position: fixed; inset: 0; z-index: 1; }
+}
+
+#kkchat-root .kk-wrap {
+  width: 100%;
+  max-width: min(100%, 980px);
+  margin: 0 auto;
+  padding: 0 12px;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#kkchat-root .name-offline { opacity: .5; }
+
+
+/* ===========================
+   Header / top tabs
+   =========================== */
+
+#kkchat-root .header {
+  display: none !important;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: linear-gradient(180deg, #333333 0%, var(--brand) 63%);
+  border-bottom: 3px solid var(--gold);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  color: #fff;
+  flex: 0 0 auto;
+}
+#kkchat-root .h-left { display: flex; align-items: center; gap: 8px; }
+#kkchat-root .title {
+  font-weight: 900;
+  font-family: 'Bebas Neue', system-ui, sans-serif;
+  letter-spacing: .5px;
+  color: #fff;
+}
+#kkchat-root .tabicons {
+  background: unset;
+  border: unset;
+  padding: 0px;
+  font-size: 1.5rem;
+  padding-right: 5px;
+}
+#kkchat-root .tab-settings { 
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+#kkchat-root .tab-settings + .tab-settings { margin-left: 6px; }
+#kkchat-root .tab-settings.tab-settings-admin .tabicons { padding-left: 5px; }
+#kkchat-root .tab-settings.is-open > .tabicons {
+  color: var(--brand);
+}
+#kkchat-root .tab-settings-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+  padding: 8px;
+  min-width: 220px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 30;
+}
+
+/* 1) Let the dropdown escape the tabs strip ONLY when it's open */
+#kkchat-root .tabs:has(.tab-settings-menu.is-open) {
+  overflow: visible; /* was: auto */
+}
+
+/* 2) Make sure the dropdown floats above everything */
+#kkchat-root .tab-settings-menu {
+  z-index: 10002; /* above sheets/overlays you already use */
+}
+
+#kkchat-root .tab-settings-menu.is-open {
+  display: flex;
+}
+#kkchat-root .tab-settings-item {
+  background: #f6f7f9;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: .95rem;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+#kkchat-root .tab-settings-item:hover,
+#kkchat-root .tab-settings-item:focus {
+  background: #fff;
+  border-color: var(--brand);
+  outline: none;
+}
+#kkchat-root .tabs {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 2px 3px 7px;
+  background: white;
+  -webkit-overflow-scrolling: touch;
+  flex: 0 0 auto;
+  font-size: .8em;
+  border-left: 4px solid white;
+  border-top: 4px solid white;
+  border-right: 4px solid white;
+}
+#kkchat-root .tab-close {
+  font-size: 1.5rem;
+  position: relative;
+  top: 3px;
+  right: -4px;
+  color: #e35754;
+  line-height: 0px;
+  overflow: clip;
+}
+#kkchat-root .tabs .spacer { flex: 1; }
+#kkchat-root .tab {
+    flex: 0 0 auto;
+    padding: 4px 10px 4px 7px;
+    border: 1px solid #e5e7eb;
+    border-radius: 5px;
+    background: #fff;
+    font-weight: 800;
+    cursor: pointer;
+    white-space: nowrap;
+}#kkchat-root .tab[aria-selected="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+#kkchat-root .badge {
+  background: #ffd56a;
+  color: #111;
+  border-radius: 999px;
+  padding: 2px 8px;
+  margin-left: 6px;
+  font-weight: 900;
+}
+#kkchat-root .badge[data-has] {
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+#kkchat-root .tabs .name-offline { opacity: .6; }
+
+
+/* ===========================
+   Main layout
+   =========================== */
+
+#kkchat-root .kk-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 30%) 1fr;
+  gap: 12px;
+  padding: 0px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+#kkchat-root .sidebar,
+#kkchat-root .chat { min-width: 0; }
+
+@media (max-width: 900px) {
+  #kkchat-root .kk-layout { grid-template-columns: 1fr; padding: 0px; }
+  #kkchat-root .sidebar { order: 1; }
+  #kkchat-root .chat { order: 2; }
+}
+
+
+/* ===========================
+   Sidebar / people list
+   =========================== */
+
+#kkchat-root .sidebar {
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#kkchat-root .lefttabs {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid #eee;
+  background: #fff;
+  flex: 0 0 auto;
+}
+#kkchat-root .lefttabs button {
+  flex: 1 1 0;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  background: #fff;
+  font-weight: 800;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+#kkchat-root .lefttabs button[aria-selected="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+#kkchat-root .lefttabs .badge { margin-left: 0; }
+
+#kkchat-root .leftview { display: none; }
+#kkchat-root .leftview[active] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#kkchat-root .people {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  background: #fff;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+#kkchat-root .user-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#kkchat-root .user-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+#kkchat-root .user-filter-btn {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: #f9fafb;
+  color: #1f2937;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+      padding: 8px;
+  transition: background .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+#kkchat-root .user-filter-btn:hover {
+  background: #f3f4f6;
+}
+#kkchat-root .user-filter-btn:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px rgba(224, 51, 71, 0.2);
+}
+#kkchat-root .user-filter-btn[data-active="1"] {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+#kkchat-root .user-filter-btn[data-active="1"]:hover {
+  background: var(--brand);
+}
+#kkchat-root .user-filter-ico {
+  width: 1.5rem;   /* ~24px at 16px base font-size */
+  height: 1.5rem;
+  display: inline-block;
+  background-color: currentColor;
+  mask: url('../icons/filter.svg') center/contain no-repeat;
+  -webkit-mask: url('../icons/filter.svg') center/contain no-repeat;
+}
+
+#kkchat-root .user-filter-menu {
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+#kkchat-root .user-filter-menu[hidden] {
+  display: none;
+}
+#kkchat-root .user-filter-menu fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#kkchat-root .user-filter-menu legend {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+#kkchat-root .user-filter-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #111827;
+  max-height: 20px;
+}
+#kkchat-root .user-filter-menu input[type="checkbox"] {
+  width: auto;
+  accent-color: var(--brand);
+}
+#kkchat-root .filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+#kkchat-root .user-filter-clear {
+  background: none;
+  border: 0;
+  color: var(--brand);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 0;
+}
+#kkchat-root .user-filter-clear:hover,
+#kkchat-root .user-filter-clear:focus-visible {
+  text-decoration: underline;
+  outline: none;
+}
+
+#kkchat-root .users {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  max-height: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+#kkchat-root .user {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-auto-rows: minmax(0, auto);
+  align-items: center;
+  gap: 0;
+  padding: 1px 8px;
+  border-bottom: none;
+  background: #fff;
+}
+#kkchat-root .users .user:nth-child(odd) { background: #eaeaea; }
+#kkchat-root .users .user:nth-child(even) { background: #fff; }
+#kkchat-root .user:last-child { border-bottom: none; }
+
+#kkchat-root .user-main { min-width: 0; line-height: 1.2em; }
+#kkchat-root .user-main b { font-size: 0.9em; }
+#kkchat-root .user-main b,
+#kkchat-root .user-main .small { overflow-wrap: anywhere; word-break: break-word; }
+
+#kkchat-root .user-actions {
+  display: flex;
+  align-items: center;
+  gap: 0px;
+  flex-wrap: wrap;
+}
+#kkchat-root .user .badge-sm {
+  background: #e5e7eb;
+  color: #111;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 900;
+}
+#kkchat-root .user .badge-sm[data-has] { background: var(--accent); color: #fff; }
+
+#kkchat-root .openbtn {
+  background: unset;
+  border: unset;
+  border-radius: unset;
+  padding: unset;
+  cursor: pointer;
+  font-size: 1.5rem;
+}
+#kkchat-root .logoutbtn {
+  background: unset;
+  border: unset;
+  border-radius: unset;
+  padding: unset;
+  cursor: pointer;
+  font-size: 1rem;
+}
+#kkchat-root .logoutbtn b { font-size: 1.5rem; }
+
+#kkchat-root .openbtn[aria-current="true"] { border-color: var(--brand); color: var(--brand); }
+
+#kkchat-root .modbtn {
+  background: unset;
+  border: unset;
+  border-radius: unset;
+  padding: unset;
+  cursor: pointer;
+  font-size: 1.5rem;
+}
+#kkchat-root .modgrp { display: inline-flex; align-items: center; gap: 0px; }
+
+#kkchat-root .last-msg-prev {
+  grid-column: 1/-1;
+  margin-top: 6px;
+  color: #6b7280;
+  font-size: 11px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#kkchat-root .last-msg-prev .last-msg-time {
+  color: #9ca3af;
+}
+
+#kkchat-root .user[data-flag="1"] { background: #fff1f2; border-left: 4px solid #b91c1c; }
+#kkchat-root .user[data-flag="1"] .user-main b { color: #b91c1c; }
+
+
+/* ===========================
+   Chat area / views
+   =========================== */
+
+#kkchat-root .chat {
+  background: #333333;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#kkchat-root .view { display: none; }
+#kkchat-root .view[active] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#kkchat-root .msgwrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: auto !important; }
+
+#kkchat-root .list {
+  border-left: 4px solid white;
+  border-right: 4px solid white;
+  list-style: none;
+  margin: 0;
+  padding: 10px 10px calc(80px + env(safe-area-inset-bottom) + var(--kb-offset, 0px));
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scroll-behavior: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+
+
+/* ===========================
+   Input bar (full styling)
+   =========================== */
+
+#kkchat-root .inputbar {
+  position: sticky;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #fff;
+  border-top: 1px solid #eee;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 10px;
+  flex: 0 0 auto;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.kb-open #kkchat-root .inputbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: var(--kb-offset, 0px);
+  z-index: 1000;
+}
+
+#kkchat-root .inputbar textarea,
+#kkchat-root .inputbar input[type="text"],
+#kkchat-root .inputbar input[type="search"] { font-size: 16px; }
+
+
+/* ===========================
+   Root sizing (additional)
+   =========================== */
+
+#kkchat-root {
+  min-height: 100%;
+  height: 95vh;
+  height: 95svh;
+  height: 95dvh;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: contain;
+}
+
+
+/* ===========================
+   Messages / bubbles
+   =========================== */
+
+#kkchat-root .item {
+  margin: 3px 0;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  max-width: 100%;
+}
+#kkchat-root .bubble {
+  padding: 4px 12px;
+  border-radius: 14px;
+  max-width: 85%;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  font-size: 16px;
+}
+#kkchat-root .bubble-meta {
+  min-width: 52px;
+  text-align: left;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+#kkchat-root .bubble-gender {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 27px;
+    height: 27px;
+    margin-left: -7px;
+    margin-right: -5px;
+    margin-top:1px;
+}
+#kkchat-root .bubble-gender-icon {
+    display: block;
+    width: 27px;
+    height: 27px;
+}
+#kkchat-root .bubble-meta-text {
+  display: inline-block;
+  line-height: 1.3;
+}
+#kkchat-root .me { justify-content: flex-end; }
+#kkchat-root .me .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+#kkchat-root .them .bubble { background: #fff; border-bottom-left-radius: 4px; }
+#kkchat-root .small {
+  font-size: 0.7rem;
+  color: #E35754;
+  line-height: normal;
+  font-weight: 400;
+}
+#kkchat-root .list .item.them .bubble:not(.img) { cursor: pointer; }
+
+
+/* ===========================
+   Images / lightbox
+   =========================== */
+
+#kkchat-root .bubble.img { padding: 6px; }
+#kkchat-root .bubble .imgmsg {
+  display: block;
+  max-width: min(300px, 60vw);
+  max-height: 60vh;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  cursor: zoom-in;
+}
+#kkchat-root .list .item.them .bubble.img img.imgmsg { cursor: zoom-in; }
+
+#kkchat-root .bubble.video {
+  padding: 6px;
+  max-width: min(360px, 70vw);
+}
+#kkchat-root .bubble.video video.vidmsg {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #000;
+}
+#kkchat-root .bubble.video .videoinfo {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+#kkchat-root.nsfw-blur video.vidmsg { filter: blur(20px); }
+
+#kkchat-root .imgpanel {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.85);
+  display: none;
+  z-index: 10000;
+}
+#kkchat-root .imgpanel[open] { display: flex; align-items: center; justify-content: center; }
+#kkchat-root .imgbox {
+  max-width: 96vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+#kkchat-root .imgbox img { max-width: 96vw; max-height: 85vh; border-radius: 12px; }
+#kkchat-root .imgfoot {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #fff;
+}
+#kkchat-root .imgfoot .btns { font-size: 14px; }
+
+
+/* ===========================
+   Input controls / buttons
+   =========================== */
+
+#kkchat-root .inputbar textarea {
+  flex: 1;
+  resize: none;
+  min-height: 38px;
+  max-height: 120px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  font-size: 15px;
+}
+#kkchat-root .inputbar button {
+  background: #f6f7f9;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 8px 12px;
+  text-align: left;
+  font-size: .95rem;
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease;
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+
+
+
+
+#kkchat-root .input-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+#kkchat-root .input-actions-toggle {
+  background: none !important;
+  border: 0;
+  padding: 0 !important;
+  font-size: 1.6rem !important;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+}
+#kkchat-root .input-actions.is-open .input-actions-toggle {
+  color: var(--brand);
+}
+#kkchat-root .input-actions-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 220px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  z-index: 30;
+}
+#kkchat-root .input-actions.is-open .input-actions-menu {
+  display: flex;
+}
+#kkchat-root .input-actions-item {
+  background: transparent;
+  border: 0;
+  width: 100%;
+  color: #0f172a;
+  font-size: 0.95rem;
+  line-height: 1.35;
+  padding: 8px 10px;
+  border-radius: 8px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+#kkchat-root .input-actions-item:hover,
+#kkchat-root .input-actions-item:focus {
+  background: #f1f5f9;
+  outline: none;
+}
+#kkchat-root .input-actions-item[disabled] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+#kkchat-root .iconbtn {
+  background: unset !important;
+  padding: 0px !important;
+  font-size: 1.5rem !important;
+}
+
+
+/* ===========================
+   Banners / toast / receipts
+   =========================== */
+
+#kkchat-root .item.banner { justify-content: center; }
+#kkchat-root .item.banner .banner-bubble {
+  background: #fff3cd;
+  border: 1px solid #ffe58f;
+  color: #111;
+  padding: 8px 12px;
+  border-radius: 50px;
+  font-size: .8rem;
+  font-weight: 800;
+  text-align: center;
+  max-width: 80%;
+  white-space: pre-wrap;
+}
+#kkchat-root .fab {
+    position: fixed;
+    right: 34px;
+    bottom: 112px;
+    z-index: 9;
+    border: 0;
+    border-radius: 999px;
+    padding: 10px 12px;
+    background: var(--brand);
+    color: #fff;
+    font-weight: 900;
+    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    display: none;
+}
+#kkchat-root .fab.show { display: inline-flex; }
+#kkchat-root .toast {
+  position: fixed;
+  left: 50%;
+  bottom: 110px;
+  transform: translateX(-50%);
+  background: #111;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity .2s;
+  z-index: 11;
+}
+#kkchat-root .toast.show { opacity: 1; }
+#kkchat-root .receipt { display: inline-block; margin-top: 2px; font-size: 11px; color: #6b7280; }
+#kkchat-root .receipt.read { color: var(--accent); }
+
+
+/* ===========================
+   Login
+   =========================== */
+
+#kkchat-root .login {
+  max-width: 600px;
+  margin: 40px auto;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.05);
+}
+
+#kkchat-root .login h1 {
+  margin-top: 0;
+  margin-bottom: 0px;
+  font-size: 3rem;
+  line-height: 3rem;
+  font-family: 'Bebas Neue', system-ui, sans-serif;
+  color: var(--brand);
+}
+
+#kkchat-root .login label { display: block; font-weight: 700; margin: 10px 0 6px; }
+#kkchat-root .login input,
+#kkchat-root .login select {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+#kkchat-root .login button {
+  margin-top: 12px;
+  background: var(--brand);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-weight: 900;
+}
+#kkchat-root .err { color: #b91c1c; font-weight: 700; margin-top: 8px; }
+#kkchat-root button { color: #333333; }
+
+@media (min-width: 900px) { #kkchat-root .bubble { max-width: 70%; } }
+@media (prefers-reduced-motion: reduce) { #kkchat-root .fab, #kkchat-root .toast { transition: none; } }
+
+
+/* ===========================
+   Log panel
+   =========================== */
+
+#kkchat-root .logpanel {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.4);
+  display: none;
+  z-index: 9999;
+}
+#kkchat-root .logpanel[open] { display: flex; align-items: center; justify-content: center; }
+#kkchat-root .logbox {
+  background: #fff;
+  width: min(920px, 96vw);
+  max-height: 80vh;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+}
+#kkchat-root .loghead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+#kkchat-root .loglist { list-style: none; margin: 0; padding: 0; overflow: auto; }
+#kkchat-root .logitem {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+#kkchat-root .logitem .meta { font-size: 12px; color: #6b7280; }
+#kkchat-root .logfoot {
+  padding: 10px 12px;
+  border-top: 1px solid #eee;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+#kkchat-root #kk-leftWrap { display: flex; flex-direction: column; min-height: 0; }
+
+
+/* ===========================
+   Sidebar toggle (mobile)
+   =========================== */
+
+#kkchat-root .side-toggle {
+  display: none;
+  width: 100%;
+  padding: .6rem .9rem;
+  text-align: left;
+  background: #fff;
+  border: 1px solid #eee;
+  border-radius: 12px;
+  font-weight: 600;
+}
+#kkchat-root .side-toggle .chev { float: right; transition: transform .2s ease; }
+
+@media (max-width: 900px) {
+  #kkchat-root .side-toggle { display: block; margin-bottom: 8px; }
+  #kkchat-root #kk-leftWrap { display: none; }
+  #kkchat-root #kk-sidebar.open #kk-leftWrap { display: flex; }
+  #kkchat-root #kk-sidebar.open .side-toggle .chev { transform: rotate(180deg); }
+
+  #kkchat-root .sidebar { display: none !important; }
+
+  #kkchat-root #kk-sidebar #kk-leftWrap { display: none !important; }
+  #kkchat-root #kk-sidebar.open #kk-leftWrap { display: none !important; }
+
+  #kkchat-sideOverlay[open] #kk-leftWrap {
+    display: flex !important;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  #kkchat-root { padding-top: 0px; }
+
+  #kkchat-root .logoutbtn { font-size: 1rem; }
+  #kkchat-root .logoutbtn b { font-size: 1.3rem; }
+
+  #kkchat-root .openbtn { font-size: 1.3rem; }
+  #kkchat-root .modbtn { font-size: 1.3rem; }
+
+  #kkchat-root .list {
+    padding: 10px 0px calc(80px + env(safe-area-inset-bottom) + var(--kb-offset, 0px));
+  }
+}
+
+@media (min-width: 901px) {
+  #kkchat-root .side-toggle { display: none; }
+  #kkchat-root #kk-leftWrap { display: flex; }
+}
+
+html.kkchat-no-scroll,
+body.kkchat-no-scroll { overflow: hidden; }
+
+
+/* ===========================
+   Side overlay (sheet)
+   =========================== */
+
+#kkchat-sideOverlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  background: rgba(0,0,0,.5);
+  z-index: 9998;
+}
+#kkchat-sideOverlay[open] { display: flex; }
+
+#kkchat-sideOverlay .side-sheet {
+  background: #fff;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto 1fr;
+}
+#kkchat-sideOverlay .side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  margin-top: 0px;
+}
+#kkchat-sideOverlay .side-content {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px;
+}
+
+@media (min-width: 901px) {
+  #kkchat-sideOverlay { display: none !important; }
+}
+
+
+/* ===========================
+   Message action sheet
+   =========================== */
+
+#kk-msgSheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  display: none;
+  z-index: 10001;
+}
+#kk-msgSheet[open] { display: flex; align-items: flex-end; justify-content: center; }
+#kk-msgSheet .box {
+  background: #fff;
+  width: min(520px, 96vw);
+  border-radius: 16px;
+  position: relative;
+  bottom: 10px;
+  box-shadow: 0 -6px 20px rgba(0,0,0,.2);
+  padding: 8px;
+  font-size: 15px;
+}
+#kk-msgSheet .head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #eee;
+}
+#kk-msgSheet .row { display: flex; gap: 8px; padding: 10px; }
+#kk-msgSheet .row button {
+  flex: 1;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+
+/* ===========================
+   Login submitting state
+   =========================== */
+
+/* Login submitting state */
+#kkchat-root .login { position: relative; }
+#kkchat-root .login.is-loading { pointer-events: none; opacity: .6; }
+
+/* Grey overlay + centered spinner */
+#kkchat-root .kk-login-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,.15);
+  border-radius: 16px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+#kkchat-root .login.is-loading .kk-login-overlay { display: flex; }
+
+#kkchat-root .kk-login-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid #fff;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: kkspin 1s linear infinite;
+}
+
+@keyframes kkspin { to { transform: rotate(360deg); } }
+
+/* Terms text + checkbox */
+#kkchat-root .kk-terms { font-size: .9rem; margin: 10px 0 6px; opacity: .85; }
+#kkchat-root .kk-agree { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
+#kkchat-root .kk-agree input { width: auto; min-width: 30px; }
