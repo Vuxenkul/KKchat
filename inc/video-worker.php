@@ -286,6 +286,10 @@ function kkchat_video_asset_payload(array $row, ?array $cfg = null): array {
     'duration'  => isset($row['duration_seconds']) ? (float) $row['duration_seconds'] : null,
     'size'      => isset($row['object_size']) ? (int) $row['object_size'] : null,
     'mime'      => (string) ($row['mime_type'] ?? ''),
+    'width'     => isset($row['width_pixels']) ? (int) $row['width_pixels'] : null,
+    'height'    => isset($row['height_pixels']) ? (int) $row['height_pixels'] : null,
+    'thumbnail_size' => isset($row['thumbnail_size']) ? (int) $row['thumbnail_size'] : null,
+    'thumbnail_mime' => (string) ($row['thumbnail_mime'] ?? ''),
     'failure'   => (string) ($row['failure_code'] ?? ''),
     'failure_message' => (string) ($row['failure_message'] ?? ''),
     'key'       => (string) ($row['object_key'] ?? ''),
@@ -326,6 +330,11 @@ function kkchat_video_worker_handle_event(array $record) {
   $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['videos']} WHERE object_key = %s", $key), ARRAY_A);
   if (!$row) {
     return new WP_Error('video_asset_missing', 'No matching video asset for object', ['key' => $key]);
+  }
+
+  if (isset($row['status']) && (string) $row['status'] === 'ready') {
+    // Already finalized by the client flow; nothing to do.
+    return true;
   }
 
   $asset_id = (int) $row['id'];

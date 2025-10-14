@@ -886,6 +886,61 @@ add_action('rest_api_init', function () {
       $mime     = strtolower(trim((string) $req->get_param('mime')));
       $size     = (int) $req->get_param('size');
 
+      $duration = null;
+      $duration_raw = $req->get_param('duration');
+      if ($duration_raw !== null && $duration_raw !== '') {
+        $duration_val = (float) $duration_raw;
+        if ($duration_val > 0 && is_finite($duration_val)) {
+          $duration = round($duration_val, 2);
+        }
+      }
+
+      $width = null;
+      $width_raw = $req->get_param('width');
+      if ($width_raw !== null && $width_raw !== '') {
+        $width_val = (int) $width_raw;
+        if ($width_val > 0) {
+          $width = $width_val;
+        }
+      }
+
+      $height = null;
+      $height_raw = $req->get_param('height');
+      if ($height_raw !== null && $height_raw !== '') {
+        $height_val = (int) $height_raw;
+        if ($height_val > 0) {
+          $height = $height_val;
+        }
+      }
+
+      $thumb_info = $req->get_param('thumbnail');
+      if ($thumb_info instanceof WP_REST_Request) { // unlikely but guard
+        $thumb_info = $thumb_info->get_params();
+      }
+      if ($thumb_info instanceof stdClass) {
+        $thumb_info = (array) $thumb_info;
+      }
+      $thumb_size = null;
+      $thumb_mime = '';
+      $thumb_present = false;
+      if (is_array($thumb_info)) {
+        if (isset($thumb_info['size'])) {
+          $thumb_candidate = (int) $thumb_info['size'];
+          if ($thumb_candidate > 0) {
+            $thumb_size = $thumb_candidate;
+          }
+        }
+        if (!empty($thumb_info['mime'])) {
+          $thumb_mime = strtolower(trim((string) $thumb_info['mime']));
+        }
+      }
+      if ($thumb_size !== null) {
+        $thumb_present = true;
+        if ($thumb_mime === '') {
+          $thumb_mime = 'image/jpeg';
+        }
+      }
+
       if ($size <= 0) {
         kkchat_json(['ok' => false, 'err' => 'bad_size'], 400);
       }
@@ -921,6 +976,21 @@ add_action('rest_api_init', function () {
         kkchat_json(['ok' => false, 'err' => $signed->get_error_code()], 500);
       }
 
+      $thumb_signed = null;
+      $thumb_key    = null;
+      $thumb_url    = '';
+      if ($thumb_present) {
+        $thumb_key = kkchat_video_thumbnail_key($key);
+        $thumb_url = kkchat_video_public_url($thumb_key, $cfg);
+        $thumb_signed = kkchat_video_presign($cfg, 'PUT', $thumb_key, [
+          'headers' => ['Content-Type' => $thumb_mime ?: 'image/jpeg'],
+          'expires' => max(60, (int) ($cfg['presign_ttl'] ?? 900)),
+        ]);
+        if (is_wp_error($thumb_signed)) {
+          kkchat_json(['ok' => false, 'err' => $thumb_signed->get_error_code()], 500);
+        }
+      }
+
       $token      = bin2hex(random_bytes(24));
       $token_hash = hash('sha256', $token);
       $now        = time();
@@ -930,18 +1000,27 @@ add_action('rest_api_init', function () {
       $public_url = kkchat_video_public_url($key, $cfg);
 
       global $wpdb; $t = kkchat_tables();
-      $wpdb->insert($t['videos'], [
+      $insert = [
         'created_at'       => $now,
         'updated_at'       => $now,
         'uploader_id'      => $me,
         'object_key'       => $key,
         'expected_bytes'   => $size,
         'expected_mime'    => $mime,
+        'expected_thumb_bytes' => $thumb_present ? $thumb_size : null,
+        'duration_seconds' => $duration,
+        'width_pixels'     => $width,
+        'height_pixels'    => $height,
+        'thumbnail_key'    => $thumb_key,
+        'thumbnail_url'    => $thumb_url ?: null,
+        'thumbnail_mime'   => $thumb_present ? $thumb_mime : null,
         'status'           => 'pending_upload',
         'upload_token_hash'=> $token_hash,
         'upload_expires_at'=> $expires_at,
         'public_url'       => $public_url,
-      ], ['%d','%d','%d','%s','%d','%s','%s','%s','%d','%s']);
+      ];
+      $formats = ['%d','%d','%d','%s','%d','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%d','%s'];
+      $wpdb->insert($t['videos'], $insert, $formats);
 
       $asset_id = (int) $wpdb->insert_id;
       if ($asset_id <= 0) {
@@ -965,8 +1044,20 @@ add_action('rest_api_init', function () {
           'status'    => 'pending_upload',
           'max_bytes' => $max_bytes ?: null,
           'url'       => $public_url,
+          'duration'  => $duration,
+          'width'     => $width,
+          'height'    => $height,
+          'thumbnail_key' => $thumb_key,
+          'thumbnail_url' => $thumb_url,
+          'expected_thumbnail_bytes' => $thumb_present ? $thumb_size : null,
         ],
         'token'  => $token,
+        'thumbnail_upload' => $thumb_signed ? [
+          'url'     => $thumb_signed['url'],
+          'method'  => 'PUT',
+          'headers' => $thumb_signed['headers'] + ['Content-Type' => $thumb_mime ?: 'image/jpeg'],
+          'expires' => $expires_at,
+        ] : null,
       ]);
     },
     'permission_callback' => '__return_true',
@@ -1004,6 +1095,225 @@ add_action('rest_api_init', function () {
       }
 
       $asset = kkchat_video_asset_payload($row);
+      kkchat_json(['ok' => true, 'asset' => $asset]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
+  register_rest_route($ns, '/video/assets/(?P<id>\d+)/finalize', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login(); kkchat_assert_not_blocked_or_fail(); kkchat_check_csrf_or_fail($req);
+      nocache_headers();
+
+      $cfg = kkchat_video_upload_config();
+      if (!kkchat_video_is_configured($cfg)) {
+        kkchat_json(['ok' => false, 'err' => 'video_disabled'], 503);
+      }
+
+      $id    = (int) $req['id'];
+      $token = (string) $req->get_param('token');
+      if ($id <= 0 || $token === '') {
+        kkchat_json(['ok' => false, 'err' => 'bad_request'], 400);
+      }
+
+      global $wpdb; $t = kkchat_tables();
+      $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['videos']} WHERE id = %d", $id), ARRAY_A);
+      if (!$row) {
+        kkchat_json(['ok' => false, 'err' => 'not_found'], 404);
+      }
+
+      $me = kkchat_current_user_id();
+      if ($me <= 0 || ((int) $row['uploader_id'] !== $me && !kkchat_is_admin())) {
+        kkchat_json(['ok' => false, 'err' => 'forbidden'], 403);
+      }
+
+      $hash = (string) ($row['upload_token_hash'] ?? '');
+      if ($hash === '' || !hash_equals($hash, hash('sha256', $token))) {
+        kkchat_json(['ok' => false, 'err' => 'bad_token'], 403);
+      }
+
+      if (!empty($row['message_id'])) {
+        kkchat_json(['ok' => false, 'err' => 'video_already_used'], 409);
+      }
+
+      kkchat_close_session_if_open();
+
+      if ((string) ($row['status'] ?? '') === 'ready') {
+        $asset = kkchat_video_asset_payload($row, $cfg);
+        kkchat_json(['ok' => true, 'asset' => $asset]);
+      }
+
+      $key = (string) ($row['object_key'] ?? '');
+      if ($key === '') {
+        kkchat_json(['ok' => false, 'err' => 'missing_key'], 400);
+      }
+
+      $size = (int) $req->get_param('size');
+      if ($size <= 0) {
+        kkchat_json(['ok' => false, 'err' => 'bad_size'], 400);
+      }
+
+      $mime = strtolower(trim((string) $req->get_param('mime')));
+      if ($mime === '' && !empty($row['expected_mime'])) {
+        $mime = strtolower(trim((string) $row['expected_mime']));
+      }
+
+      $duration = null;
+      $duration_raw = $req->get_param('duration');
+      if ($duration_raw !== null && $duration_raw !== '') {
+        $duration_val = (float) $duration_raw;
+        if ($duration_val > 0 && is_finite($duration_val)) {
+          $duration = round($duration_val, 2);
+        }
+      }
+
+      $width = null;
+      $width_raw = $req->get_param('width');
+      if ($width_raw !== null && $width_raw !== '') {
+        $width_val = (int) $width_raw;
+        if ($width_val > 0) {
+          $width = $width_val;
+        }
+      }
+
+      $height = null;
+      $height_raw = $req->get_param('height');
+      if ($height_raw !== null && $height_raw !== '') {
+        $height_val = (int) $height_raw;
+        if ($height_val > 0) {
+          $height = $height_val;
+        }
+      }
+
+      $thumb_size = (int) $req->get_param('thumbnail_size');
+      if ($thumb_size <= 0) {
+        $thumb_size = null;
+      }
+      $thumb_mime = strtolower(trim((string) $req->get_param('thumbnail_mime')));
+      if ($thumb_mime === '' && $thumb_size !== null) {
+        $thumb_mime = (string) ($row['thumbnail_mime'] ?? 'image/jpeg');
+      }
+
+      $allowed = kkchat_video_allowed_mimes($cfg);
+      if ($mime !== '' && !in_array($mime, $allowed, true)) {
+        kkchat_json(['ok' => false, 'err' => 'bad_type'], 400);
+      }
+
+      $maxBytes = max(0, (int) ($cfg['max_bytes'] ?? 0));
+      if ($maxBytes > 0 && $size > $maxBytes) {
+        kkchat_json(['ok' => false, 'err' => 'too_large', 'max' => $maxBytes], 413);
+      }
+
+      if (!empty($row['expected_bytes'])) {
+        $expected = (int) $row['expected_bytes'];
+        $delta = abs($expected - $size);
+        $tolerance = max(1, (int) apply_filters('kkchat_video_size_tolerance', 512 * 1024));
+        if ($delta > $tolerance) {
+          kkchat_json(['ok' => false, 'err' => 'size_mismatch'], 409);
+        }
+      }
+
+      if (!empty($row['expected_thumb_bytes'])) {
+        $expectedThumb = (int) $row['expected_thumb_bytes'];
+        if ($expectedThumb > 0) {
+          if ($thumb_size === null) {
+            kkchat_json(['ok' => false, 'err' => 'thumb_missing'], 409);
+          }
+          $thumbDelta = abs($expectedThumb - $thumb_size);
+          $thumbTolerance = max(1, (int) apply_filters('kkchat_video_thumb_size_tolerance', 128 * 1024));
+          if ($thumbDelta > $thumbTolerance) {
+            kkchat_json(['ok' => false, 'err' => 'thumb_size_mismatch'], 409);
+          }
+        }
+      }
+
+      $head = kkchat_video_presign($cfg, 'HEAD', $key, ['expires' => 300]);
+      if (is_wp_error($head)) {
+        kkchat_json(['ok' => false, 'err' => $head->get_error_code()], 500);
+      }
+
+      $resp = wp_remote_request($head['url'], [
+        'method'  => 'HEAD',
+        'timeout' => 30,
+        'headers' => $head['headers'],
+      ]);
+      if (is_wp_error($resp)) {
+        kkchat_json(['ok' => false, 'err' => 'video_head_failed'], 502);
+      }
+      $code = (int) wp_remote_retrieve_response_code($resp);
+      if ($code < 200 || $code >= 300) {
+        kkchat_json(['ok' => false, 'err' => 'video_not_uploaded'], 409);
+      }
+      $remoteLen = (int) wp_remote_retrieve_header($resp, 'content-length');
+      if ($remoteLen > 0) {
+        $size = $remoteLen;
+      }
+      $remoteMime = (string) wp_remote_retrieve_header($resp, 'content-type');
+      if ($mime === '' && $remoteMime !== '') {
+        $mime = strtolower(trim($remoteMime));
+      }
+
+      $thumb_key = (string) ($row['thumbnail_key'] ?? '');
+      if ($thumb_size !== null) {
+        if ($thumb_key === '') {
+          $thumb_key = kkchat_video_thumbnail_key($key);
+        }
+        $thumb_head = kkchat_video_presign($cfg, 'HEAD', $thumb_key, ['expires' => 300]);
+        if (is_wp_error($thumb_head)) {
+          kkchat_json(['ok' => false, 'err' => $thumb_head->get_error_code()], 500);
+        }
+        $thumb_resp = wp_remote_request($thumb_head['url'], [
+          'method'  => 'HEAD',
+          'timeout' => 20,
+          'headers' => $thumb_head['headers'],
+        ]);
+        if (is_wp_error($thumb_resp)) {
+          kkchat_json(['ok' => false, 'err' => 'thumb_head_failed'], 502);
+        }
+        $thumb_code = (int) wp_remote_retrieve_response_code($thumb_resp);
+        if ($thumb_code < 200 || $thumb_code >= 300) {
+          kkchat_json(['ok' => false, 'err' => 'thumb_not_uploaded'], 409);
+        }
+        $remoteThumbLen = (int) wp_remote_retrieve_header($thumb_resp, 'content-length');
+        if ($remoteThumbLen > 0) {
+          $thumb_size = $remoteThumbLen;
+        }
+        if ($thumb_mime === '') {
+          $thumbMimeHeader = (string) wp_remote_retrieve_header($thumb_resp, 'content-type');
+          if ($thumbMimeHeader !== '') {
+            $thumb_mime = strtolower(trim($thumbMimeHeader));
+          }
+        }
+      }
+
+      $now = time();
+      $thumb_url = $thumb_key !== '' ? kkchat_video_public_url($thumb_key, $cfg) : null;
+
+      $payload = [
+        'status'            => 'ready',
+        'updated_at'        => $now,
+        'processed_at'      => $now,
+        'object_size'       => $size > 0 ? $size : null,
+        'mime_type'         => $mime ?: null,
+        'duration_seconds'  => $duration,
+        'width_pixels'      => $width,
+        'height_pixels'     => $height,
+        'thumbnail_key'     => $thumb_key ?: null,
+        'thumbnail_url'     => $thumb_url ?: null,
+        'thumbnail_size'    => $thumb_size ?: null,
+        'thumbnail_mime'    => $thumb_mime ?: null,
+        'failure_code'      => null,
+        'failure_message'   => null,
+        'public_url'        => kkchat_video_public_url($key, $cfg),
+      ];
+      $formats = ['%s','%d','%d','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s','%s'];
+      $wpdb->update($t['videos'], $payload, ['id' => $id], $formats, ['%d']);
+
+      $fresh = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['videos']} WHERE id = %d", $id), ARRAY_A);
+      kkchat_close_session_if_open();
+
+      $asset = kkchat_video_asset_payload($fresh ?: $row, $cfg);
       kkchat_json(['ok' => true, 'asset' => $asset]);
     },
     'permission_callback' => '__return_true',

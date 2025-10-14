@@ -4257,8 +4257,8 @@ const TARGET_MAX_BYTES = 3.2 * 1024 * 1024;   // smaller target payload
 const MAX_DIM_PX       = 1280;                // downscale a bit more
 const JPEG_QUALITY_INIT= 0.80;                // slightly lower default
 const JPEG_QUALITY_MIN = 0.6;
-const VIDEO_POLL_INTERVAL_MS = 4000;
-const VIDEO_POLL_TIMEOUT_MS  = 180000;
+const VIDEO_THUMB_MAX_EDGE_PX = 480;
+const VIDEO_THUMB_JPEG_QUALITY = 0.82;
 
 function validateImageFileBasics(file){
   if (!file) return 'Ingen fil vald';
@@ -4293,6 +4293,137 @@ function formatVideoDuration(seconds){
   return `${minutes}:${String(secs).padStart(2,'0')}`;
 }
 
+function canvasToJpegBlob(canvas, quality = VIDEO_THUMB_JPEG_QUALITY){
+  return new Promise((resolve) => {
+    if (!canvas) { resolve(null); return; }
+    const finish = (blob) => {
+      if (blob) { resolve(blob); return; }
+      try {
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        const parts = dataUrl.split(',');
+        if (parts.length < 2) { resolve(null); return; }
+        const binary = atob(parts[1]);
+        const len = binary.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+        resolve(new Blob([bytes], { type: 'image/jpeg' }));
+      } catch(_){
+        resolve(null);
+      }
+    };
+    if (typeof canvas.toBlob === 'function') {
+      canvas.toBlob((blob) => finish(blob), 'image/jpeg', quality);
+    } else {
+      finish(null);
+    }
+  });
+}
+
+async function analyzeVideoFile(file){
+  if (!(file instanceof File)) return null;
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+
+    let settled = false;
+
+    const cleanup = () => {
+      try { video.pause(); } catch(_){ /* noop */ }
+      video.removeAttribute('src');
+      try { video.load(); } catch(_){ /* noop */ }
+      URL.revokeObjectURL(url);
+    };
+
+    const settle = (data) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(data);
+    };
+
+    const captureFrame = async () => {
+      const width  = Number.isFinite(video.videoWidth) && video.videoWidth > 0 ? video.videoWidth : null;
+      const height = Number.isFinite(video.videoHeight) && video.videoHeight > 0 ? video.videoHeight : null;
+      const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null;
+      if (!width || !height) {
+        settle({ duration, width, height, thumbnail: null, thumbnailWidth: 0, thumbnailHeight: 0 });
+        return;
+      }
+
+      const maxEdge = VIDEO_THUMB_MAX_EDGE_PX;
+      const scale = Math.min(1, maxEdge / Math.max(width, height));
+      const canvasWidth = Math.max(1, Math.round(width * scale));
+      const canvasHeight = Math.max(1, Math.round(height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = canvasWidth;
+      canvas.height = canvasHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        settle({ duration, width, height, thumbnail: null, thumbnailWidth: 0, thumbnailHeight: 0 });
+        return;
+      }
+
+      try {
+        ctx.drawImage(video, 0, 0, canvasWidth, canvasHeight);
+      } catch(_){
+        settle({ duration, width, height, thumbnail: null, thumbnailWidth: 0, thumbnailHeight: 0 });
+        return;
+      }
+
+      const blob = await canvasToJpegBlob(canvas, VIDEO_THUMB_JPEG_QUALITY);
+      settle({ duration, width, height, thumbnail: blob, thumbnailWidth: canvasWidth, thumbnailHeight: canvasHeight });
+    };
+
+    video.addEventListener('error', () => {
+      settle({ duration: null, width: null, height: null, thumbnail: null, thumbnailWidth: 0, thumbnailHeight: 0 });
+    }, { once: true });
+
+    video.addEventListener('loadedmetadata', () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      const safeDuration = duration > 0 ? duration : 0;
+      const seekTarget = safeDuration > 0 ? Math.min(Math.max(safeDuration * 0.1, 0.15), Math.max(safeDuration - 0.15, 0)) : 0;
+      const doCapture = () => {
+        if (settled) return;
+        captureFrame().catch(() => settle({ duration: safeDuration || null, width: null, height: null, thumbnail: null, thumbnailWidth: 0, thumbnailHeight: 0 }));
+      };
+
+      if (seekTarget > 0 && Number.isFinite(seekTarget)) {
+        const onSeek = () => {
+          video.removeEventListener('seeked', onSeek);
+          doCapture();
+        };
+        try {
+          video.addEventListener('seeked', onSeek);
+          const end = video.seekable?.length ? video.seekable.end(video.seekable.length - 1) : safeDuration;
+          const target = Math.min(seekTarget, Math.max(0, end - 0.05));
+          video.currentTime = target;
+        } catch(_){
+          video.removeEventListener('seeked', onSeek);
+          if (video.readyState >= 2) {
+            doCapture();
+          } else {
+            video.addEventListener('loadeddata', doCapture, { once: true });
+          }
+        }
+      } else if (video.readyState >= 2) {
+        doCapture();
+      } else {
+        video.addEventListener('loadeddata', doCapture, { once: true });
+      }
+    }, { once: true });
+
+    try {
+      video.src = url;
+      video.load();
+    } catch(_){
+      settle({ duration: null, width: null, height: null, thumbnail: null, thumbnailWidth: 0, thumbnailHeight: 0 });
+    }
+  });
+}
+
 function parseVideoPayload(raw){
   if (!raw) return null;
   try {
@@ -4309,6 +4440,11 @@ function videoMetaText(data){
   const parts = [];
   const durationText = formatVideoDuration(data.duration);
   if (durationText) parts.push(durationText);
+  const width = Number(data.width || data.videoWidth || 0);
+  const height = Number(data.height || data.videoHeight || 0);
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    parts.push(`${Math.round(width)}×${Math.round(height)}`);
+  }
   if (data.size) {
     const sizeText = formatBytes(data.size);
     if (sizeText) parts.push(sizeText);
@@ -4333,13 +4469,29 @@ function validateVideoFileBasics(file){
   return '';
 }
 
-async function createVideoUploadSession(file){
+async function createVideoUploadSession(file, analysis){
   const payload = {
     csrf_token: CSRF,
     filename: file?.name || 'video',
     size: file?.size || 0,
     mime: file?.type || ''
   };
+  if (analysis && Number.isFinite(analysis.duration) && analysis.duration > 0) {
+    payload.duration = analysis.duration;
+  }
+  if (analysis && Number.isFinite(analysis.width) && analysis.width > 0) {
+    payload.width = Math.round(analysis.width);
+  }
+  if (analysis && Number.isFinite(analysis.height) && analysis.height > 0) {
+    payload.height = Math.round(analysis.height);
+  }
+  const thumb = analysis?.thumbnail instanceof Blob ? analysis.thumbnail : null;
+  if (thumb) {
+    payload.thumbnail = {
+      size: thumb.size || 0,
+      mime: thumb.type || 'image/jpeg'
+    };
+  }
 
   const headers = { ...h, 'Content-Type': 'application/json' };
   const resp = await fetch(API + '/video/upload-url', {
@@ -4360,41 +4512,68 @@ async function createVideoUploadSession(file){
   return js;
 }
 
-async function uploadVideoToStorage(upload, file){
+async function uploadToStorage(upload, body, fallbackType, errorMessage){
   if (!upload || !upload.url) throw new Error('Saknar uppladdnings-URL');
   const headers = Object.assign({}, upload.headers || {});
-  if (!headers['Content-Type']) headers['Content-Type'] = file?.type || 'application/octet-stream';
+  if (fallbackType && !headers['Content-Type']) headers['Content-Type'] = fallbackType;
   const method = (upload.method || 'PUT').toUpperCase();
-  const resp = await fetch(upload.url, { method, headers, body: file });
+  const resp = await fetch(upload.url, { method, headers, body });
   if (!resp.ok){
-    throw new Error('Kunde inte ladda upp video');
+    throw new Error(errorMessage || 'Uppladdningen misslyckades');
   }
   return true;
 }
 
-async function waitForVideoAssetReady(assetId, token){
-  const start = Date.now();
-  while (Date.now() - start < VIDEO_POLL_TIMEOUT_MS){
-    const resp = await fetch(`${API}/video/assets/${assetId}?token=${encodeURIComponent(token)}`, {
-      credentials: 'include',
-      headers: h
-    });
-    const js = await resp.json().catch(()=>({}));
-    if (!resp.ok || !js.ok){
-      throw new Error(js.err || 'Video-status misslyckades');
-    }
-    const asset = js.asset || {};
-    const status = String(asset.status || '').toLowerCase();
-    if (status === 'ready' || status === 'attached' || status === 'published'){
-      return asset;
-    }
-    if (status === 'failed'){
-      const message = asset.failure_message || asset.failure || 'Videon avvisades';
-      throw new Error(message);
-    }
-    await new Promise(res => setTimeout(res, VIDEO_POLL_INTERVAL_MS));
+async function uploadVideoToStorage(upload, file){
+  const type = file?.type || 'application/octet-stream';
+  return uploadToStorage(upload, file, type, 'Kunde inte ladda upp video');
+}
+
+async function uploadThumbnailToStorage(upload, blob){
+  if (!blob) return false;
+  const type = blob.type || 'image/jpeg';
+  return uploadToStorage(upload, blob, type, 'Kunde inte ladda upp förhandsvisning');
+}
+
+async function finalizeVideoAsset(assetId, token, meta){
+  if (!assetId || !token) throw new Error('Saknar videoinformation');
+  const payload = {
+    csrf_token: CSRF,
+    token,
+    size: Number(meta?.size || 0),
+    mime: meta?.mime || ''
+  };
+  if (Number.isFinite(meta?.duration) && meta.duration > 0) payload.duration = meta.duration;
+  if (Number.isFinite(meta?.width) && meta.width > 0) payload.width = Math.round(meta.width);
+  if (Number.isFinite(meta?.height) && meta.height > 0) payload.height = Math.round(meta.height);
+  if (Number.isFinite(meta?.thumbnail_size) && meta.thumbnail_size > 0) payload.thumbnail_size = Math.round(meta.thumbnail_size);
+  if (meta?.thumbnail_mime) payload.thumbnail_mime = meta.thumbnail_mime;
+
+  if (!payload.size || payload.size <= 0) {
+    throw new Error('Saknar videostorlek');
   }
-  throw new Error('Videon tog för lång tid att bearbeta');
+
+  const headers = { ...h, 'Content-Type': 'application/json' };
+  const resp = await fetch(`${API}/video/assets/${assetId}/finalize`, {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const js = await resp.json().catch(()=>({}));
+  if (!resp.ok || !js.ok){
+    throw new Error(js.err || 'Slutförande misslyckades');
+  }
+  const asset = js.asset || {};
+  const status = String(asset.status || '').toLowerCase();
+  if (status === 'failed'){
+    const message = asset.failure_message || asset.failure || 'Videon avvisades';
+    throw new Error(message);
+  }
+  if (status !== 'ready' && status !== 'attached' && status !== 'published'){
+    throw new Error('Videon kunde inte slutföras');
+  }
+  return asset;
 }
 
 async function sendVideoMessage(assetId, token){
@@ -4595,15 +4774,35 @@ pubVideoInp?.addEventListener('change', async () => {
   if (err) { showToast(err); return; }
 
   try {
+    showToast('Läser videodata…');
+    let analysis = null;
+    try {
+      analysis = await analyzeVideoFile(file);
+    } catch(err) {
+      console.warn('Video analysis misslyckades', err);
+    }
     showToast('Förbereder video…');
-    const session = await createVideoUploadSession(file);
+    const session = await createVideoUploadSession(file, analysis);
     const assetId = Number(session?.asset?.id || 0);
     const token   = session?.token || '';
     if (!assetId || !token) throw new Error('Saknar videoinformation');
     showToast('Laddar upp video…');
     await uploadVideoToStorage(session.upload, file);
-    showToast('Bearbetar video…');
-    await waitForVideoAssetReady(assetId, token);
+    const thumbBlob = analysis?.thumbnail instanceof Blob ? analysis.thumbnail : null;
+    if (thumbBlob && session?.thumbnail_upload) {
+      showToast('Laddar upp förhandsvisning…');
+      await uploadThumbnailToStorage(session.thumbnail_upload, thumbBlob);
+    }
+    showToast('Slutför uppladdning…');
+    await finalizeVideoAsset(assetId, token, {
+      size: file.size || 0,
+      mime: file.type || '',
+      duration: analysis?.duration,
+      width: analysis?.width,
+      height: analysis?.height,
+      thumbnail_size: thumbBlob?.size || 0,
+      thumbnail_mime: thumbBlob?.type || ''
+    });
     showToast('Skickar video…');
     const ok = await sendVideoMessage(assetId, token);
     if (ok) { await pollActive(); showToast('Video skickad'); }
