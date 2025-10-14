@@ -284,6 +284,8 @@ function kkchat_video_asset_payload(array $row, ?array $cfg = null): array {
     'url'       => (string) ($row['public_url'] ?? ''),
     'thumbnail' => (string) ($row['thumbnail_url'] ?? ''),
     'duration'  => isset($row['duration_seconds']) ? (float) $row['duration_seconds'] : null,
+    'width'     => isset($row['video_width']) ? (int) $row['video_width'] : null,
+    'height'    => isset($row['video_height']) ? (int) $row['video_height'] : null,
     'size'      => isset($row['object_size']) ? (int) $row['object_size'] : null,
     'mime'      => (string) ($row['mime_type'] ?? ''),
     'failure'   => (string) ($row['failure_code'] ?? ''),
@@ -472,6 +474,8 @@ function kkchat_video_worker_handle_event(array $record) {
   }
   $payload['mime_type'] = $normalizedMime; $formats[] = '%s';
   $payload['duration_seconds'] = $duration !== null ? round($duration, 2) : null; $formats[] = '%s';
+  $payload['video_width'] = null; $formats[] = '%s';
+  $payload['video_height'] = null; $formats[] = '%s';
   $payload['thumbnail_key'] = $thumbKey; $formats[] = '%s';
   $payload['thumbnail_url'] = $thumbUrl; $formats[] = '%s';
   $payload['public_url']    = kkchat_video_public_url($key, $cfg); $formats[] = '%s';

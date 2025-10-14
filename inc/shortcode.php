@@ -4309,6 +4309,11 @@ function videoMetaText(data){
   const parts = [];
   const durationText = formatVideoDuration(data.duration);
   if (durationText) parts.push(durationText);
+  const width = Number(data.width || 0);
+  const height = Number(data.height || 0);
+  if (width > 0 && height > 0) {
+    parts.push(`${width}×${height}`);
+  }
   if (data.size) {
     const sizeText = formatBytes(data.size);
     if (sizeText) parts.push(sizeText);
@@ -4333,12 +4338,13 @@ function validateVideoFileBasics(file){
   return '';
 }
 
-async function createVideoUploadSession(file){
+async function createVideoUploadSession(file, options = {}){
   const payload = {
     csrf_token: CSRF,
     filename: file?.name || 'video',
     size: file?.size || 0,
-    mime: file?.type || ''
+    mime: file?.type || '',
+    thumbnail: options.thumbnail ? 1 : 0,
   };
 
   const headers = { ...h, 'Content-Type': 'application/json' };
@@ -4358,6 +4364,126 @@ async function createVideoUploadSession(file){
     throw new Error(err);
   }
   return js;
+}
+
+async function uploadThumbnailToStorage(upload, file){
+  if (!upload || !upload.url || !file) return false;
+  const headers = Object.assign({}, upload.headers || {});
+  if (!headers['Content-Type']) headers['Content-Type'] = file.type || 'image/jpeg';
+  const method = (upload.method || 'PUT').toUpperCase();
+  const resp = await fetch(upload.url, { method, headers, body: file });
+  if (!resp.ok){
+    throw new Error('Kunde inte ladda upp förhandsbild');
+  }
+  return true;
+}
+
+async function probeVideoFile(file){
+  const result = { duration: null, width: null, height: null, thumbnailFile: null };
+  if (!(file instanceof File)) return result;
+
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  video.muted = true;
+  video.playsInline = true;
+  const url = URL.createObjectURL(file);
+  video.src = url;
+
+  const cleanup = () => {
+    try { video.pause?.(); } catch(_){}
+    video.removeAttribute('src');
+    if (typeof video.load === 'function') { try { video.load(); } catch(_){} }
+    URL.revokeObjectURL(url);
+    video.remove();
+  };
+
+  try {
+    await new Promise((resolve, reject) => {
+      const onLoaded = () => resolve();
+      const onError = () => reject(new Error('metadata_failed'));
+      video.addEventListener('loadedmetadata', onLoaded, { once: true });
+      video.addEventListener('error', onError, { once: true });
+    });
+
+    const duration = Number(video.duration);
+    result.duration = Number.isFinite(duration) && duration > 0 ? duration : null;
+    result.width = video.videoWidth || null;
+    result.height = video.videoHeight || null;
+
+    const targetTime = result.duration && result.duration > 0 ? Math.min(Math.max(result.duration * 0.1, 0.1), Math.max(result.duration - 0.1, 0.1)) : 0;
+    if (targetTime > 0) {
+      await new Promise((resolve) => {
+        const onSeek = () => resolve();
+        video.addEventListener('seeked', onSeek, { once: true });
+        try { video.currentTime = targetTime; }
+        catch(_) { resolve(); }
+      }).catch(()=>{});
+    } else if (video.readyState < 2) {
+      await new Promise((resolve) => {
+        video.addEventListener('loadeddata', resolve, { once: true });
+      }).catch(()=>{});
+    }
+
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    if (vw > 0 && vh > 0 && typeof document.createElement('canvas').getContext === 'function') {
+      const canvas = document.createElement('canvas');
+      const maxDim = 720;
+      const maxSide = Math.max(vw, vh);
+      const scale = maxSide > maxDim ? (maxDim / maxSide) : 1;
+      canvas.width = Math.max(1, Math.round(vw * scale));
+      canvas.height = Math.max(1, Math.round(vh * scale));
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        if (canvas.toBlob) {
+          try {
+            const blob = await new Promise((resolve, reject) => {
+              canvas.toBlob(b => b ? resolve(b) : reject(new Error('thumb_failed')), 'image/jpeg', 0.82);
+            });
+            if (blob) {
+              result.thumbnailFile = new File([blob], (file.name || 'video') + '-thumb.jpg', { type: 'image/jpeg' });
+            }
+          } catch(_){}
+        }
+      }
+    }
+  } catch(_) {
+    // Ignore probe errors and fall back to server defaults
+  } finally {
+    cleanup();
+  }
+
+  return result;
+}
+
+async function finalizeVideoAsset(assetId, token, meta = {}){
+  const payload = {
+    csrf_token: CSRF,
+    asset_id: assetId,
+    token,
+    size: meta.size || 0,
+    duration: Number.isFinite(meta.duration) ? meta.duration : null,
+    width: meta.width || 0,
+    height: meta.height || 0,
+    mime: meta.mime || '',
+    thumbnail_uploaded: meta.thumbnailUploaded ? 1 : 0,
+  };
+  if (meta.thumbnailSize) payload.thumbnail_size = meta.thumbnailSize;
+  if (meta.thumbnailMime) payload.thumbnail_mime = meta.thumbnailMime;
+
+  const headers = { ...h, 'Content-Type': 'application/json' };
+  const resp = await fetch(API + '/video/finalize', {
+    method: 'POST',
+    credentials: 'include',
+    headers,
+    body: JSON.stringify(payload)
+  });
+  const js = await resp.json().catch(()=>({}));
+  if (!resp.ok || !js.ok){
+    throw new Error(js.cause || js.err || 'Kunde inte slutföra video');
+  }
+  return js.asset || null;
 }
 
 async function uploadVideoToStorage(upload, file){
@@ -4595,15 +4721,31 @@ pubVideoInp?.addEventListener('change', async () => {
   if (err) { showToast(err); return; }
 
   try {
+    showToast('Läser video…');
+    const probe = await probeVideoFile(file);
     showToast('Förbereder video…');
-    const session = await createVideoUploadSession(file);
+    const session = await createVideoUploadSession(file, { thumbnail: !!probe.thumbnailFile });
     const assetId = Number(session?.asset?.id || 0);
     const token   = session?.token || '';
     if (!assetId || !token) throw new Error('Saknar videoinformation');
     showToast('Laddar upp video…');
     await uploadVideoToStorage(session.upload, file);
-    showToast('Bearbetar video…');
-    await waitForVideoAssetReady(assetId, token);
+    const thumbUpload = session.thumbnail_upload;
+    if (probe.thumbnailFile && thumbUpload) {
+      showToast('Laddar förhandsbild…');
+      await uploadThumbnailToStorage(thumbUpload, probe.thumbnailFile);
+    }
+    showToast('Slutför video…');
+    await finalizeVideoAsset(assetId, token, {
+      size: file.size || 0,
+      duration: probe.duration,
+      width: probe.width || 0,
+      height: probe.height || 0,
+      mime: file.type || '',
+      thumbnailUploaded: !!(probe.thumbnailFile && thumbUpload),
+      thumbnailSize: probe.thumbnailFile?.size || 0,
+      thumbnailMime: probe.thumbnailFile?.type || '',
+    });
     showToast('Skickar video…');
     const ok = await sendVideoMessage(assetId, token);
     if (ok) { await pollActive(); showToast('Video skickad'); }

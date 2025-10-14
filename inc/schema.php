@@ -190,6 +190,8 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `mime_type` VARCHAR(128) NULL,
     `status` VARCHAR(32) NOT NULL DEFAULT 'pending_upload',
     `duration_seconds` DECIMAL(10,2) NULL,
+    `video_width` INT UNSIGNED NULL,
+    `video_height` INT UNSIGNED NULL,
     `thumbnail_key` VARCHAR(255) NULL,
     `thumbnail_url` TEXT NULL,
     `public_url` TEXT NULL,
