@@ -755,6 +755,7 @@ const POLL_SYNC_KEY     = 'kkchat:poll:last';
 const POLL_POKE_KEY     = 'kkchat:poll:poke';
 const POLL_HEARTBEAT_MS = 7000;
 const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
+const POLL_HOT_ACTIVITY_MS = 4000;
 let POLL_TIMER = null;
 let POLL_BUSY = false;
 let POLL_SUSPENDED = false;
@@ -764,6 +765,7 @@ let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
 let POLL_HIDDEN_SINCE = 0;
 let BACKGROUND_POLL_TIMER = null;
+let LAST_ACTIVITY_HOT_BUMP = 0;
 
 function stopBackgroundPolling(){
   if (BACKGROUND_POLL_TIMER) {
@@ -800,6 +802,36 @@ function scheduleBackgroundPoll(delay){
       scheduleBackgroundPoll();
     }
   }, wait);
+}
+
+function extendPollHotWindow(durationMs, options = {}) {
+  const { baseTime, reschedule = true } = options || {};
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return false;
+
+  const base = Number.isFinite(baseTime) ? baseTime : Date.now();
+  const targetUntil = base + durationMs;
+  const previousUntil = POLL_HOT_UNTIL;
+
+  if (targetUntil > POLL_HOT_UNTIL) {
+    POLL_HOT_UNTIL = targetUntil;
+  }
+
+  const changed = POLL_HOT_UNTIL > previousUntil;
+
+  if (reschedule && (changed || !POLL_TIMER) && POLL_IS_LEADER && !POLL_SUSPENDED) {
+    scheduleStreamReconnect();
+  }
+
+  return changed;
+}
+
+function noteUserActivity(options = {}) {
+  if (document.visibilityState === 'hidden') return;
+  const { immediate = false } = options || {};
+  const now = Date.now();
+  if (!immediate && now - LAST_ACTIVITY_HOT_BUMP < 500) return;
+  LAST_ACTIVITY_HOT_BUMP = now;
+  extendPollHotWindow(POLL_HOT_ACTIVITY_MS);
 }
 
 const PREFETCH_DELAY_MS = 250;
@@ -1469,7 +1501,7 @@ async function performPoll(forceCold = false, options = {}){
 
     if (hadMessages) {
       POLL_LAST_EVENT_AT = Date.now();
-      POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
+      extendPollHotWindow(120000, { baseTime: POLL_LAST_EVENT_AT, reschedule: false });
     }
 
     broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
@@ -3788,8 +3820,15 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-window.addEventListener('focus',  () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => { noteUserActivity({ immediate: true }); pollActive().catch(()=>{}); restartStream(); });
 window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+
+['keydown', 'pointerdown', 'click'].forEach(evt => {
+  window.addEventListener(evt, () => { noteUserActivity(); }, { capture: true });
+});
+
+document.addEventListener('input', () => { noteUserActivity(); }, { capture: true });
+document.addEventListener('scroll', () => { noteUserActivity(); }, { capture: true, passive: true });
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -4398,7 +4437,7 @@ function openImagePreview(src, alt, sid = null, sname = ''){
   function autoGrow(t){ t.style.height='auto'; t.style.height = Math.min(120, t.scrollHeight) + 'px'; }
   [...document.querySelectorAll('textarea')].forEach(t=>{ t.addEventListener('input', ()=>autoGrow(t)); setTimeout(()=>autoGrow(t),0); });
 
-  pubList.addEventListener('scroll', ()=>{ maybeToggleFab(); markVisible(pubList); });
+  pubList.addEventListener('scroll', ()=>{ noteUserActivity(); maybeToggleFab(); markVisible(pubList); });
 jumpBtn.addEventListener('click', ()=>{
   scrollToBottom(pubList, false); 
   maybeToggleFab();
