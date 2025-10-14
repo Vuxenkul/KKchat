@@ -1243,9 +1243,7 @@ register_rest_route($ns, '/users', [
     kkchat_require_login();
     kkchat_assert_not_blocked_or_fail();
 
-    // Presence is “writey”; do it before releasing the session lock.
-    kkchat_touch_active_user();
-
+    // Keep this endpoint read-only; presence writes happen in /ping and /message.
     // Cache control: presence should not be cached.
     nocache_headers();
 
