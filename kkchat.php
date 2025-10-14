@@ -35,7 +35,6 @@ function kkchat_tables(){
     'rules'       => $p.'rules',      // ← was kkchat_word_rules
     'reports'     => $p.'reports',
     'user_blocks' => $p.'user_blocks',
-    'videos'      => $p.'videos',
   ];
 }
 
@@ -850,7 +849,6 @@ if (!function_exists('kkchat_rest_logout')) {
  * Load modules
  * ------------------------------ */
 require_once KKCHAT_PATH.'inc/schema.php';      // activation/deactivation, dbDelta, upgrade, cron
-require_once KKCHAT_PATH.'inc/video-worker.php';// storage-backed video uploads & workers
 require_once KKCHAT_PATH.'inc/rest.php';        // all REST routes (public + admin)
 if (is_admin()) {
   require_once KKCHAT_PATH.'inc/admin-pages.php'; // admin screens
