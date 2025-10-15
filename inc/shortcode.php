@@ -1265,6 +1265,16 @@ async function ensurePrefetched(kind, value){
   return true;
 }
 
+function hasPendingPrefetch(key){
+  if (!key) return false;
+  if (PREFETCH_INFLIGHT.has(key)) return true;
+  if (PREFETCH_KEYS.has(key)) return true;
+  for (let i = 0; i < PREFETCH_QUEUE.length; i++) {
+    if (PREFETCH_QUEUE[i]?.key === key) return true;
+  }
+  return false;
+}
+
 async function ensurePrefetchedRoom(slug){
   const room = String(slug || '').trim();
   if (!room) return false;
@@ -3681,11 +3691,17 @@ roomTabs.addEventListener('click', async e => {
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
-  let cacheHit = applyCache(cacheKeyForRoom(slug));
-  if (!cacheHit) {
+  const cacheKey = cacheKeyForRoom(slug);
+  let cacheHit = applyCache(cacheKey);
+  if (cacheHit && hasPendingPrefetch(cacheKey)) {
     const prefetched = await ensurePrefetchedRoom(slug);
     if (prefetched) {
-      cacheHit = applyCache(cacheKeyForRoom(slug));
+      cacheHit = applyCache(cacheKey) || cacheHit;
+    }
+  } else if (!cacheHit) {
+    const prefetched = await ensurePrefetchedRoom(slug);
+    if (prefetched) {
+      cacheHit = applyCache(cacheKey);
     }
   }
   setComposerAccess();
@@ -4063,11 +4079,17 @@ async function openDM(id) {
   userListEl.querySelector(`.openbtn[data-dm="${currentDM}"]`)?.setAttribute('aria-current', 'true');
 
   // 2) render from cache immediately
-  let cacheHit = applyCache(cacheKeyForDM(currentDM));
-  if (!cacheHit) {
+  const cacheKey = cacheKeyForDM(currentDM);
+  let cacheHit = applyCache(cacheKey);
+  if (cacheHit && hasPendingPrefetch(cacheKey)) {
     const prefetched = await ensurePrefetchedDM(currentDM);
     if (prefetched) {
-      cacheHit = applyCache(cacheKeyForDM(currentDM));
+      cacheHit = applyCache(cacheKey) || cacheHit;
+    }
+  } else if (!cacheHit) {
+    const prefetched = await ensurePrefetchedDM(currentDM);
+    if (prefetched) {
+      cacheHit = applyCache(cacheKey);
     }
   }
 
