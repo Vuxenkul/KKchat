@@ -749,13 +749,16 @@ let _lastPublicSeenSent = 0;
  *   csrf_token
  *   ids[] = <messageId> (repeat for each id)
  */
-// Mark a batch of DM messages as read
-async function markDMSeen(ids) {
-  if (!Array.isArray(ids) || ids.length === 0) return;
+// Mark the latest DM message as read for a peer
+async function markDMSeen(peerId, lastId) {
+  const peer = Number(peerId);
+  const mid  = Number(lastId);
+  if (!peer || !mid) return;
   try {
-    const fd = new FormData()
-    fd.append('csrf_token', CSRF); 
-    for (const id of ids) fd.append('dms[]', String(id));
+    const fd = new FormData();
+    fd.append('csrf_token', CSRF);
+    fd.append('dm_peer', String(peer));
+    fd.append('dm_last_id', String(mid));
     await fetch(`${API}/reads/mark`, {
       method: 'POST',
       credentials: 'include',
@@ -766,15 +769,19 @@ async function markDMSeen(ids) {
   }
 }
 
-// Advance the public watermark to the server’s “now” from /sync
-// (don’t use Date.now(); keep using LAST_SERVER_NOW)
-async function markPublicSeen(ts) {
-  if (!ts || ts <= _lastPublicSeenSent) return;
-  _lastPublicSeenSent = ts;
+// Advance the public watermark for a room to the latest seen message
+async function markRoomSeen(slug, lastId) {
+  const room = (slug || '').trim();
+  const mid  = Number(lastId);
+  if (!room || !mid) return;
   try {
     const fd = new FormData();
-    fd.append('csrf_token', CSRF); 
-    fd.append('public_since', String(ts));
+    fd.append('csrf_token', CSRF);
+    fd.append('room_slug', room);
+    fd.append('room_last_id', String(mid));
+    if (LAST_SERVER_NOW > 0) {
+      fd.append('public_since', String(LAST_SERVER_NOW));
+    }
     await fetch(`${API}/reads/mark`, {
       method: 'POST',
       credentials: 'include',
@@ -2246,9 +2253,10 @@ function isNearBottom(el, px) {
 
 // Replace your existing queueMark with this version
 const queueMark = (() => {
-  let pending = new Set();      // message IDs to mark (DM path)
-  let timer   = null;
-  let opts    = { ...READS_DEFAULTS };
+  let pendingDM = null;
+  let pendingRoom = null;
+  let timer = null;
+  let opts  = { ...READS_DEFAULTS };
 
   function shouldSendNow() {
     if (document.visibilityState !== 'visible') return false;
@@ -2258,61 +2266,76 @@ const queueMark = (() => {
   async function flush() {
     timer = null;
 
-    // If conditions aren’t right, try again after the debounce window.
     if (!shouldSendNow()) {
       timer = setTimeout(flush, opts.debounceMs);
       return;
     }
 
-    // Public rooms: send watermark
-    if (currentDM == null) {
-      // keep your optimistic local clearing as-is — sending is gated here
-      try { await markPublicSeen(LAST_SERVER_NOW); } catch(_) {}
-      pending.clear();
+    const dmPayload = pendingDM && pendingDM.peer && pendingDM.lastId > 0
+      ? { ...pendingDM }
+      : null;
+    const roomPayload = pendingRoom && pendingRoom.slug && pendingRoom.lastId > 0
+      ? { ...pendingRoom }
+      : null;
+
+    pendingDM = null;
+    pendingRoom = null;
+
+    if (!dmPayload && !roomPayload) {
       return;
     }
 
-    // DMs: batch IDs
-    const ids = [...pending];
-    if (!ids.length) return;
-    pending.clear();
+    const tasks = [];
+    if (roomPayload) {
+      tasks.push(markRoomSeen(roomPayload.slug, roomPayload.lastId));
+    }
+    if (dmPayload) {
+      tasks.push(markDMSeen(dmPayload.peer, dmPayload.lastId));
+    }
 
-    try { await markDMSeen(ids); } catch(_) {}
+    try {
+      await Promise.all(tasks);
+    } catch (e) {
+      console.warn('reads/mark failed', e);
+    }
   }
 
   return function queueMark(ids, override = {}) {
-    // --- keep optimistic local badge clearing exactly as-is ----------------
+    let maxId = 0;
+    if (Array.isArray(ids) && ids.length) {
+      maxId = Math.max(...ids
+        .map(Number)
+        .filter(n => Number.isFinite(n) && n > 0));
+    }
+
     if (currentDM == null) {
-      // public room path
+      if (currentRoom && maxId > 0) {
+        const last = pendingRoom?.lastId ?? 0;
+        pendingRoom = { slug: currentRoom, lastId: Math.max(last, maxId) };
+      }
       if (currentRoom) {
         ROOM_UNREAD[currentRoom] = 0;
         renderRoomTabs();
         updateLeftCounts?.();
       }
-      // enqueue a flush attempt (sending is gated by visibility + near-bottom)
     } else {
-      // DM path
+      if (maxId > 0) {
+        const last = pendingDM?.lastId ?? 0;
+        pendingDM = { peer: currentDM, lastId: Math.max(last, maxId) };
+      }
       UNREAD_PER[currentDM] = 0;
       renderDMSidebar();
       renderRoomTabs();
       updateLeftCounts?.();
-
-      // collect ids (dedup)
-      (ids || [])
-        .map(Number)
-        .filter(n => n > 0)
-        .forEach(n => pending.add(n));
     }
 
-    // Apply per-call overrides (optional)
     opts = { ...READS_DEFAULTS, ...(override || {}) };
-
-    // Start / restart debounce window
     if (timer == null) {
       timer = setTimeout(flush, opts.debounceMs);
     }
   };
 })();
+
 
 
 function markVisible(listEl){
@@ -2335,9 +2358,19 @@ function markVisible(listEl){
 const LAST_MESSAGE_CACHE = new Map(); // userId -> last message summary
   let lastPubCounts = 0, lastDMCounts = 0;
   let DM_UNREAD_TOTAL = 0;
-  let ROOM_UNREAD = {};              
-let PREV_ROOM_UNREAD = {};         
-let PREV_UNREAD_PER  = {};         
+let ROOM_UNREAD = {};
+let PREV_ROOM_UNREAD = {};
+let PREV_UNREAD_PER  = {};
+
+function normalizeUnreadMap(map) {
+  const out = {};
+  if (map && typeof map === 'object') {
+    for (const [key, value] of Object.entries(map)) {
+      out[key] = value ? 1 : 0;
+    }
+  }
+  return out;
+}
 
   function sortUsersForList(){
     return [...USERS].sort((a,b)=>{
@@ -2482,7 +2515,7 @@ function userRow(u){
   const adminIcon = u.is_admin ? '🛡️ ' : '';
   const blocked = isBlocked(u.id);
   const unread = blocked ? 0 : (UNREAD_PER[u.id]||0);
-  const badge  = unread>0 ? `<span class="badge-sm" data-has>${unread}</span>` : '';
+  const badge  = unread ? `<span class="badge-sm" data-has>!</span>` : '';
   const name   = `${adminIcon}${esc(u.name)}${isMe ? ' (du)' : ''}`;
 
   const dmBtn  = isMe ? '' : `<button class="openbtn" data-dm="${u.id}" ${blocked?'disabled':''}
@@ -2929,8 +2962,8 @@ function applySyncPayload(js){
     const prevDMs   = { ...(UNREAD_PER  || {}) };
 
     // update to latest counts from server
-    UNREAD_PER  = unread.per   || {};
-    ROOM_UNREAD = unread.rooms || {};
+    UNREAD_PER  = normalizeUnreadMap(unread.per);
+    ROOM_UNREAD = normalizeUnreadMap(unread.rooms);
 
     // zero out blocked users in DM counts
     Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) UNREAD_PER[k] = 0; });
@@ -3018,7 +3051,7 @@ function applySyncPayload(js){
 
     // recompute total DM unread after adjustments
     DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (+v||0)), 0);
+      .reduce((n,[k,v]) => n + (isBlocked(+k) ? 0 : (v ? 1 : 0)), 0);
     
 
     
@@ -3070,7 +3103,7 @@ let LAST_OPEN_DM = null;
       const lock = r.member_only ? '🔒 ' : '';
       const cur  = (r.slug===currentRoom && !currentDM) ? ' (aktiv)' : '';
       const unread = ROOM_UNREAD[r.slug]||0;
-      const badge  = unread>0 ? `<span class="badge-sm" data-has>${unread}</span>` : '';
+      const badge  = unread ? `<span class="badge-sm" data-has>!</span>` : '';
       const btn = joined
         ? `<button class="openbtn" data-leave="${r.slug}" title="Ta bort #${esc(r.slug)} från flikarna">👋 Lämna</button>`
         : `<button class="openbtn" data-join="${r.slug}" title="Lägg till #${esc(r.slug)} i flikarna">➕ Gå med</button>`;
@@ -3094,7 +3127,7 @@ let LAST_OPEN_DM = null;
       .map(id => {
         const name = nameById(id) || ('#'+id);
         const unread = isBlocked(id) ? 0 : (UNREAD_PER[id] || 0);
-        const badge  = unread > 0 ? `<span class="badge-sm" data-has>${unread}</span>` : '';
+        const badge  = unread ? `<span class="badge-sm" data-has>!</span>` : '';
         const cur    = currentDM === id ? ' aria-current="true"' : '';
         return `<div class="user" data-dm="${id}">
           <div class="user-main"><b>${esc(name)}</b></div>
@@ -3352,7 +3385,7 @@ function renderRoomTabs(){
     .map(r => {
       const lock  = r.member_only ? ' 🔒' : '';
       const count = ROOM_UNREAD[r.slug] || 0;
-      const badge = count > 0 ? `<span class="badge" data-has>${count}</span>` : '';
+      const badge = count ? `<span class="badge" data-has>!</span>` : '';
       const selected = (r.slug===currentRoom && !currentDM) ? 'true' : 'false';
       return `<button class="tab" data-room="${r.slug}" aria-selected="${selected}">${roomMuteHTML(r.slug)}${esc(r.title)}${lock}${badge}</button>`;
     }).join('');
@@ -3362,7 +3395,7 @@ function renderRoomTabs(){
     .map(id => {
       const name  = nameById(id) || ('#'+id);
       const count = UNREAD_PER[id] || 0;
-      const badge = count > 0 ? `<span class="badge" data-has>${count}</span>` : '';
+      const badge = count ? `<span class="badge" data-has>!</span>` : '';
       const selected = currentDM===id ? 'true' : 'false';
       return `<button class="tab" data-dm="${id}" aria-selected="${selected}">
           ${dmMuteHTML(id)}${esc(name)}${badge}
@@ -3951,7 +3984,7 @@ async function openDM(id) {
   // Recompute total DM unread so the left badge updates immediately
   try {
     DM_UNREAD_TOTAL = Object.entries(UNREAD_PER)
-      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (+v || 0)), 0);
+      .reduce((sum, [k, v]) => sum + (isBlocked(+k) ? 0 : (v ? 1 : 0)), 0);
   } catch (_) {}
 
   // Now render UI that depends on currentDM

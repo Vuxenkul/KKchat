@@ -491,6 +491,34 @@ function kkchat_maybe_upgrade_schema() {
     }
   }
 
+  // last_reads (per-room watermark)
+  if (!$table_exists($t['last_reads'])) {
+    $sqlLr = "CREATE TABLE IF NOT EXISTS `{$t['last_reads']}` (
+      `user_id` INT UNSIGNED NOT NULL,
+      `room_slug` VARCHAR(64) NOT NULL,
+      `last_msg_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      `updated_at` INT UNSIGNED NOT NULL,
+      PRIMARY KEY (`user_id`,`room_slug`),
+      KEY `idx_room` (`room_slug`),
+      KEY `idx_last_msg` (`last_msg_id`)
+    ) $charset;";
+    dbDelta($sqlLr);
+  }
+
+  // last_dm_reads (per-peer watermark)
+  if (!$table_exists($t['last_dm_reads'])) {
+    $sqlLdr = "CREATE TABLE IF NOT EXISTS `{$t['last_dm_reads']}` (
+      `user_id` INT UNSIGNED NOT NULL,
+      `peer_id` INT UNSIGNED NOT NULL,
+      `last_msg_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      `updated_at` INT UNSIGNED NOT NULL,
+      PRIMARY KEY (`user_id`,`peer_id`),
+      KEY `idx_peer` (`peer_id`),
+      KEY `idx_last_msg` (`last_msg_id`)
+    ) $charset;";
+    dbDelta($sqlLdr);
+  }
+
   // users (active users/presence)
   if (!$table_exists($t['users'])) {
     $sql3 = "CREATE TABLE IF NOT EXISTS `{$t['users']}` (
