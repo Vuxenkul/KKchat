@@ -4329,25 +4329,35 @@ document.addEventListener('keydown', (e)=>{
 });
 
 
-function escapeHtml(s){
-  return s.replace(/[&<>\"']/g, ch =>
-    ch === '&' ? '&amp;' :
-    ch === '<' ? '&lt;'  :
-    ch === '>' ? '&gt;'  :
-    ch === '\"' ? '&quot;': '&#39;'
-  );
-}
-
 function appendPendingMessage(text){
   const li = document.createElement('li');
-  li.className = 'item me pending';
+  li.className = 'item me';
   li.dataset.temp = String(Date.now());
+  li.dataset.retryAttempts = '0';
+  if (typeof ME_ID !== 'undefined') {
+    li.dataset.sid = String(ME_ID || 0);
+  }
+  if (typeof ME_NM !== 'undefined') {
+    li.dataset.sname = ME_NM || '';
+  }
+
   const now = new Date();
-  const hh = String(now.getHours()).padStart(2,'0');
-  const mm = String(now.getMinutes()).padStart(2,'0');
+  const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const who = typeof ME_NM !== 'undefined' ? ME_NM || '' : '';
+  const gender = (typeof genderById === 'function' && typeof ME_ID !== 'undefined')
+    ? genderById(ME_ID)
+    : '';
+  const genderMarkup = (typeof genderIconMarkup === 'function')
+    ? genderIconMarkup(gender)
+    : '';
+  const nameMarkup = (who && typeof ME_NM !== 'undefined' && who === ME_NM)
+    ? ''
+    : esc(who);
+
   li.innerHTML = `
-    <div class="msg"><div class="bubble chat">${escapeHtml(text)}</div></div>
-    <div class="small"><span class="time">${hh}:${mm}</span> <span class="receipt">✓</span></div>
+    <button type="button" class="retry-btn" data-retry title="Försök igen" aria-label="Försök skicka igen">↻</button>
+    <div class="bubble">${esc(text)}</div>
+    <div class="bubble-meta small">${genderMarkup}<span class="bubble-meta-text">${nameMarkup}<br>${esc(when)}</span></div>
   `;
 
   const list = document.getElementById('kk-pubList');
@@ -4362,6 +4372,76 @@ function appendPendingMessage(text){
   return li;
 }
 
+const MAX_MESSAGE_ATTEMPTS = 3;
+
+function serializeFormData(fd){
+  const out = [];
+  for (const [key, value] of fd.entries()) {
+    if (key === 'csrf_token') continue;
+    if (typeof value === 'string') {
+      out.push([key, value]);
+    }
+  }
+  return out;
+}
+
+function buildMessageFormData(entries){
+  const fd = new FormData();
+  for (const [key, value] of entries) {
+    fd.append(key, value);
+  }
+  fd.append('csrf_token', CSRF);
+  return fd;
+}
+
+async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false } = {}){
+  if (!pending) return false;
+  pending.classList.remove('error');
+  let lastErrorMsg = 'Tekniskt fel';
+
+  for (let attempt = 1; attempt <= MAX_MESSAGE_ATTEMPTS; attempt++) {
+    const attemptFd = buildMessageFormData(entries);
+    try {
+      const r  = await fetch(API + '/message', { method:'POST', body: attemptFd, credentials:'include', headers:h });
+      const js = await r.json().catch(()=>({}));
+
+      if (r.ok && js.ok) {
+        if (js.deduped) {
+          pending.remove();
+          showToast('Spam - Ditt meddelande avvisades.');
+          return true;
+        }
+
+        if (resetOnSuccess) {
+          pubForm.reset();
+        }
+
+        pending.remove();
+        await pollActive();
+        return true;
+      }
+
+      lastErrorMsg = js.err === 'no_room_access'
+        ? 'Endast för medlemmar'
+        : (js.cause || 'Kunde inte skicka');
+    } catch(_) {
+      lastErrorMsg = 'Tekniskt fel';
+    }
+
+    if (attempt < MAX_MESSAGE_ATTEMPTS) {
+      continue;
+    }
+
+    pending.classList.add('error');
+    pending.dataset.retryAttempts = String(attempt);
+    pending.dataset.retryError = lastErrorMsg;
+    showToast(lastErrorMsg);
+    return false;
+  }
+
+  return false;
+}
+
 pubForm.addEventListener('submit', async (e)=>{
   e.preventDefault();
 
@@ -4374,31 +4454,41 @@ pubForm.addEventListener('submit', async (e)=>{
   if (currentDM) fd.append('recipient_id', String(currentDM));
   else fd.append('room', currentRoom);
 
+  const entries = serializeFormData(fd);
   const pending = appendPendingMessage(txt);
+  if (pending) {
+    try {
+      pending.dataset.retryPayload = JSON.stringify(entries);
+    } catch(_){}
+  }
 
-  try{
-    const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
+  await sendMessageWithRetry(pending, entries, { resetOnSuccess: true });
+});
 
-    if (!r.ok || !js.ok) {
-      pending?.classList.remove('pending'); pending?.classList.add('error');
-      showToast(js.err==='no_room_access' ? 'Endast för medlemmar' : (js.cause || 'Kunde inte skicka'));
-      return;
+pubList?.addEventListener('click', async (e)=>{
+  const btn = e.target.closest('button[data-retry]');
+  if (!btn) return;
+
+  const li = btn.closest('li.item.me');
+  if (!li) return;
+
+  const payload = li.dataset.retryPayload;
+  if (!payload) return;
+
+  let entries;
+  try {
+    entries = JSON.parse(payload);
+  } catch(_) {
+    return;
+  }
+
+  btn.disabled = true;
+  try {
+    await sendMessageWithRetry(li, entries, { resetOnSuccess: false });
+  } finally {
+    if (btn.isConnected) {
+      btn.disabled = false;
     }
-
-    if (js.deduped) {
-      pending?.remove();
-      showToast('Spam - Ditt meddelande avvisades.');
-      return;
-    }
-
-    pubForm.reset();
-    pending?.remove();
-
-    await pollActive();
-  }catch(_){
-    pending?.classList.remove('pending'); pending?.classList.add('error');
-    showToast('Tekniskt fel');
   }
 });
 

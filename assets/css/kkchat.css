@@ -271,10 +271,39 @@ html, body { margin: 0; height: 100%; }
 
 #toast-container>.toast-error { display: none; }
 
-#kkchat-root li.item.pending { opacity: .6; }
-#kkchat-root li.item.pending .small .receipt::after { content: '  •  sending…'; }
 #kkchat-root li.item.error { background: #fff5f5; }
 #kkchat-root li.item.error .small .receipt { color: #b91c1c; }
+
+#kkchat-root li.item.me .retry-btn {
+  display: none;
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  color: #b91c1c;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 6px;
+}
+
+#kkchat-root li.item.me .retry-btn:hover { color: #7f1d1d; }
+
+#kkchat-root li.item.me .retry-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#kkchat-root li.item.me .retry-btn:disabled {
+  opacity: 0.4;
+  cursor: wait;
+}
+
+#kkchat-root li.item.me.error .retry-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
 
 #kkchat-root.nsfw-blur img.imgmsg { filter: blur(20px); }
 
