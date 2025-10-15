@@ -882,6 +882,7 @@ function scheduleBackgroundPoll(delay){
 const PREFETCH_DELAY_MS = 250;
 const PREFETCH_QUEUE = [];
 const PREFETCH_KEYS = new Set();
+const PREFETCH_INFLIGHT = new Map();
 let PREFETCH_TIMER = null;
 let PREFETCH_BUSY = false;
 
@@ -1201,20 +1202,89 @@ async function runPrefetchTick(){
   if (!next) return;
 
   PREFETCH_BUSY = true;
+  let promise = null;
   try {
     if (next.kind === 'room') {
-      await prefetchRoom(next.value);
+      promise = prefetchRoom(next.value);
     } else if (next.kind === 'dm') {
-      await prefetchDM(next.value);
+      promise = prefetchDM(next.value);
     }
-  } catch (_) {}
 
-  PREFETCH_KEYS.delete(next.key);
-  PREFETCH_BUSY = false;
+    if (promise && typeof promise.then === 'function') {
+      PREFETCH_INFLIGHT.set(next.key, promise);
+      await promise.catch(()=>{});
+    }
+  } catch (_) {} finally {
+    PREFETCH_INFLIGHT.delete(next.key);
+    PREFETCH_KEYS.delete(next.key);
+    PREFETCH_BUSY = false;
 
-  if (PREFETCH_QUEUE.length) {
-    schedulePrefetchTick();
+    if (PREFETCH_QUEUE.length) {
+      schedulePrefetchTick();
+    }
   }
+}
+
+async function ensurePrefetched(kind, value){
+  const key = `${kind}:${value}`;
+
+  const inflight = PREFETCH_INFLIGHT.get(key);
+  if (inflight) {
+    try { await inflight; } catch (_) {}
+    return true;
+  }
+
+  let wasQueued = false;
+  for (let i = PREFETCH_QUEUE.length - 1; i >= 0; i--) {
+    const item = PREFETCH_QUEUE[i];
+    if (item && item.key === key) {
+      PREFETCH_QUEUE.splice(i, 1);
+      wasQueued = true;
+      break;
+    }
+  }
+
+  if (!wasQueued && !PREFETCH_KEYS.has(key)) {
+    return false;
+  }
+
+  PREFETCH_KEYS.delete(key);
+
+  try {
+    const promise = kind === 'room' ? prefetchRoom(value) : prefetchDM(value);
+    if (promise && typeof promise.then === 'function') {
+      PREFETCH_INFLIGHT.set(key, promise);
+      await promise.catch(()=>{});
+    }
+  } catch (_) {
+    // swallow
+  } finally {
+    PREFETCH_INFLIGHT.delete(key);
+  }
+
+  return true;
+}
+
+function hasPendingPrefetch(key){
+  if (!key) return false;
+  if (PREFETCH_INFLIGHT.has(key)) return true;
+  if (PREFETCH_KEYS.has(key)) return true;
+  for (let i = 0; i < PREFETCH_QUEUE.length; i++) {
+    if (PREFETCH_QUEUE[i]?.key === key) return true;
+  }
+  return false;
+}
+
+async function ensurePrefetchedRoom(slug){
+  const room = String(slug || '').trim();
+  if (!room) return false;
+  return ensurePrefetched('room', room);
+}
+
+async function ensurePrefetchedDM(userId){
+  const id = Number(userId);
+  if (!Number.isFinite(id) || id <= 0) return false;
+  return ensurePrefetched('dm', id);
 }
 
 function openStream(forceCold = false){
@@ -2978,14 +3048,17 @@ function applySyncPayload(js){
        .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
 
       // Prefetch newly-bumped sources so switching feels instant.
+      const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
+      const isActiveDM   = (id)   => currentDM != null && Number(id) === Number(currentDM);
+
       try {
         roomIncr
-          .filter(slug => slug !== currentRoom)
+          .filter(slug => !isActiveRoom(slug))
           .forEach(slug => queuePrefetchRoom(slug));
 
         dmIncr
           .map(id => Number(id))
-          .filter(id => id !== Number(currentDM))
+          .filter(id => !isActiveDM(id))
           .forEach(id => queuePrefetchDM(id));
       } catch(_) {}
       // --- ignore muted sources for sound decisions
@@ -2993,8 +3066,6 @@ function applySyncPayload(js){
       const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
 
       const visible = document.visibilityState === 'visible';
-      const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
-      const isActiveDM   = (id)   => currentDM != null && Number(id) === Number(currentDM);
 
       const passiveRoomBumped = roomIncrUnmuted.some(slug => !isActiveRoom(slug));
       const passiveDmBumped   = dmIncrUnmuted.some(id   => !isActiveDM(id));
@@ -3621,7 +3692,19 @@ roomTabs.addEventListener('click', async e => {
   ROOM_UNREAD[slug] = 0;
   renderRoomTabs();
 
-  const cacheHit = applyCache(cacheKeyForRoom(slug));
+  const cacheKey = cacheKeyForRoom(slug);
+  let cacheHit = applyCache(cacheKey);
+  if (cacheHit && hasPendingPrefetch(cacheKey)) {
+    const prefetched = await ensurePrefetchedRoom(slug);
+    if (prefetched) {
+      cacheHit = applyCache(cacheKey) || cacheHit;
+    }
+  } else if (!cacheHit) {
+    const prefetched = await ensurePrefetchedRoom(slug);
+    if (prefetched) {
+      cacheHit = applyCache(cacheKey);
+    }
+  }
   setComposerAccess();
   showView('vPublic');
 
@@ -3997,7 +4080,19 @@ async function openDM(id) {
   userListEl.querySelector(`.openbtn[data-dm="${currentDM}"]`)?.setAttribute('aria-current', 'true');
 
   // 2) render from cache immediately
-  const cacheHit = applyCache(cacheKeyForDM(currentDM));
+  const cacheKey = cacheKeyForDM(currentDM);
+  let cacheHit = applyCache(cacheKey);
+  if (cacheHit && hasPendingPrefetch(cacheKey)) {
+    const prefetched = await ensurePrefetchedDM(currentDM);
+    if (prefetched) {
+      cacheHit = applyCache(cacheKey) || cacheHit;
+    }
+  } else if (!cacheHit) {
+    const prefetched = await ensurePrefetchedDM(currentDM);
+    if (prefetched) {
+      cacheHit = applyCache(cacheKey);
+    }
+  }
 
   setComposerAccess();
   showView('vPublic');
