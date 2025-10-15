@@ -3632,7 +3632,7 @@ roomTabs.addEventListener('click', async e => {
     snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
   }
 
-  const syncPromise = pollActive(true).catch(()=>{});
+  const syncPromise = pollActive(true, { allowSuspended: true }).catch(()=>{});
   openStream();
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
@@ -3763,7 +3763,7 @@ roomsListEl?.addEventListener('click', async (e) => {
           snapshotPromise = loadHistorySnapshot({ kind: 'room', room: currentRoom });
         }
 
-        const syncPromise = pollActive(true).catch(()=>{});
+        const syncPromise = pollActive(true, { allowSuspended: true }).catch(()=>{});
         openStream();
         if (snapshotPromise) {
           await snapshotPromise.catch(()=>{});
@@ -4009,7 +4009,7 @@ async function openDM(id) {
     snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
   }
 
-  const syncPromise = pollActive(true).catch(()=>{});
+  const syncPromise = pollActive(true, { allowSuspended: true }).catch(()=>{});
   openStream();
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
