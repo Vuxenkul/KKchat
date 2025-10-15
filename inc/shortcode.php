@@ -1876,6 +1876,7 @@ async function doLogout(){
     try{ localStorage.setItem(DM_KEY, JSON.stringify([...set])); }catch(_){}
   }
   let ACTIVE_DMS = loadDMActive();
+  let INITIAL_DM_PREFETCH_DONE = false;
 
   let BLOCKED = new Set();
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
@@ -2460,6 +2461,28 @@ function normalizeUnreadMap(map) {
       catch(_) { return false; }
     }
 
+    function onlineActiveDmPeers(){
+      return [...ACTIVE_DMS]
+        .map(id => Number(id))
+        .filter(id => Number.isFinite(id) && id > 0 && !isBlocked(id) && isOnline(id));
+    }
+
+    async function maybePrefetchInitialOnlineDMs(){
+      if (INITIAL_DM_PREFETCH_DONE) return;
+      const peers = onlineActiveDmPeers();
+      if (!peers.length) return;
+      INITIAL_DM_PREFETCH_DONE = true;
+      try {
+        peers.forEach(id => queuePrefetchDM(id));
+      } catch(_) {}
+      try {
+        await Promise.all(peers.map(id => ensurePrefetchedDM(id)));
+      } catch (err) {
+        INITIAL_DM_PREFETCH_DONE = false;
+        console.warn('initial DM prefetch failed', err);
+      }
+    }
+
     const NAME_CACHE = (()=>{ 
       try { const raw = localStorage.getItem('kk_name_cache'); return new Map(raw ? JSON.parse(raw) : []); }
       catch(_) { return new Map(); }
@@ -3021,6 +3044,7 @@ function applySyncPayload(js){
 
   if (js && Array.isArray(js.presence)) {
     USERS = normalizeUsersPayload(js.presence);
+    maybePrefetchInitialOnlineDMs();
     try { USERS.forEach(u => rememberGender(u.id, u.gender)); } catch(_){}
   }
 
@@ -4372,7 +4396,50 @@ function appendPendingMessage(text){
   return li;
 }
 
+function finalizePendingMessage(pending, payload){
+  if (!pending) return;
+
+  pending.classList.remove('error');
+
+  const retryBtn = pending.querySelector('button[data-retry]');
+  if (retryBtn) retryBtn.remove();
+
+  delete pending.dataset.retryAttempts;
+  delete pending.dataset.retryError;
+  delete pending.dataset.retryPayload;
+  delete pending.dataset.temp;
+
+  const mid = Number(payload?.id ?? payload);
+  if (Number.isFinite(mid) && mid > 0) {
+    pending.dataset.id = String(mid);
+
+    const currentLast = Number(pubList?.dataset?.last ?? -1);
+    if (!Number.isFinite(currentLast) || mid > currentLast) {
+      pubList.dataset.last = String(mid);
+    }
+
+    const bubbleMeta = pending.querySelector('.bubble-meta-text');
+    const serverTime = Number(payload?.time ?? 0);
+    if (bubbleMeta && Number.isFinite(serverTime) && serverTime > 0) {
+      const when = new Date(serverTime * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+      const parts = bubbleMeta.innerHTML.split('<br>');
+      if (parts.length === 2) {
+        parts[1] = esc(when);
+        bubbleMeta.innerHTML = parts.join('<br>');
+      }
+    }
+
+    try {
+      ROOM_CACHE.set(activeCacheKey(), {
+        last: +pubList.dataset.last || -1,
+        html: pubList.innerHTML
+      });
+    } catch(_) {}
+  }
+}
+
 const MAX_MESSAGE_ATTEMPTS = 3;
+const MESSAGE_RETRY_DELAY_MS = 3000;
 
 function serializeFormData(fd){
   const out = [];
@@ -4400,6 +4467,7 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
   let lastErrorMsg = 'Tekniskt fel';
 
   for (let attempt = 1; attempt <= MAX_MESSAGE_ATTEMPTS; attempt++) {
+    console.info(`KKchat: trying to send message (attempt ${attempt}/${MAX_MESSAGE_ATTEMPTS})`);
     const attemptFd = buildMessageFormData(entries);
     try {
       const r  = await fetch(API + '/message', { method:'POST', body: attemptFd, credentials:'include', headers:h });
@@ -4407,6 +4475,7 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
 
       if (r.ok && js.ok) {
         if (js.deduped) {
+          console.info(`KKchat: duplicate message detected on attempt ${attempt}; removing pending bubble.`);
           pending.remove();
           showToast('Spam - Ditt meddelande avvisades.');
           return true;
@@ -4416,19 +4485,26 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
           pubForm.reset();
         }
 
-        pending.remove();
+        finalizePendingMessage(pending, js);
         await pollActive();
+        console.info(`KKchat: message posted successfully on attempt ${attempt}.`);
         return true;
       }
 
       lastErrorMsg = js.err === 'no_room_access'
         ? 'Endast för medlemmar'
         : (js.cause || 'Kunde inte skicka');
-    } catch(_) {
+      console.warn(`KKchat: message attempt ${attempt} failed: ${lastErrorMsg}`);
+    } catch(err) {
       lastErrorMsg = 'Tekniskt fel';
+      console.error(`KKchat: message attempt ${attempt} encountered an error`, err);
     }
 
     if (attempt < MAX_MESSAGE_ATTEMPTS) {
+      console.info(`KKchat: retrying message in ${Math.round(MESSAGE_RETRY_DELAY_MS / 1000)}s (next attempt ${attempt + 1}/${MAX_MESSAGE_ATTEMPTS}).`);
+      try {
+        await new Promise(res => setTimeout(res, MESSAGE_RETRY_DELAY_MS));
+      } catch (_) {}
       continue;
     }
 
