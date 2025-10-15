@@ -4396,6 +4396,48 @@ function appendPendingMessage(text){
   return li;
 }
 
+function finalizePendingMessage(pending, payload){
+  if (!pending) return;
+
+  pending.classList.remove('error');
+
+  const retryBtn = pending.querySelector('button[data-retry]');
+  if (retryBtn) retryBtn.remove();
+
+  delete pending.dataset.retryAttempts;
+  delete pending.dataset.retryError;
+  delete pending.dataset.retryPayload;
+  delete pending.dataset.temp;
+
+  const mid = Number(payload?.id ?? payload);
+  if (Number.isFinite(mid) && mid > 0) {
+    pending.dataset.id = String(mid);
+
+    const currentLast = Number(pubList?.dataset?.last ?? -1);
+    if (!Number.isFinite(currentLast) || mid > currentLast) {
+      pubList.dataset.last = String(mid);
+    }
+
+    const bubbleMeta = pending.querySelector('.bubble-meta-text');
+    const serverTime = Number(payload?.time ?? 0);
+    if (bubbleMeta && Number.isFinite(serverTime) && serverTime > 0) {
+      const when = new Date(serverTime * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+      const parts = bubbleMeta.innerHTML.split('<br>');
+      if (parts.length === 2) {
+        parts[1] = esc(when);
+        bubbleMeta.innerHTML = parts.join('<br>');
+      }
+    }
+
+    try {
+      ROOM_CACHE.set(activeCacheKey(), {
+        last: +pubList.dataset.last || -1,
+        html: pubList.innerHTML
+      });
+    } catch(_) {}
+  }
+}
+
 const MAX_MESSAGE_ATTEMPTS = 3;
 const MESSAGE_RETRY_DELAY_MS = 3000;
 
@@ -4443,7 +4485,7 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
           pubForm.reset();
         }
 
-        pending.remove();
+        finalizePendingMessage(pending, js);
         await pollActive();
         console.info(`KKchat: message posted successfully on attempt ${attempt}.`);
         return true;
