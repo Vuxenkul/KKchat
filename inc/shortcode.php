@@ -1958,8 +1958,8 @@ async function prefetchRoom(slug){
     maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
 
     const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
-    const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    ROOM_CACHE.set(key, { last: maxId, html: combined });
+    const clamped  = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
+    ROOM_CACHE.set(key, { last: maxId, html: clamped.html, count: clamped.count });
   }catch(_){}
 }
 
@@ -1980,8 +1980,8 @@ async function prefetchDM(userId){
     maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
 
     const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
-    const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    ROOM_CACHE.set(key, { last: maxId, html: combined });
+    const clamped  = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
+    ROOM_CACHE.set(key, { last: maxId, html: clamped.html, count: clamped.count });
   }catch(_){}
 }
 
@@ -2005,7 +2005,8 @@ function applyCache(key){
     ROOM_CACHE.set(key, {
       last: Number(cached.last) || -1,
       html: pubList.innerHTML,
-      bottomDist: Number.isFinite(cached.bottomDist) ? cached.bottomDist : 0
+      bottomDist: Number.isFinite(cached.bottomDist) ? cached.bottomDist : 0,
+      count: countListItems(pubList)
     });
 
     pubList.dataset.last = String(cached.last);
@@ -2025,7 +2026,7 @@ function applyCache(key){
   return false;
 }
 
-  function stashActive(){
+function stashActive(){
   try{
     const bottomDist = Math.max(
       0,
@@ -2034,7 +2035,8 @@ function applyCache(key){
     ROOM_CACHE.set(activeCacheKey(), {
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML,
-      bottomDist
+      bottomDist,
+      count: countListItems(pubList)
     });
   }catch(_){}
 }
@@ -2158,7 +2160,19 @@ function clampHTML(html){
   const items = tmp.querySelectorAll('li.item');
   const extra = Math.max(0, items.length - CACHE_CAP);
   for (let i = 0; i < extra; i++) items[i].remove();
-  return tmp.innerHTML;
+  return {
+    html: tmp.innerHTML,
+    count: Math.min(items.length, CACHE_CAP)
+  };
+}
+
+function countListItems(el){
+  if (!el) return 0;
+  try {
+    return el.querySelectorAll('li.item').length;
+  } catch(_) {
+    return 0;
+  }
 }
 
 function renderList(el, items){
@@ -2189,7 +2203,8 @@ function renderList(el, items){
             try {
               ROOM_CACHE.set(activeCacheKey(), {
                 last: +pubList.dataset.last || -1,
-                html: pubList.innerHTML
+                html: pubList.innerHTML,
+                count: countListItems(pubList)
               });
             } catch(_) {}
           }
@@ -3757,13 +3772,17 @@ roomTabs.addEventListener('click', async e => {
       cacheHit = applyCache(cacheKey);
     }
   }
+  const cachedInfo = ROOM_CACHE.get(cacheKey);
+  const cachedCount = cachedInfo?.count ?? (cacheHit ? countListItems(pubList) : 0);
+  const needsBackfill = !cacheHit || cachedCount < FIRST_LOAD_LIMIT;
   setComposerAccess();
   showView('vPublic');
 
   let snapshotPromise = null;
   if (cacheHit) {
     markVisible(pubList);
-  } else {
+  }
+  if (needsBackfill) {
     snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
   }
 
@@ -4061,7 +4080,8 @@ function handleStreamSync(js, context){
 
     ROOM_CACHE.set(cacheKeyForRoom(context.room), {
       last: +pubList.dataset.last || -1,
-      html: pubList.innerHTML
+      html: pubList.innerHTML,
+      count: countListItems(pubList)
     });
   } else {
     const raw = Array.isArray(js?.messages) ? js.messages : [];
@@ -4098,7 +4118,8 @@ function handleStreamSync(js, context){
 
     ROOM_CACHE.set(cacheKeyForDM(context.to), {
       last: +pubList.dataset.last || -1,
-      html: pubList.innerHTML
+      html: pubList.innerHTML,
+      count: countListItems(pubList)
     });
   }
 }
@@ -4196,13 +4217,18 @@ async function openDM(id) {
     }
   }
 
+  const cachedInfo = ROOM_CACHE.get(cacheKey);
+  const cachedCount = cachedInfo?.count ?? (cacheHit ? countListItems(pubList) : 0);
+  const needsBackfill = !cacheHit || cachedCount < FIRST_LOAD_LIMIT;
+
   setComposerAccess();
   showView('vPublic');
 
   let snapshotPromise = null;
   if (cacheHit) {
     markVisible(pubList);
-  } else {
+  }
+  if (needsBackfill) {
     snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
   }
 
@@ -4507,12 +4533,13 @@ function finalizePendingMessage(pending, payload){
       }
     }
 
-    try {
-      ROOM_CACHE.set(activeCacheKey(), {
-        last: +pubList.dataset.last || -1,
-        html: pubList.innerHTML
-      });
-    } catch(_) {}
+      try {
+        ROOM_CACHE.set(activeCacheKey(), {
+          last: +pubList.dataset.last || -1,
+          html: pubList.innerHTML,
+          count: countListItems(pubList)
+        });
+      } catch(_) {}
   }
 }
 
