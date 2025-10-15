@@ -1170,6 +1170,7 @@ function scheduleStreamReconnect(delay){
   if (!state) return;
   if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
 
+  const previousWait = Number(POLL_LAST_SCHEDULED_MS) || 0;
   if (POLL_TIMER) {
     clearTimeout(POLL_TIMER);
     POLL_TIMER = null;
@@ -1181,8 +1182,17 @@ function scheduleStreamReconnect(delay){
     wait = computePollDelay(hint);
   }
 
+  const hotMs = Number(POLL_SETTINGS?.hotIntervalMs) || 4000;
+  const wasSlow = previousWait > hotMs * 1.25;
+  const nowHot = Number.isFinite(wait) && wait <= hotMs;
+  if (!POLL_BUSY && wasSlow && nowHot) {
+    POLL_LAST_SCHEDULED_MS = null;
+    performPoll().catch(()=>{});
+    return;
+  }
+
   if (!Number.isFinite(wait) || wait <= 0) {
-    wait = Number(POLL_SETTINGS?.hotIntervalMs) || 4000;
+    wait = hotMs;
   }
 
   const jitter = 0.8 + Math.random() * 0.4;
