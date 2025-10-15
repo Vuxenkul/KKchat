@@ -28,6 +28,8 @@ function kkchat_tables(){
   return [
     'messages'    => $p.'messages',
     'reads'       => $p.'reads',
+    'last_reads'  => $p.'last_reads',
+    'last_dm_reads' => $p.'last_dm_reads',
     'users'       => $p.'users',      // ← was kkchat_active_users
     'rooms'       => $p.'rooms',
     'banners'     => $p.'banners',

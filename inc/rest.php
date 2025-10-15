@@ -264,102 +264,97 @@ add_action('rest_api_init', function () {
 
       $blocked = kkchat_blocked_ids($me);
 
-      $params = [$me, $me];
-      $blkClause = '';
-      if ($blocked) {
-        $blkClause = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $params[] = (int) $bid; }
-      }
-      $sqlPriv =
-        "SELECT COUNT(*) AS c, MAX(m.id) AS max_id FROM {$t['messages']} m
-         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-         WHERE m.recipient_id = %d
-           AND r.user_id IS NULL
-           AND m.hidden_at IS NULL
-         $blkClause";
-      $rowPriv = $wpdb->get_row($wpdb->prepare($sqlPriv, ...$params), ARRAY_A) ?: [];
-      $totPriv = (int) ($rowPriv['c'] ?? 0);
-      $latestPrivId = (int) ($rowPriv['max_id'] ?? 0);
+      $per = [];
+      $perRoom = [];
+      $totPriv = 0;
+      $totPub  = 0;
+      $latestPerId  = 0;
+      $latestRoomId = 0;
+      $roomLastSeen = [];
 
-      $paramsPub = [$me, $me, $since_pub, $guest];
-      $blkClausePub = '';
-      if ($blocked) {
-        $blkClausePub = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $paramsPub[] = (int) $bid; }
-      }
-      $sqlPub =
-        "SELECT COUNT(*) AS c, MAX(m.id) AS max_id FROM {$t['messages']} m
-         LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-         LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-         WHERE m.recipient_id IS NULL
-           AND m.sender_id <> %d
-           AND r.user_id IS NULL
-           AND rr.slug IS NOT NULL
-           AND m.created_at > %d
-           AND (%d = 0 OR rr.member_only = 0)
-           AND m.hidden_at IS NULL
-           $blkClausePub";
-      $rowPub = $wpdb->get_row($wpdb->prepare($sqlPub, ...$paramsPub), ARRAY_A) ?: [];
-      $totPub = (int) ($rowPub['c'] ?? 0);
-      $latestPubId = (int) ($rowPub['max_id'] ?? 0);
-
-      $paramsPer = [$me, $me];
       $blkPer = '';
+      $paramsPer = [$me];
       if ($blocked) {
         $blkPer = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
         foreach ($blocked as $bid) { $paramsPer[] = (int) $bid; }
       }
-      $sqlPer =
-        "SELECT m.sender_id, COUNT(*) AS c, MAX(m.id) AS max_id
-           FROM {$t['messages']} m
-     LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-          WHERE m.recipient_id = %d
-            AND r.user_id IS NULL
-            AND m.hidden_at IS NULL
-            $blkPer
-       GROUP BY m.sender_id";
-      $per = [];
-      $latestPerId = 0;
+      $paramsPer[] = $me;
+
+      $sqlPer = "
+        SELECT src.peer_id,
+               src.max_id,
+               COALESCE(ldr.last_msg_id, 0) AS last_seen
+          FROM (
+            SELECT m.sender_id AS peer_id,
+                   MAX(m.id) AS max_id
+              FROM {$t['messages']} m
+             WHERE m.recipient_id = %d
+               AND m.hidden_at IS NULL
+               $blkPer
+             GROUP BY m.sender_id
+          ) src
+          LEFT JOIN {$t['last_dm_reads']} ldr
+            ON ldr.user_id = %d AND ldr.peer_id = src.peer_id";
       $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
       foreach ($rowsPer as $r) {
-        $per[(int) $r['sender_id']] = (int) $r['c'];
-        $latestPerId = max($latestPerId, (int) ($r['max_id'] ?? 0));
+        $peer      = (int) ($r['peer_id'] ?? 0);
+        $maxId     = (int) ($r['max_id'] ?? 0);
+        $lastSeen  = (int) ($r['last_seen'] ?? 0);
+        if ($peer <= 0) { continue; }
+        if ($maxId > $lastSeen) {
+          $per[$peer] = 1;
+          $totPriv++;
+        } else {
+          $per[$peer] = 0;
+        }
+        $latestPerId = max($latestPerId, $maxId);
       }
 
-      $paramsRoom = [$me, $me, $since_pub, $guest];
       $blkRoom = '';
+      $paramsRoom = [$me, $since_pub, $guest];
       if ($blocked) {
         $blkRoom = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
         foreach ($blocked as $bid) { $paramsRoom[] = (int) $bid; }
       }
-      $sqlRoom =
-        "SELECT m.room AS slug, COUNT(*) AS c, MAX(m.id) AS max_id
-           FROM {$t['messages']} m
-     LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-     LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-          WHERE m.recipient_id IS NULL
-            AND m.sender_id <> %d
-            AND r.user_id IS NULL
-            AND rr.slug IS NOT NULL
-            AND m.created_at > %d
-            AND (%d = 0 OR rr.member_only = 0)
-            AND m.hidden_at IS NULL
-            $blkRoom
-       GROUP BY m.room";
-      $perRoom = [];
-      $latestRoomId = 0;
+      $paramsRoom[] = $me;
+
+      $sqlRoom = "
+        SELECT src.slug,
+               src.max_id,
+               COALESCE(lr.last_msg_id, 0) AS last_seen
+          FROM (
+            SELECT m.room AS slug,
+                   MAX(m.id) AS max_id
+              FROM {$t['messages']} m
+         LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+             WHERE m.recipient_id IS NULL
+               AND m.sender_id <> %d
+               AND rr.slug IS NOT NULL
+               AND m.created_at > %d
+               AND (%d = 0 OR rr.member_only = 0)
+               AND m.hidden_at IS NULL
+               $blkRoom
+             GROUP BY m.room
+          ) src
+          LEFT JOIN {$t['last_reads']} lr
+            ON lr.user_id = %d AND lr.room_slug = src.slug";
       $rowsRoom = $wpdb->get_results($wpdb->prepare($sqlRoom, ...$paramsRoom), ARRAY_A) ?: [];
       foreach ($rowsRoom as $r) {
-        $perRoom[$r['slug']] = (int) $r['c'];
-        $latestRoomId = max($latestRoomId, (int) ($r['max_id'] ?? 0));
+        $slug     = (string) ($r['slug'] ?? '');
+        $maxId    = (int) ($r['max_id'] ?? 0);
+        $lastSeen = (int) ($r['last_seen'] ?? 0);
+        if ($slug === '') { continue; }
+        $roomLastSeen[$slug] = $lastSeen;
+        if ($maxId > $lastSeen) {
+          $perRoom[$slug] = 1;
+          $totPub++;
+        } else {
+          $perRoom[$slug] = 0;
+        }
+        $latestRoomId = max($latestRoomId, $maxId);
       }
 
-      $unreadLatest = max(
-        $latestPrivId ?? 0,
-        $latestPubId ?? 0,
-        $latestPerId,
-        $latestRoomId
-      );
+      $unreadLatest = max($latestPerId, $latestRoomId);
 
       $unread = [
         'totPriv' => $totPriv,
@@ -368,7 +363,6 @@ add_action('rest_api_init', function () {
         'rooms'   => (object) $perRoom,
         'latest'  => $unreadLatest,
       ];
-
       $msgs = [];
       $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
       if ($onlyPub) {
@@ -507,47 +501,44 @@ add_action('rest_api_init', function () {
         }
 
         if ($mentionSlugs) {
-          $paramsMB = [$me, $since_pub, $guest];
-          if ($blocked) {
-            foreach ($blocked as $bid) { $paramsMB[] = (int) $bid; }
-            $blkList = implode(',', array_fill(0, count($blocked), '%d'));
-            $blkSql  = " AND m.sender_id NOT IN ($blkList)";
-          } else {
-            $blkSql = '';
-          }
-          $inClause = implode(',', array_fill(0, count($mentionSlugs), '%s'));
-          foreach ($mentionSlugs as $slug) { $paramsMB[] = $slug; }
-
-          $sqlMB =
-            "SELECT m.room, m.content
-               FROM {$t['messages']} m
-          LEFT JOIN {$t['reads']} r ON r.message_id = m.id AND r.user_id = %d
-          LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
-              WHERE m.recipient_id IS NULL
-                AND m.sender_id <> %d
-                AND r.user_id IS NULL
-                AND rr.slug IS NOT NULL
-                AND m.created_at > %d
-                AND (%d = 0 OR rr.member_only = 0)
-                AND m.hidden_at IS NULL
-                $blkSql
-                AND m.room IN ($inClause)
-           ORDER BY m.id DESC
-              LIMIT 300";
-          $rowsMB = $wpdb->get_results($wpdb->prepare($sqlMB, ...$paramsMB), ARRAY_A) ?: [];
-
-          $grouped = [];
-          foreach ($rowsMB as $rowMB) {
-            $slug = (string) ($rowMB['slug'] ?? ($rowMB['room'] ?? ''));
-            if ($slug === '') { continue; }
-            if (!isset($grouped[$slug])) { $grouped[$slug] = []; }
-            if (count($grouped[$slug]) >= 30) { continue; }
-            $grouped[$slug][] = (string) ($rowMB['content'] ?? '');
-          }
-
           foreach ($mentionSlugs as $slug) {
+            $slug = (string) $slug;
+            if ($slug === '') { continue; }
+            $lastSeenId = (int) ($roomLastSeen[$slug] ?? 0);
+
+            $paramsMB = [$me, $guest, $lastSeenId];
+            if ($blocked) {
+              foreach ($blocked as $bid) { $paramsMB[] = (int) $bid; }
+              $blkList = implode(',', array_fill(0, count($blocked), '%d'));
+              $blkSql  = " AND m.sender_id NOT IN ($blkList)";
+            } else {
+              $blkSql = '';
+            }
+            $paramsMB[] = $slug;
+
+            $rowsMB = $wpdb->get_results(
+              $wpdb->prepare(
+                "SELECT m.content
+                   FROM {$t['messages']} m
+              LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
+                  WHERE m.recipient_id IS NULL
+                    AND m.sender_id <> %d
+                    AND rr.slug IS NOT NULL
+                    AND (%d = 0 OR rr.member_only = 0)
+                    AND m.id > %d
+                    AND m.hidden_at IS NULL
+                    $blkSql
+                    AND m.room = %s
+               ORDER BY m.id DESC
+                  LIMIT 30",
+                ...$paramsMB
+              ),
+              ARRAY_A
+            ) ?: [];
+
             $hit = false;
-            foreach ($grouped[$slug] ?? [] as $content) {
+            foreach ($rowsMB as $rowMB) {
+              $content = (string) ($rowMB['content'] ?? '');
               if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
             }
             $mention_bumps[$slug] = $hit ? true : false;
@@ -1716,28 +1707,37 @@ register_rest_route($ns, '/reads/mark', [
     }
 
     // Payload
-    $dms          = $req->get_param('dms');                 // array of DM message IDs
-    $public_since = (int) ($req->get_param('public_since') ?? 0); // server "now" watermark
+    $dms           = $req->get_param('dms');                 // array of DM message IDs (legacy)
+    $public_since  = (int) ($req->get_param('public_since') ?? 0); // server "now" watermark
+    $dm_peer       = (int) ($req->get_param('dm_peer') ?? 0);
+    $dm_last_id    = (int) ($req->get_param('dm_last_id') ?? 0);
+    $room_slug_raw = (string) ($req->get_param('room_slug') ?? '');
+    $room_slug     = kkchat_sanitize_room_slug($room_slug_raw);
+    $room_last_id  = (int) ($req->get_param('room_last_id') ?? 0);
 
-    // ---- Mark DM reads (handles both 2-col and 3-col schema) ----------------
-    $reads_table = $t['reads'];
-    $has_created_at = true;
-    try {
-      if (function_exists('kkchat_column_exists')) {
-        $has_created_at = kkchat_column_exists($reads_table, 'created_at');
-      } else {
-        $has_created_at = (bool) $wpdb->get_var(
-          $wpdb->prepare(
-            "SELECT 1 FROM information_schema.columns
-             WHERE table_schema = DATABASE()
-               AND table_name   = %s
-               AND column_name  = 'created_at'
-             LIMIT 1",
-            $reads_table
-          )
-        );
+    $now         = time();
+    $dmUpdates   = [];
+    $roomUpdates = [];
+    $roomSeenAt  = [];
+
+    if ($dm_peer > 0 && $dm_last_id > 0) {
+      $row = $wpdb->get_row(
+        $wpdb->prepare(
+          "SELECT sender_id, recipient_id FROM {$t['messages']} WHERE id = %d LIMIT 1",
+          $dm_last_id
+        ),
+        ARRAY_A
+      );
+
+      if ($row) {
+        $sender    = (int) ($row['sender_id'] ?? 0);
+        $recipient = (int) ($row['recipient_id'] ?? 0);
+        $isPeer    = ($sender === $me && $recipient === $dm_peer) || ($sender === $dm_peer && $recipient === $me);
+        if ($isPeer) {
+          $dmUpdates[$dm_peer] = max($dmUpdates[$dm_peer] ?? 0, $dm_last_id);
+        }
       }
-    } catch (\Throwable $e) { /* default true */ }
+    }
 
     if (is_array($dms) && !empty($dms)) {
       $ids = array_values(
@@ -1747,35 +1747,98 @@ register_rest_route($ns, '/reads/mark', [
       );
 
       if (!empty($ids)) {
-        $now = time();
-        foreach (array_chunk($ids, 400) as $chunk) {
-          $rows = [];
-          $vals = [];
+        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+        $rows = $wpdb->get_results(
+          $wpdb->prepare(
+            "SELECT id, sender_id, recipient_id FROM {$t['messages']} WHERE id IN ($placeholders)",
+            ...$ids
+          ),
+          ARRAY_A
+        ) ?: [];
 
-          if ($has_created_at) {
-            foreach ($chunk as $mid) {
-              $rows[] = '(%d,%d,%d)';   // (message_id, user_id, created_at)
-              $vals[] = $mid; $vals[] = $me; $vals[] = $now;
-            }
-            $sql = "INSERT INTO {$reads_table} (message_id,user_id,created_at) VALUES "
-                 . implode(',', $rows)
-                 . " ON DUPLICATE KEY UPDATE created_at = GREATEST(created_at, VALUES(created_at))";
-          } else {
-            foreach ($chunk as $mid) {
-              $rows[] = '(%d,%d)';      // (message_id, user_id)
-              $vals[] = $mid; $vals[] = $me;
-            }
-            $sql = "REPLACE INTO {$reads_table} (message_id,user_id) VALUES "
-                 . implode(',', $rows);
+        foreach ($rows as $row) {
+          $mid       = (int) ($row['id'] ?? 0);
+          $sender    = (int) ($row['sender_id'] ?? 0);
+          $recipient = (int) ($row['recipient_id'] ?? 0);
+          if ($mid <= 0 || $recipient === 0 || $recipient === null) { continue; }
+
+          if ($sender === $me && $recipient > 0) {
+            $dmUpdates[$recipient] = max($dmUpdates[$recipient] ?? 0, $mid);
+          } elseif ($recipient === $me && $sender > 0) {
+            $dmUpdates[$sender] = max($dmUpdates[$sender] ?? 0, $mid);
           }
-
-          // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-          $wpdb->query($wpdb->prepare($sql, ...$vals));
         }
       }
     }
 
-    // ---- Advance public watermark (SESSION WRITE happens here) --------------
+    if (!empty($dmUpdates) && !empty($t['last_dm_reads'])) {
+      foreach ($dmUpdates as $peer => $mid) {
+        $peer = (int) $peer;
+        $mid  = (int) $mid;
+        if ($peer <= 0 || $mid <= 0) { continue; }
+
+        $wpdb->query(
+          $wpdb->prepare(
+            "INSERT INTO {$t['last_dm_reads']} (user_id, peer_id, last_msg_id, updated_at)
+             VALUES (%d,%d,%d,%d)
+             ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),
+                                     updated_at = VALUES(updated_at)",
+            $me,
+            $peer,
+            $mid,
+            $now
+          )
+        );
+      }
+    }
+
+    if ($room_slug !== '' && $room_last_id > 0) {
+      $row = $wpdb->get_row(
+        $wpdb->prepare(
+          "SELECT room, created_at FROM {$t['messages']} WHERE id = %d LIMIT 1",
+          $room_last_id
+        ),
+        ARRAY_A
+      );
+
+      if ($row) {
+        $room = (string) ($row['room'] ?? '');
+        if ($room === $room_slug) {
+          $roomUpdates[$room_slug] = max($roomUpdates[$room_slug] ?? 0, $room_last_id);
+          $roomSeenAt[$room_slug]  = max($roomSeenAt[$room_slug] ?? 0, (int) ($row['created_at'] ?? 0));
+        }
+      }
+    }
+
+    if (!empty($roomUpdates) && !empty($t['last_reads'])) {
+      foreach ($roomUpdates as $slug => $mid) {
+        $slug = kkchat_sanitize_room_slug((string) $slug);
+        $mid  = (int) $mid;
+        if ($slug === '' || $mid <= 0) { continue; }
+
+        $wpdb->query(
+          $wpdb->prepare(
+            "INSERT INTO {$t['last_reads']} (user_id, room_slug, last_msg_id, updated_at)
+             VALUES (%d,%s,%d,%d)
+             ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),
+                                     updated_at = VALUES(updated_at)",
+            $me,
+            $slug,
+            $mid,
+            $now
+          )
+        );
+
+        $seenAt = (int) ($roomSeenAt[$slug] ?? 0);
+        if ($seenAt > 0) {
+          $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);
+          if ($seenAt > $prev) {
+            $_SESSION['kkchat_seen_at_public'] = $seenAt;
+          }
+        }
+      }
+    }
+
     if ($public_since > 0) {
       $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);
       if ($public_since > $prev) {
