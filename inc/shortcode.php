@@ -809,6 +809,9 @@ const POLL_HEARTBEAT_MS = 7000;
 const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
 let POLL_TIMER = null;
 let POLL_BUSY = false;
+let POLL_PENDING_REQUEST = null;
+let POLL_PENDING_PROMISE = null;
+let POLL_PENDING_RESOLVE = null;
 let POLL_SUSPENDED = false;
 let POLL_IS_LEADER = false;
 let POLL_HEARTBEAT_TIMER = null;
@@ -1581,7 +1584,21 @@ function handlePollMessage(msg){
 
 async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
-  if (POLL_BUSY || (POLL_SUSPENDED && !allowSuspended)) return;
+  if (POLL_BUSY) {
+    const prev = POLL_PENDING_REQUEST || {};
+    POLL_PENDING_REQUEST = {
+      forceCold: !!forceCold || !!prev.forceCold,
+      allowSuspended: !!allowSuspended || !!prev.allowSuspended,
+    };
+    if (!POLL_PENDING_PROMISE) {
+      POLL_PENDING_PROMISE = new Promise(resolve => {
+        POLL_PENDING_RESOLVE = resolve;
+      });
+    }
+    return POLL_PENDING_PROMISE;
+  }
+
+  if (POLL_SUSPENDED && !allowSuspended) return;
 
   const state = desiredStreamState();
   if (!state) {
@@ -1679,7 +1696,24 @@ async function performPoll(forceCold = false, options = {}){
     POLL_RETRY_HINT.set(key, fallback);
   } finally {
     POLL_BUSY = false;
-    scheduleStreamReconnect();
+
+    const pending = POLL_PENDING_REQUEST;
+    const pendingResolve = POLL_PENDING_RESOLVE;
+
+    POLL_PENDING_REQUEST = null;
+    POLL_PENDING_PROMISE = null;
+    POLL_PENDING_RESOLVE = null;
+
+    if (pending) {
+      setTimeout(() => {
+        performPoll(pending.forceCold, { allowSuspended: pending.allowSuspended })
+          .catch(() => {})
+          .finally(() => { pendingResolve?.(); });
+      }, 0);
+    } else {
+      pendingResolve?.();
+      scheduleStreamReconnect();
+    }
   }
 }
 
