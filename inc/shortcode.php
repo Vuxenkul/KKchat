@@ -1524,11 +1524,9 @@ function handlePollMessage(msg){
     } else {
       LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
     }
-    handleStreamSync(data, msg.state || state);
-    const next = Number(data.next ?? NaN);
-    if (Number.isFinite(next)) {
-      pubList.dataset.last = String(Math.max(+pubList.dataset.last || -1, next));
-    }
+    const ctx = msg.state || state;
+    handleStreamSync(data, ctx);
+    updateListLastFromPayload(data, ctx);
     return;
   }
 
@@ -1625,11 +1623,7 @@ async function performPoll(forceCold = false, options = {}){
     }
 
     handleStreamSync(payload, state);
-
-    const next = Number(payload?.next ?? NaN);
-    if (Number.isFinite(next)) {
-      pubList.dataset.last = String(Math.max(+pubList.dataset.last || -1, next));
-    }
+    updateListLastFromPayload(payload, state);
 
     let hadMessages = false;
     if (Array.isArray(payload?.events)) {
@@ -3942,6 +3936,58 @@ function didAppendNew(payload, prevLast) {
     if (Number.isFinite(id) && id > prevLast) return true;
   }
   return false;
+}
+
+function extractMaxMessageId(payload, context) {
+  let maxId = -1;
+
+  const consider = (item) => {
+    if (!item || typeof item !== 'object') return;
+    const mid = Number(item?.id);
+    if (!Number.isFinite(mid)) return;
+
+    if (context && context.kind === 'dm') {
+      const sid = Number(item.sender_id);
+      const rid = item.recipient_id == null ? null : Number(item.recipient_id);
+      const isMine    = sid === Number(ME_ID) && rid === Number(context.to);
+      const isTheirs  = sid === Number(context.to) && rid === Number(ME_ID);
+      if (!isMine && !isTheirs) return;
+    } else if (context && context.kind === 'room') {
+      const slug = String(item.room || item.room_slug || item.roomSlug || '').trim();
+      if (slug && slug !== context.room) return;
+    }
+
+    if (mid > maxId) {
+      maxId = mid;
+    }
+  };
+
+  const scan = (list) => {
+    if (!Array.isArray(list) || !list.length) return;
+    for (const item of list) consider(item);
+  };
+
+  if (payload && typeof payload === 'object') {
+    scan(payload.messages);
+    if (Array.isArray(payload.events)) {
+      payload.events.forEach(ev => {
+        if (ev && typeof ev === 'object') {
+          scan(ev.messages);
+        }
+      });
+    }
+  }
+
+  return maxId;
+}
+
+function updateListLastFromPayload(payload, context) {
+  const maxId = extractMaxMessageId(payload, context);
+  if (!Number.isFinite(maxId) || maxId < 0) return;
+  const current = +pubList.dataset.last || -1;
+  if (maxId > current) {
+    pubList.dataset.last = String(maxId);
+  }
 }
 
 function handleStreamSync(js, context){
