@@ -819,12 +819,41 @@ let BACKGROUND_POLL_TIMER = null;
 let POLL_LAST_ACTIVITY_AT = Date.now();
 let POLL_LAST_SCHEDULED_MS = null;
 let POLL_ACTIVITY_SIGNAL_AT = 0;
+let WINDOW_FOCUSED = typeof document.hasFocus === 'function' ? !!document.hasFocus() : true;
+let POLL_LAST_INTERACTIVE = null;
+
+function isInteractive(){
+  return document.visibilityState === 'visible' && WINDOW_FOCUSED;
+}
+
+POLL_LAST_INTERACTIVE = isInteractive();
 
 function stopBackgroundPolling(){
   if (BACKGROUND_POLL_TIMER) {
     clearTimeout(BACKGROUND_POLL_TIMER);
     BACKGROUND_POLL_TIMER = null;
   }
+}
+
+function handlePresenceChange(force = false){
+  const interactive = isInteractive();
+  if (!force && interactive === POLL_LAST_INTERACTIVE) return;
+
+  if (interactive) {
+    POLL_HIDDEN_SINCE = 0;
+    stopBackgroundPolling();
+    resumeStream();
+    noteUserActivity(true);
+    pollActive().catch(()=>{});
+  } else {
+    if (!POLL_HIDDEN_SINCE) {
+      POLL_HIDDEN_SINCE = Date.now();
+    }
+    suspendStream();
+    scheduleBackgroundPoll();
+  }
+
+  POLL_LAST_INTERACTIVE = interactive;
 }
 
 function noteUserActivity(force = false){
@@ -834,7 +863,7 @@ function noteUserActivity(force = false){
   POLL_LAST_ACTIVITY_AT = now;
 
   if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
-  if (document.visibilityState === 'hidden') return;
+  if (!isInteractive()) return;
 
   const hotMs = Number(POLL_SETTINGS?.hotIntervalMs) || 4000;
   if (!POLL_TIMER) return;
@@ -859,7 +888,7 @@ function computeBackgroundPollDelay(){
 }
 
 function scheduleBackgroundPoll(delay){
-  if (document.visibilityState !== 'hidden') return;
+  if (isInteractive()) return;
   if (MULTITAB_LOCKED) return;
 
   const wait = Math.max(1000, Number.isFinite(delay) ? delay : computeBackgroundPollDelay());
@@ -867,7 +896,7 @@ function scheduleBackgroundPoll(delay){
 
   BACKGROUND_POLL_TIMER = setTimeout(async () => {
     BACKGROUND_POLL_TIMER = null;
-    if (document.visibilityState !== 'hidden') return;
+    if (isInteractive()) return;
     if (MULTITAB_LOCKED) return;
     try {
       await pollActive(false, { allowSuspended: true });
@@ -1005,7 +1034,7 @@ function unlockMultiTab(){
   resumeStream();
   startKeepAlive();
   pollActive().catch(()=>{});
-  if (document.visibilityState === 'hidden') {
+  if (!isInteractive()) {
     scheduleBackgroundPoll();
   }
 }
@@ -1421,12 +1450,13 @@ function computePollDelay(hintMs){
   const slowAfterMs = Math.max(mediumAfterMs, Number(settings.slowAfterMs) || 300000);
 
   const hiddenSince = Number(POLL_HIDDEN_SINCE) || 0;
-  const hiddenFor = document.visibilityState === 'hidden' && hiddenSince
+  const inactive = !isInteractive();
+  const hiddenFor = inactive && hiddenSince
     ? now - hiddenSince
     : 0;
 
   let base;
-  if (document.visibilityState === 'hidden' && hiddenFor >= hiddenThreshold) {
+  if (inactive && hiddenFor >= hiddenThreshold) {
     base = hiddenDelay;
   } else {
     const activitySince = now - (Number(POLL_LAST_ACTIVITY_AT) || 0);
@@ -2238,6 +2268,7 @@ function renderList(el, items){
 
     // Sounds: mention has priority; otherwise generic notif if user likely didn't see it
     try {
+      const userAway = !isInteractive();
       if (mentionAdded && !soundsMuted() && !currentChatMuted()) {
       const snd = (typeof mentionSound !== 'undefined' && mentionSound)
         ? mentionSound
@@ -2247,7 +2278,7 @@ function renderList(el, items){
         snd.currentTime = 0;
         snd.play()?.catch(()=>{});
       }
-    } else if (anyFromOthers && (document.hidden || !atBottom(el)) && !currentChatMuted()) {
+    } else if (anyFromOthers && (userAway || !atBottom(el)) && !currentChatMuted()) {
       try { playNotifOnce(); } catch(_) {}
     }
 
@@ -2324,7 +2355,7 @@ const queueMark = (() => {
   let opts  = { ...READS_DEFAULTS };
 
   function shouldSendNow() {
-    if (document.visibilityState !== 'visible') return false;
+    if (!isInteractive()) return false;
     return isNearBottom(pubList, opts.bottomPx);
   }
 
@@ -2378,7 +2409,7 @@ const queueMark = (() => {
         const last = pendingRoom?.lastId ?? 0;
         pendingRoom = { slug: currentRoom, lastId: Math.max(last, maxId) };
       }
-      if (currentRoom) {
+      if (currentRoom && isInteractive()) {
         ROOM_UNREAD[currentRoom] = 0;
         renderRoomTabs();
         updateLeftCounts?.();
@@ -2388,10 +2419,12 @@ const queueMark = (() => {
         const last = pendingDM?.lastId ?? 0;
         pendingDM = { peer: currentDM, lastId: Math.max(last, maxId) };
       }
-      UNREAD_PER[currentDM] = 0;
-      renderDMSidebar();
-      renderRoomTabs();
-      updateLeftCounts?.();
+      if (isInteractive()) {
+        UNREAD_PER[currentDM] = 0;
+        renderDMSidebar();
+        renderRoomTabs();
+        updateLeftCounts?.();
+      }
     }
 
     opts = { ...READS_DEFAULTS, ...(override || {}) };
@@ -2404,6 +2437,7 @@ const queueMark = (() => {
 
 
 function markVisible(listEl){
+  if (!isInteractive()) return;
   if (!isVisible(listEl)) return;
   const ids = [];
   const rect = listEl.getBoundingClientRect();
@@ -3083,14 +3117,14 @@ function applySyncPayload(js){
       const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
       const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
 
-      const visible = document.visibilityState === 'visible';
+      const interactive = isInteractive();
 
       const passiveRoomBumped = roomIncrUnmuted.some(slug => !isActiveRoom(slug));
       const passiveDmBumped   = dmIncrUnmuted.some(id   => !isActiveDM(id));
 
       const shouldRing =
-        (!visible && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
-        (visible && (passiveRoomBumped || passiveDmBumped));
+        ((!interactive) && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
+        (interactive && (passiveRoomBumped || passiveDmBumped));
 
       // Server-assisted mention hints — also ignore muted rooms and only ring on rising edge
       const mentionBumps = (js && js.mention_bumps) ? js.mention_bumps : {};
@@ -3130,7 +3164,7 @@ function applySyncPayload(js){
     }catch(_){}
 
     // ⬇️ Optimistically clear active badge (prevents “stuck” counters).
-    if (document.visibilityState === 'visible') {
+    if (isInteractive()) {
       if (currentDM != null) {
         UNREAD_PER[currentDM] = 0;
       } else if (currentRoom) {
@@ -4091,26 +4125,24 @@ async function pollActive(forceCold = false, options = {}){
   } catch(_) {}
 }
 
-if (document.visibilityState === 'hidden') {
-  POLL_HIDDEN_SINCE = Date.now();
-  scheduleBackgroundPoll();
+if (!isInteractive()) {
+  handlePresenceChange(true);
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') {
-    POLL_HIDDEN_SINCE = Date.now();
-    suspendStream();
-    scheduleBackgroundPoll();
-  } else {
-    POLL_HIDDEN_SINCE = 0;
-    stopBackgroundPolling();
-    resumeStream();
-    noteUserActivity(true);
-    pollActive().catch(()=>{});
-  }
+  handlePresenceChange();
 });
 
-window.addEventListener('focus',  () => { noteUserActivity(true); pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('focus',  () => {
+  WINDOW_FOCUSED = true;
+  handlePresenceChange();
+  restartStream();
+});
+
+window.addEventListener('blur', () => {
+  WINDOW_FOCUSED = false;
+  handlePresenceChange();
+});
 window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
 
 
@@ -4922,7 +4954,7 @@ jumpBtn.addEventListener('click', ()=>{
 
   function maybePollActiveFallback(){
     if (pollFallbackBusy) return;
-    if (document.visibilityState === 'hidden') return;
+    if (!isInteractive()) return;
 
     pollFallbackBusy = true;
     pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
@@ -4940,7 +4972,7 @@ jumpBtn.addEventListener('click', ()=>{
     clearInterval(pingTimer);
     pingTimer = setInterval(()=>{
       touch();
-      if (document.visibilityState === 'hidden') return;
+      if (!isInteractive()) return;
       if (POLL_IS_LEADER) {
         maybePollActiveFallback();
       }

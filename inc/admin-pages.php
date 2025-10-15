@@ -631,14 +631,14 @@ function kkchat_admin_settings_page() {
           <th><label for="poll_hidden_threshold">Dold flik – tröskel</label></th>
           <td>
             <input id="poll_hidden_threshold" name="poll_hidden_threshold" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_hidden_threshold; ?>"> sekunder
-            <p class="description">Efter så här många sekunder dold flik räknas som "borta".</p>
+            <p class="description">Efter så här många sekunder dold flik eller ofokuserat fönster räknas som "borta".</p>
           </td>
         </tr>
         <tr>
           <th><label for="poll_hidden_delay">Dold flik – intervall</label></th>
           <td>
             <input id="poll_hidden_delay" name="poll_hidden_delay" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_hidden_delay; ?>"> sekunder
-            <p class="description">Så lång tid väntar vi mellan pollningar när fliken varit dold längre än tröskeln.</p>
+            <p class="description">Så lång tid väntar vi mellan pollningar när fliken är dold eller fönstret varit ofokuserat längre än tröskeln.</p>
           </td>
         </tr>
         <tr>
