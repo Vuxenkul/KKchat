@@ -835,7 +835,8 @@ function stopBackgroundPolling(){
   }
 }
 
-function handlePresenceChange(force = false){
+function handlePresenceChange(force = false, opts = {}){
+  const coldPoll = !!(opts && opts.coldPoll);
   const interactive = isInteractive();
   if (!force && interactive === POLL_LAST_INTERACTIVE) return;
 
@@ -844,7 +845,11 @@ function handlePresenceChange(force = false){
     stopBackgroundPolling();
     resumeStream();
     noteUserActivity(true);
-    pollActive().catch(()=>{});
+    if (coldPoll) {
+      pollActive(true).catch(()=>{});
+    } else {
+      pollActive().catch(()=>{});
+    }
   } else {
     if (!POLL_HIDDEN_SINCE) {
       POLL_HIDDEN_SINCE = Date.now();
@@ -3760,6 +3765,8 @@ roomTabs.addEventListener('click', async e => {
   setComposerAccess();
   showView('vPublic');
 
+  const syncPromise = pollActive(true).catch(()=>{});
+
   let snapshotPromise = null;
   if (cacheHit) {
     markVisible(pubList);
@@ -3767,7 +3774,6 @@ roomTabs.addEventListener('click', async e => {
     snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
   }
 
-  const syncPromise = pollActive(true).catch(()=>{});
   openStream();
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
@@ -4135,7 +4141,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('focus',  () => {
   WINDOW_FOCUSED = true;
-  handlePresenceChange();
+  handlePresenceChange(false, { coldPoll: true });
   restartStream();
 });
 
@@ -4199,6 +4205,8 @@ async function openDM(id) {
   setComposerAccess();
   showView('vPublic');
 
+  const syncPromise = pollActive(true).catch(()=>{});
+
   let snapshotPromise = null;
   if (cacheHit) {
     markVisible(pubList);
@@ -4206,7 +4214,6 @@ async function openDM(id) {
     snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
   }
 
-  const syncPromise = pollActive(true).catch(()=>{});
   openStream();
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
