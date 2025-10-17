@@ -821,6 +821,9 @@ let POLL_LAST_SCHEDULED_MS = null;
 let POLL_ACTIVITY_SIGNAL_AT = 0;
 let WINDOW_FOCUSED = typeof document.hasFocus === 'function' ? !!document.hasFocus() : true;
 let POLL_LAST_INTERACTIVE = null;
+let POLL_INFLIGHT_PROMISE = null;
+let POLL_ABORT_CONTROLLER = null;
+let POLL_REQUEST_SERIAL = 0;
 
 function isInteractive(){
   return document.visibilityState === 'visible' && WINDOW_FOCUSED;
@@ -1157,12 +1160,20 @@ function pollContextKey(state){
   return state.kind === 'dm' ? `dm:${state.to}` : `room:${state.room}`;
 }
 
+function abortActivePoll(){
+  if (!POLL_ABORT_CONTROLLER) return;
+  try {
+    POLL_ABORT_CONTROLLER.abort();
+  } catch (_) {}
+}
+
 function stopStream(){
   if (POLL_TIMER) {
     clearTimeout(POLL_TIMER);
     POLL_TIMER = null;
   }
   POLL_LAST_SCHEDULED_MS = null;
+  abortActivePoll();
 }
 
 function scheduleStreamReconnect(delay){
@@ -1586,6 +1597,12 @@ function handlePollMessage(msg){
 
 async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
+  const previousPromise = POLL_INFLIGHT_PROMISE;
+  if (previousPromise) {
+    abortActivePoll();
+    try { await previousPromise; } catch (_) {}
+  }
+
   if (POLL_BUSY || (POLL_SUSPENDED && !allowSuspended)) return;
 
   const state = desiredStreamState();
@@ -1617,75 +1634,110 @@ async function performPoll(forceCold = false, options = {}){
 
   const url = `${API}/sync?${params.toString()}`;
 
-  POLL_BUSY = true;
-  try {
-    const resp = await fetch(url, { credentials: 'include', headers });
-    const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
+  abortActivePoll();
+  const controller = new AbortController();
+  POLL_ABORT_CONTROLLER = controller;
+  const requestSerial = ++POLL_REQUEST_SERIAL;
 
-    if (resp.status === 204 || resp.status === 304) {
-      if (retryHeader != null) {
-        POLL_RETRY_HINT.set(key, retryHeader * 1000);
+  const pollPromise = (async () => {
+    POLL_BUSY = true;
+    try {
+      const resp = await fetch(url, { credentials: 'include', headers, signal: controller.signal });
+      const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
+
+      if (requestSerial !== POLL_REQUEST_SERIAL) {
+        return;
       }
-      scheduleStreamReconnect(retryHeader != null ? retryHeader * 1000 : undefined);
-      return;
-    }
 
-    if (resp.status === 429) {
-      if (retryHeader != null) {
-        POLL_RETRY_HINT.set(key, retryHeader * 1000);
-        scheduleStreamReconnect(retryHeader * 1000);
+      if (resp.status === 204 || resp.status === 304) {
+        if (retryHeader != null) {
+          POLL_RETRY_HINT.set(key, retryHeader * 1000);
+        }
+        scheduleStreamReconnect(retryHeader != null ? retryHeader * 1000 : undefined);
+        return;
+      }
+
+      if (resp.status === 429) {
+        if (retryHeader != null) {
+          POLL_RETRY_HINT.set(key, retryHeader * 1000);
+          scheduleStreamReconnect(retryHeader * 1000);
+        } else {
+          scheduleStreamReconnect(15000);
+        }
+        return;
+      }
+
+      if (!resp.ok) {
+        throw new Error(`sync ${resp.status}`);
+      }
+
+      const payload = await resp.json();
+      if (requestSerial !== POLL_REQUEST_SERIAL) {
+        return;
+      }
+
+      const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
+      const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
+      if (retryMs != null) {
+        POLL_RETRY_HINT.set(key, retryMs);
+      }
+
+      const headerEtag = resp.headers.get('ETag');
+      if (headerEtag) {
+        POLL_ETAGS.set(key, headerEtag);
+      }
+
+      if (payload && Number.isFinite(+payload.now)) {
+        LAST_SERVER_NOW = +payload.now;
       } else {
-        scheduleStreamReconnect(15000);
+        LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
       }
-      return;
+
+      handleStreamSync(payload, state);
+      updateListLastFromPayload(payload, state);
+
+      let hadMessages = false;
+      if (Array.isArray(payload?.events)) {
+        hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
+      } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
+        hadMessages = true;
+      }
+
+      if (hadMessages) {
+        POLL_LAST_EVENT_AT = Date.now();
+        POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
+      }
+
+      broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        return;
+      }
+      if (requestSerial !== POLL_REQUEST_SERIAL) {
+        return;
+      }
+      console.warn('sync poll failed', err);
+      const fallback = Math.max(8000, (POLL_RETRY_HINT.get(key) || 8000) * 1.5);
+      POLL_RETRY_HINT.set(key, fallback);
+    } finally {
+      if (POLL_ABORT_CONTROLLER === controller) {
+        POLL_ABORT_CONTROLLER = null;
+      }
+      POLL_BUSY = false;
+      if (requestSerial === POLL_REQUEST_SERIAL) {
+        scheduleStreamReconnect();
+      }
     }
+  })();
 
-    if (!resp.ok) {
-      throw new Error(`sync ${resp.status}`);
+  const wrappedPromise = pollPromise.finally(() => {
+    if (POLL_INFLIGHT_PROMISE === wrappedPromise) {
+      POLL_INFLIGHT_PROMISE = null;
     }
+  });
 
-    const payload = await resp.json();
-    const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
-    const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
-    if (retryMs != null) {
-      POLL_RETRY_HINT.set(key, retryMs);
-    }
-
-    const headerEtag = resp.headers.get('ETag');
-    if (headerEtag) {
-      POLL_ETAGS.set(key, headerEtag);
-    }
-
-    if (payload && Number.isFinite(+payload.now)) {
-      LAST_SERVER_NOW = +payload.now;
-    } else {
-      LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
-    }
-
-    handleStreamSync(payload, state);
-    updateListLastFromPayload(payload, state);
-
-    let hadMessages = false;
-    if (Array.isArray(payload?.events)) {
-      hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
-    } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
-      hadMessages = true;
-    }
-
-    if (hadMessages) {
-      POLL_LAST_EVENT_AT = Date.now();
-      POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
-    }
-
-    broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
-  } catch (err) {
-    console.warn('sync poll failed', err);
-    const fallback = Math.max(8000, (POLL_RETRY_HINT.get(key) || 8000) * 1.5);
-    POLL_RETRY_HINT.set(key, fallback);
-  } finally {
-    POLL_BUSY = false;
-    scheduleStreamReconnect();
-  }
+  POLL_INFLIGHT_PROMISE = wrappedPromise;
+  await wrappedPromise;
 }
 
 // --- SOUND MUTE WINDOW -----------------------------------------
@@ -4168,6 +4220,10 @@ window.addEventListener('blur', () => {
   handlePresenceChange();
 });
 window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('offline', () => {
+  abortActivePoll();
+  stopStream();
+});
 
 
   function showView(id){ document.querySelectorAll('.view').forEach(v=>v.removeAttribute('active')); document.getElementById(id).setAttribute('active',''); }
@@ -5377,6 +5433,15 @@ window.addEventListener('pagehide', beaconPing, { capture: true });
 window.addEventListener('beforeunload', beaconPing, { capture: true });
 // Some browsers fire 'freeze' when putting a page in BFCache
 window.addEventListener('freeze', beaconPing, { capture: true });
+
+const cancelPollOnTeardown = () => {
+  abortActivePoll();
+  stopStream();
+};
+
+window.addEventListener('pagehide', cancelPollOnTeardown, { capture: true });
+window.addEventListener('beforeunload', cancelPollOnTeardown, { capture: true });
+window.addEventListener('freeze', cancelPollOnTeardown, { capture: true });
 
 async function refreshUsersAndUnread(){
   try {
