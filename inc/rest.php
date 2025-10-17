@@ -2222,7 +2222,7 @@ register_rest_route($ns, '/moderate/hide-message', [
     'permission_callback'=>'__return_true',
   ]);
 
-  // Admin: fetch a user's messages (for the 🧾 overlay)
+  // Admin: fetch a user's messages (for the receipt overlay)
 register_rest_route($ns, '/admin/user-messages', [
   'methods'  => 'GET',
   'callback' => function (WP_REST_Request $req) use ($require_admin) {

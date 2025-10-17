@@ -207,7 +207,7 @@ f.addEventListener('submit', async (ev)=>{
   class="side-toggle standalone"
   aria-haspopup="dialog"
   aria-expanded="false">
-  🔎 Sök & personer
+  <span class="material-symbols-rounded" aria-hidden="true">search</span> Sök & personer
 </button>
 
     <div class="kk-layout">
@@ -217,17 +217,17 @@ f.addEventListener('submit', async (ev)=>{
           <div id="kk-leftWrap">
             <div class="lefttabs" id="kk-leftTabs">
   <button type="button" data-view="users" aria-selected="true">
-    👤 <span class="badge" id="kk-countUsers">0</span>
+    <span class="material-symbols-rounded" aria-hidden="true">person</span> <span class="badge" id="kk-countUsers">0</span>
   </button>
   <button type="button" data-view="rooms" aria-selected="false">
-    💬 <span class="badge" id="kk-countRooms">0</span>
+    <span class="material-symbols-rounded" aria-hidden="true">chat</span> <span class="badge" id="kk-countRooms">0</span>
   </button>
   <button type="button" data-view="dms" aria-selected="false">
-    📩 <span class="badge" id="kk-countDMs">0</span>
+    <span class="material-symbols-rounded" aria-hidden="true">mail</span> <span class="badge" id="kk-countDMs">0</span>
   </button>
     <?php if ($is_admin): ?>
   <button type="button" data-view="reports" aria-selected="false">
-    🚩 <span class="badge" id="kk-countReports">0</span>
+    <span class="material-symbols-rounded" aria-hidden="true">flag</span> <span class="badge" id="kk-countReports">0</span>
   </button>
   <?php endif; ?>
 </div>
@@ -278,7 +278,7 @@ f.addEventListener('submit', async (ev)=>{
   <div class="leftview" id="kk-lvReports">
     <div id="kk-reportList" class="users"></div>
     <div class="people" style="padding:8px">
-      <button id="kk-reportRefresh" type="button" class="iconbtn">🔄</button>
+      <button id="kk-reportRefresh" type="button" class="iconbtn" aria-label="Uppdatera rapporter"><span class="material-symbols-rounded" aria-hidden="true">refresh</span></button>
     </div>
   </div>
   <?php endif; ?>
@@ -305,7 +305,7 @@ f.addEventListener('submit', async (ev)=>{
         <section id="vPublic" class="view" active>
           <div class="msgwrap">
             <ul id="kk-pubList" class="list" data-last="-1"></ul>
-            <button id="kk-jumpBottom" class="fab" type="button" aria-label="Hoppa till botten">⬇️</button>
+            <button id="kk-jumpBottom" class="fab" type="button" aria-label="Hoppa till botten"><span class="material-symbols-rounded" aria-hidden="true">arrow_downward</span></button>
             <form id="kk-pubForm" class="inputbar">
               <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($_SESSION['kkchat_csrf']) ?>">
               <div class="input-actions" data-attach-root>
@@ -317,11 +317,11 @@ f.addEventListener('submit', async (ev)=>{
                   title="Fler alternativ"
                   aria-haspopup="menu"
                   aria-expanded="false"
-                >➕</button>
+                ><span class="material-symbols-rounded" aria-hidden="true">add</span></button>
                 <div class="input-actions-menu" data-attach-menu hidden role="menu" aria-hidden="true">
-                  <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem">🖼️ Ladda upp bild</button>
-                  <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem">📷 Öppna kamera</button>
-                  <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem">👤 Nämn någon</button>
+                  <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">image</span> Ladda upp bild</button>
+                  <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">photo_camera</span> Öppna kamera</button>
+                  <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">alternate_email</span> Nämn någon</button>
                 </div>
               </div>
 
@@ -330,7 +330,7 @@ f.addEventListener('submit', async (ev)=>{
               <input type="file" accept="image/*" capture="environment" id="kk-pubCam" style="display:none">
 
               <textarea name="content" placeholder="Skriv ett meddelande…" autocomplete="off"></textarea>
-              <button>💬</button>
+              <button aria-label="Skicka meddelande"><span class="material-symbols-rounded" aria-hidden="true">send</span><span class="sr-only">Skicka</span></button>
               <div id="kk-mentionBox" class="mentionbox" role="listbox" aria-label="Mention suggestions"></div>
 
               </form>
@@ -363,9 +363,9 @@ f.addEventListener('submit', async (ev)=>{
     <div class="imgfoot">
       <div id="kk-imgCap"></div>
       <div class="btns">
-        <button id="kk-img-act-dm"     class="iconbtn" type="button" title="Skicka DM"            style="display:none">✉️ Skicka DM</button>
-        <button id="kk-img-act-report" class="iconbtn" type="button" title="Rapportera"           style="display:none">⚠️ Rapportera</button>
-        <button id="kk-img-act-block"  class="iconbtn" type="button" title="Blockera/Avblockera"  style="display:none">⛔ Blockera</button>
+        <button id="kk-img-act-dm"     class="iconbtn" type="button" title="Skicka DM"            style="display:none"><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span> Skicka DM</button>
+        <button id="kk-img-act-report" class="iconbtn" type="button" title="Rapportera"           style="display:none"><span class="material-symbols-rounded" aria-hidden="true">report</span> Rapportera</button>
+        <button id="kk-img-act-block"  class="iconbtn" type="button" title="Blockera/Avblockera"  style="display:none"><span class="material-symbols-rounded" aria-hidden="true">block</span> Blockera</button>
 
         <a id="kk-imgOpen" class="iconbtn" href="#" target="_blank" rel="noopener" style="display:none">Öppna original</a>
         <button id="kk-imgClose" class="iconbtn" type="button">Stäng</button>
@@ -379,8 +379,8 @@ f.addEventListener('submit', async (ev)=>{
     <strong id="kk-camTitle">Kameravy</strong>
     <video id="kk-camVideo" autoplay playsinline muted></video>
     <div id="kk-camBtns">
-      <button id="kk-camFlip" type="button" title="Byt kamera">🔄</button>
-      <button id="kk-camShot" type="button" title="Ta bild">📸 Ta bild</button>
+      <button id="kk-camFlip" type="button" title="Byt kamera"><span class="material-symbols-rounded" aria-hidden="true">refresh</span></button>
+      <button id="kk-camShot" type="button" title="Ta bild"><span class="material-symbols-rounded" aria-hidden="true">photo_camera</span> Ta bild</button>
       <button id="kk-camCancel" type="button" title="Avbryt">Stäng</button>
     </div>
   </div>
@@ -394,14 +394,14 @@ f.addEventListener('submit', async (ev)=>{
       <button type="button" class="iconbtn" id="kk-msgClose">Stäng</button>
     </div>
     <div class="row">
-      <button id="kk-act-dm" type="button">✉️ Skicka DM</button>
-      <button id="kk-act-report" type="button">⚠️ Rapportera</button>
-      <button id="kk-act-block" type="button">⛔ Blockera</button>
+      <button id="kk-act-dm" type="button"><span class="material-symbols-rounded" aria-hidden="true">forward_to_inbox</span> Skicka DM</button>
+      <button id="kk-act-report" type="button"><span class="material-symbols-rounded" aria-hidden="true">report</span> Rapportera</button>
+      <button id="kk-act-block" type="button"><span class="material-symbols-rounded" aria-hidden="true">block</span> Blockera</button>
 
     </div>
             <?php if ($is_admin): ?>
           <div class="row">
-            <button id="kk-act-hide" type="button">🫥 Dölj meddelande</button>
+            <button id="kk-act-hide" type="button"><span class="material-symbols-rounded" aria-hidden="true">visibility_off</span> Dölj meddelande</button>
           </div>
         <?php endif; ?>
   </div>
@@ -464,6 +464,12 @@ f.addEventListener('submit', async (ev)=>{
   const multiTabModal = document.getElementById('kk-multiTabModal');
   const multiTabDesc  = document.getElementById('kk-multiTabDesc');
   const multiTabUseHere = document.getElementById('kk-multiTabUseHere');
+
+  const MATERIAL_ICON_CLASS = 'material-symbols-rounded';
+  function iconMarkup(name, { filled = false } = {}) {
+    const cls = filled ? `${MATERIAL_ICON_CLASS} icon-fill` : MATERIAL_ICON_CLASS;
+    return `<span class="${cls}" aria-hidden="true">${name}</span>`;
+  }
 
   multiTabUseHere?.addEventListener('click', (ev)=>{
     ev.preventDefault();
@@ -1945,12 +1951,12 @@ async function doLogout(){
     function roomMuteHTML(slug){
       const muted = isRoomMuted(slug);
       const title = muted ? 'Slå på ljud för rummet' : 'Tysta rummet';
-    return `<span class="tab-mute" data-mute-room="${escAttr(slug)}" title="${title}" aria-label="${title}" aria-pressed="${muted?'true':'false'}" tabindex="0" role="button">${muted?'🔕':'🔔'}</span>`;
+    return `<span class="tab-mute" data-mute-room="${escAttr(slug)}" title="${title}" aria-label="${title}" aria-pressed="${muted?'true':'false'}" tabindex="0" role="button">${muted ? iconMarkup('notifications_off') : iconMarkup('notifications')}</span>`;
     }
     function dmMuteHTML(id){
       const muted = isDmMuted(id);
       const title = muted ? 'Slå på ljud för DM' : 'Tysta DM';
-    return `<span class="tab-mute" data-mute-dm="${id}" title="${title}" aria-label="${title}" aria-pressed="${muted?'true':'false'}" tabindex="0" role="button">${muted?'🔕':'🔔'}</span>`;
+    return `<span class="tab-mute" data-mute-dm="${id}" title="${title}" aria-label="${title}" aria-pressed="${muted?'true':'false'}" tabindex="0" role="button">${muted ? iconMarkup('notifications_off') : iconMarkup('notifications')}</span>`;
     }
 
 
@@ -2667,7 +2673,7 @@ function normalizeUnreadMap(map) {
 
   const kind = String(info.kind || 'chat').toLowerCase();
   const isImage = kind === 'image';
-  const icon = isImage ? '📷' : '💬';
+  const icon = iconMarkup(isImage ? 'photo_camera' : 'chat');
 
   let ctx = '';
   if (info.to) {
@@ -2695,19 +2701,19 @@ function normalizeUnreadMap(map) {
 
 function userRow(u){
   const isMe   = u.id === ME_ID;
-  const adminIcon = u.is_admin ? '🛡️ ' : '';
+  const adminIcon = u.is_admin ? `${iconMarkup('shield_person')} ` : ''; 
   const blocked = isBlocked(u.id);
   const unread = blocked ? 0 : (UNREAD_PER[u.id]||0);
   const badge  = unread ? `<span class="badge-sm" data-has>!</span>` : '';
   const name   = `${adminIcon}${esc(u.name)}${isMe ? ' (du)' : ''}`;
 
   const dmBtn  = isMe ? '' : `<button class="openbtn" data-dm="${u.id}" ${blocked?'disabled':''}
-                        aria-label="${blocked?'Avblockera för att skriva':'Öppna privat med '+esc(u.name)}">✉️</button>`;
+                        aria-label="${blocked?'Avblockera för att skriva':'Öppna privat med '+esc(u.name)}">${iconMarkup('forward_to_inbox')}</button>`;
 
   let blockBtn = '';
   if (!isMe) {
     if (u.is_admin) {
-      blockBtn = `<button class="modbtn" disabled title="Du kan inte blockera en admin">🚫</button>`;
+      blockBtn = `<button class="modbtn" disabled title="Du kan inte blockera en admin">${iconMarkup('block')}</button>`;
     } else {
       blockBtn = `
         <button class="modbtn" type="button"
@@ -2715,25 +2721,25 @@ function userRow(u){
                 aria-pressed="${blocked ? 'true' : 'false'}"
                 aria-label="${blocked ? 'Avblockera' : 'Blockera'}"
                 title="${blocked ? 'Avblockera' : 'Blockera'}">
-          ${blocked ? '✅' : '⛔'}
+          ${blocked ? iconMarkup('task_alt') : iconMarkup('block')}
         </button>`;
     }
   }
 
   const reportBtn = (!IS_ADMIN && !isMe)
-    ? `<button class="openbtn" data-report="${u.id}" title="Rapportera användare">⚠️</button>`
+    ? `<button class="openbtn" data-report="${u.id}" title="Rapportera användare" aria-label="Rapportera användare">${iconMarkup('report')}</button>`
     : '';
 
   const modBtns = (IS_ADMIN && !isMe)
     ? `<span class="modgrp">
-         <button class="modbtn" data-log="${u.id}" title="Visa logg">🧾</button>
-         <button class="modbtn" data-kick="${u.id}" title="Kick">🚪</button>
-         <button class="modbtn" data-ban="${u.id}" title="IP Ban">📡</button>
+         <button class="modbtn" data-log="${u.id}" title="Visa logg" aria-label="Visa logg">${iconMarkup('receipt_long')}</button>
+         <button class="modbtn" data-kick="${u.id}" title="Kick" aria-label="Kick">${iconMarkup('logout')}</button>
+         <button class="modbtn" data-ban="${u.id}" title="IP Ban" aria-label="IP-ban">${iconMarkup('public_off')}</button>
        </span>`
     : '';
 
   const logoutSelfBtn = isMe
-    ? `<button class="logoutbtn" data-logout="1" title="Logga ut" aria-label="Logga ut">Logga ut<b>🚪</b></button>`
+    ? `<button class="logoutbtn" data-logout="1" title="Logga ut" aria-label="Logga ut">Logga ut<b>${iconMarkup('logout')}</b></button>`
     : '';
 
     const genderCol = u.gender
@@ -3285,13 +3291,13 @@ let LAST_OPEN_DM = null;
   function renderRoomsSidebar(){
     const rows = ROOMS.map(r=>{
       const joined = JOINED.has(r.slug);
-      const lock = r.member_only ? '🔒 ' : '';
+      const lock = r.member_only ? `${iconMarkup('lock')} ` : '';
       const cur  = (r.slug===currentRoom && !currentDM) ? ' (aktiv)' : '';
       const unread = ROOM_UNREAD[r.slug]||0;
       const badge  = unread ? `<span class="badge-sm" data-has>!</span>` : '';
       const btn = joined
-        ? `<button class="openbtn" data-leave="${r.slug}" title="Ta bort #${esc(r.slug)} från flikarna">👋 Lämna</button>`
-        : `<button class="openbtn" data-join="${r.slug}" title="Lägg till #${esc(r.slug)} i flikarna">➕ Gå med</button>`;
+        ? `<button class="openbtn" data-leave="${r.slug}" title="Ta bort #${esc(r.slug)} från flikarna">${iconMarkup('logout')} Lämna</button>`
+        : `<button class="openbtn" data-join="${r.slug}" title="Lägg till #${esc(r.slug)} i flikarna">${iconMarkup('add')} Gå med</button>`;
       const access = r.allowed ? '' : 'Endast medlemmar';
       return `<div class="user" data-room="${escAttr(r.slug)}">
         <div class="user-main">
@@ -3319,7 +3325,7 @@ let LAST_OPEN_DM = null;
           <div class="user-actions">
             ${badge}
             <button class="openbtn" data-open="${id}"${cur}>Öppna</button>
-            <button class="modbtn" data-close="${id}" title="Stäng">🗑️</button>
+            <button class="modbtn" data-close="${id}" title="Stäng" aria-label="Stäng DM">${iconMarkup('delete')}</button>
           </div>
         </div>`;
       }).join('') || '<div class="user"><div class="user-main"><b>Inga privata chattar</b></div></div>';
@@ -3427,7 +3433,7 @@ function openMsgSheet(id, name, msgId = null, isMine = false, liEl = null){
   actBlock?.toggleAttribute('disabled', mine);
   if (mine) {
 
-    actDm && (actDm.textContent = '✉️ Skicka DM');
+    actDm && (actDm.innerHTML = `${iconMarkup('forward_to_inbox')} Skicka DM`);
   }
 
   msgSheet.setAttribute('open','');
@@ -3554,7 +3560,8 @@ imgActBlock?.addEventListener('click', async ()=>{
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
 
       const blocked = isBlocked(id);
-      imgActBlock.textContent = blocked ? '✅ Avblockera' : '⛔ Blockera';
+      const blockLabel = blocked ? `${iconMarkup('task_alt')} Avblockera` : `${iconMarkup('block')} Blockera`;
+      imgActBlock.innerHTML = blockLabel;
     } else {
       const err = js.err || 'Kunde inte uppdatera blockering';
       if (err === 'cant_block_admin') alert('Du kan inte blockera en admin.');
@@ -3568,7 +3575,7 @@ function renderRoomTabs(){
   const roomBtns = ROOMS
     .filter(r => JOINED.has(r.slug))
     .map(r => {
-      const lock  = r.member_only ? ' 🔒' : '';
+      const lock  = r.member_only ? ` ${iconMarkup('lock')}` : '';
       const count = ROOM_UNREAD[r.slug] || 0;
       const badge = count ? `<span class="badge" data-has>!</span>` : '';
       const selected = (r.slug===currentRoom && !currentDM) ? 'true' : 'false';
@@ -3597,21 +3604,21 @@ function renderRoomTabs(){
     ? isDmMuted(currentDM)
     : isRoomMuted(currentRoom);
   const activeMuteLabel = activeMuted
-    ? `🔔 Slå på ljud för ${activeName}`
-    : `🔕 Tysta ${activeName}`;
+    ? `${iconMarkup('notifications')} Slå på ljud för ${activeName}`
+    : `${iconMarkup('notifications_off')} Tysta ${activeName}`;
 
   const autoLabel = AUTO_SCROLL
-    ? '🔓 Autoscroll på (klicka för att låsa)'
-    : '🔒 Autoscroll av (klicka för att låsa upp)';
+    ? `${iconMarkup('lock_open')} Autoscroll på (klicka för att låsa)`
+    : `${iconMarkup('lock')} Autoscroll av (klicka för att låsa upp)`;
 
   const blurLabel = IMG_BLUR
-    ? '👁️ Visa bilder'
-    : '🙈 Censurera bilder';
+    ? `${iconMarkup('visibility')} Visa bilder`
+    : `${iconMarkup('visibility_off')} Censurera bilder`;
 
   const allMuted = allChatsMuted();
   const allMuteLabel = allMuted
-    ? '🔔 Slå på ljud för alla'
-    : '🔕 Tysta alla';
+    ? `${iconMarkup('notifications')} Slå på ljud för alla`
+    : `${iconMarkup('notifications_off')} Tysta alla`;
 
   const adminMenu = !HAS_ADMIN_TOOLS ? '' : `
     <div class="tab-settings tab-settings-admin${ADMIN_MENU_OPEN ? ' is-open' : ''}" data-admin-root>
@@ -3619,7 +3626,7 @@ function renderRoomTabs(){
               title="Adminverktyg"
               aria-label="Adminverktyg"
               aria-haspopup="menu"
-              aria-expanded="${ADMIN_MENU_OPEN ? 'true' : 'false'}">🛠️</button>
+              aria-expanded="${ADMIN_MENU_OPEN ? 'true' : 'false'}">${iconMarkup('build')}</button>
       <div class="tab-settings-menu${ADMIN_MENU_OPEN ? ' is-open' : ''}"
            role="menu"
            aria-hidden="${ADMIN_MENU_OPEN ? 'false' : 'true'}">
@@ -3634,11 +3641,11 @@ function renderRoomTabs(){
   const controls = `
     <span class="spacer"></span>
     <div class="tab-settings${SETTINGS_OPEN ? ' is-open' : ''}" data-settings-root>
-      <button class="tabicons" data-settings-toggle="1"
-              title="Fler inställningar"
-              aria-label="Fler inställningar"
-              aria-haspopup="menu"
-              aria-expanded="${SETTINGS_OPEN ? 'true' : 'false'}">⚙️</button>
+        <button class="tabicons" data-settings-toggle="1"
+                title="Fler inställningar"
+                aria-label="Fler inställningar"
+                aria-haspopup="menu"
+                aria-expanded="${SETTINGS_OPEN ? 'true' : 'false'}">${iconMarkup('settings')}</button>
       <div class="tab-settings-menu${SETTINGS_OPEN ? ' is-open' : ''}"
            role="menu"
            aria-hidden="${SETTINGS_OPEN ? 'false' : 'true'}">
@@ -3646,7 +3653,7 @@ function renderRoomTabs(){
         <button type="button" class="tab-settings-item" data-settings-autoscroll="1" role="menuitem">${autoLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-all="1" role="menuitem">${allMuteLabel}</button>
-        <button type="button" class="tab-settings-item" data-settings-logout="1" role="menuitem">🚪 Logga ut</button>
+        <button type="button" class="tab-settings-item" data-settings-logout="1" role="menuitem">${iconMarkup('logout')} Logga ut</button>
       </div>
     </div>
     ${adminMenu}`;
@@ -4954,7 +4961,8 @@ function openImagePreview(src, alt, sid = null, sname = ''){
       MSG_TARGET = { id: sid, name: sname || nameById(sid) || ('#'+sid) };
 
       const blocked = isBlocked(sid);
-      imgActBlock.textContent = blocked ? '✅ Avblockera' : '⛔ Blockera';
+      const blockLabel = blocked ? `${iconMarkup('task_alt')} Avblockera` : `${iconMarkup('block')} Blockera`;
+      imgActBlock.innerHTML = blockLabel;
 
       imgActDm.style.display     = '';
       imgActReport.style.display = '';
@@ -5124,8 +5132,8 @@ jumpBtn.addEventListener('click', ()=>{
             <div class="small">${esc(reason)}</div>
           </div>
           <div class="user-actions">
-            <button class="modbtn" data-resolve="${id}" title="Resolve">✅</button>
-            <button class="modbtn" data-delete="${id}"  title="Delete">🗑️</button>
+            <button class="modbtn" data-resolve="${id}" title="Resolve" aria-label="Markera som löst">${iconMarkup('task_alt')}</button>
+            <button class="modbtn" data-delete="${id}"  title="Delete" aria-label="Ta bort rapport">${iconMarkup('delete')}</button>
           </div>
         </div>`;
     }).join('');
