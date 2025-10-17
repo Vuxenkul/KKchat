@@ -787,6 +787,111 @@ function kkchat_admin_rooms_page() {
 /**
  * Banderoller
  */
+if (!function_exists('kkchat_admin_parse_time_to_minutes')) {
+  function kkchat_admin_parse_time_to_minutes(string $value): ?int {
+    $value = trim($value);
+    if ($value === '') { return null; }
+    if (!preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $value)) { return null; }
+    [$h, $m] = array_map('intval', explode(':', $value));
+    return ($h * 60) + $m;
+  }
+}
+
+if (!function_exists('kkchat_admin_parse_datetime_local')) {
+  function kkchat_admin_parse_datetime_local(string $value): ?int {
+    $value = trim($value);
+    if ($value === '') { return null; }
+    try {
+      $tz = kkchat_banner_timezone();
+      $dt = DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $value, $tz);
+      if (!$dt) { return null; }
+      return $dt->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
+    } catch (Exception $e) {
+      return null;
+    }
+  }
+}
+
+if (!function_exists('kkchat_admin_format_minutes')) {
+  function kkchat_admin_format_minutes(int $minutes): string {
+    $minutes = max(0, $minutes);
+    $h = (int) floor($minutes / 60);
+    $m = $minutes % 60;
+    return sprintf('%02d:%02d', $h, $m);
+  }
+}
+
+if (!function_exists('kkchat_admin_weekday_labels')) {
+  function kkchat_admin_weekday_labels(): array {
+    return [
+      0 => 'Sön',
+      1 => 'Mån',
+      2 => 'Tis',
+      3 => 'Ons',
+      4 => 'Tors',
+      5 => 'Fre',
+      6 => 'Lör',
+    ];
+  }
+}
+
+if (!function_exists('kkchat_admin_format_datetime')) {
+  function kkchat_admin_format_datetime(int $timestamp, string $format = 'Y-m-d H:i'): string {
+    $tz = kkchat_banner_timezone();
+    if (function_exists('wp_date')) {
+      return wp_date($format, $timestamp, $tz);
+    }
+    return date_i18n($format, $timestamp);
+  }
+}
+
+if (!function_exists('kkchat_admin_describe_banner_schedule')) {
+  function kkchat_admin_describe_banner_schedule($row): string {
+    $intervalSec  = isset($row->interval_sec) ? (int) $row->interval_sec : (int) ($row['interval_sec'] ?? 0);
+    $intervalMin  = $intervalSec > 0 ? max(1, (int) round($intervalSec / 60)) : 0;
+    $intervalText = $intervalMin > 0
+      ? sprintf('Var %d minut%s', $intervalMin, $intervalMin === 1 ? '' : 'er')
+      : sprintf('%d sekunder', max(1, $intervalSec));
+
+    $mode = strtolower((string) (isset($row->schedule_mode) ? $row->schedule_mode : ($row['schedule_mode'] ?? 'rolling')));
+
+    if ($mode === 'weekly') {
+      $mask  = (int) (isset($row->weekdays_mask) ? $row->weekdays_mask : ($row['weekdays_mask'] ?? 0));
+      $start = isset($row->daily_start_min) ? (int) $row->daily_start_min : (int) ($row['daily_start_min'] ?? 0);
+      $end   = isset($row->daily_end_min) ? (int) $row->daily_end_min : (int) ($row['daily_end_min'] ?? 0);
+      $labels = kkchat_admin_weekday_labels();
+      $days = [];
+      foreach ($labels as $idx => $label) {
+        if ($mask & (1 << $idx)) {
+          $days[] = $label;
+        }
+      }
+      $dayText = $days ? implode(', ', $days) : 'Inga dagar valda';
+      $range   = sprintf('%s–%s', kkchat_admin_format_minutes($start), kkchat_admin_format_minutes($end));
+      return sprintf('Veckodagar: %s · %s · %s', $dayText, $range, $intervalText);
+    }
+
+    if ($mode === 'window') {
+      $startTs = isset($row->window_start) ? (int) $row->window_start : (int) ($row['window_start'] ?? 0);
+      $endTs   = isset($row->window_end) ? (int) $row->window_end : (int) ($row['window_end'] ?? 0);
+      $startStr = $startTs ? kkchat_admin_format_datetime($startTs) : null;
+      $endStr   = $endTs ? kkchat_admin_format_datetime($endTs) : null;
+      if ($startStr && $endStr) {
+        $range = sprintf('%s – %s', $startStr, $endStr);
+      } elseif ($startStr) {
+        $range = sprintf('Fr.o.m %s', $startStr);
+      } elseif ($endStr) {
+        $range = sprintf('Till %s', $endStr);
+      } else {
+        $range = 'Ingen tidsram angiven';
+      }
+      return sprintf('Datumintervall: %s · %s', $range, $intervalText);
+    }
+
+    return sprintf('Återkommande · %s', $intervalText);
+  }
+}
+
 function kkchat_admin_banners_page(){
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
@@ -796,23 +901,110 @@ function kkchat_admin_banners_page(){
   if (isset($_POST['kk_add_banner'])) {
     check_admin_referer($nonce_key);
     $content = sanitize_textarea_field($_POST['content'] ?? '');
-    $every   = max(60, (int)($_POST['every_sec'] ?? 60));
-    $sel     = array_map('kkchat_sanitize_room_slug', (array)($_POST['rooms'] ?? []));
-    $sel     = array_values(array_unique(array_filter($sel)));
-    if (!$content || !$sel) {
-      echo '<div class="error"><p>Innehåll och minst ett rum krävs.</p></div>';
+    $intervalMin = max(1, (int)($_POST['every_min'] ?? 10));
+    $intervalSec = $intervalMin * 60;
+    $sel = array_map('kkchat_sanitize_room_slug', (array)($_POST['rooms'] ?? []));
+    $sel = array_values(array_unique(array_filter($sel)));
+    $mode = strtolower((string)($_POST['schedule_mode'] ?? 'rolling'));
+    if (!in_array($mode, ['rolling','weekly','window'], true)) {
+      $mode = 'rolling';
+    }
+
+    $errors = [];
+    if (!$content) {
+      $errors[] = 'Innehåll krävs.';
+    }
+    if (!$sel) {
+      $errors[] = 'Minst ett rum måste väljas.';
+    }
+
+    $weekdaysMask = 0;
+    $dailyStart   = 0;
+    $dailyEnd     = 0;
+    $windowStart  = 0;
+    $windowEnd    = 0;
+
+    if ($mode === 'weekly') {
+      $selectedDays = array_map('intval', (array)($_POST['weekdays'] ?? []));
+      foreach ($selectedDays as $d) {
+        if ($d >= 0 && $d <= 6) {
+          $weekdaysMask |= (1 << $d);
+        }
+      }
+      if ($weekdaysMask === 0) {
+        $errors[] = 'Välj minst en veckodag.';
+      }
+      $startStr = sanitize_text_field($_POST['weekly_start'] ?? '');
+      $endStr   = sanitize_text_field($_POST['weekly_end'] ?? '');
+      $startMin = kkchat_admin_parse_time_to_minutes($startStr);
+      $endMin   = kkchat_admin_parse_time_to_minutes($endStr);
+      if ($startMin === null || $endMin === null) {
+        $errors[] = 'Ogiltigt tidsintervall.';
+      } elseif ($endMin <= $startMin) {
+        $errors[] = 'Sluttiden måste vara senare än starttiden.';
+      } else {
+        $dailyStart = $startMin;
+        $dailyEnd   = $endMin;
+      }
+    } elseif ($mode === 'window') {
+      $startStr = sanitize_text_field($_POST['window_start'] ?? '');
+      $endStr   = sanitize_text_field($_POST['window_end'] ?? '');
+      $startTs  = kkchat_admin_parse_datetime_local($startStr);
+      $endTs    = kkchat_admin_parse_datetime_local($endStr);
+      if (!$startTs || !$endTs) {
+        $errors[] = 'Start- och sluttid måste anges.';
+      } elseif ($endTs <= $startTs) {
+        $errors[] = 'Slutdatumet måste vara senare än startdatumet.';
+      } else {
+        $windowStart = $startTs;
+        $windowEnd   = $endTs;
+      }
+    }
+
+    $calcRow = [
+      'interval_sec'   => $intervalSec,
+      'schedule_mode'  => $mode,
+      'weekdays_mask'  => $weekdaysMask,
+      'daily_start_min'=> $dailyStart,
+      'daily_end_min'  => $dailyEnd,
+      'window_start'   => $windowStart,
+      'window_end'     => $windowEnd,
+    ];
+
+    $nextRun = null;
+    if (!$errors) {
+      $afterTs = time();
+      if ($mode !== 'rolling') {
+        $afterTs -= 1;
+      }
+      $nextRun = kkchat_banner_next_run($calcRow, $afterTs);
+      if ($nextRun === null) {
+        $errors[] = 'Schemat saknar framtida körningar med vald konfiguration.';
+      }
+    }
+
+    if ($errors) {
+      foreach ($errors as $err) {
+        echo '<div class="error"><p>' . esc_html($err) . '</p></div>';
+      }
     } else {
-      $ok = $wpdb->insert(
-        $t['banners'],
-        [
-          'content'     => $content,
-          'rooms_csv'   => implode(',', $sel),
-          'interval_sec'=> $every,
-          'next_run'    => time() + $every,
-          'active'      => 1
-        ],
-        ['%s','%s','%d','%d','%d']
-      );
+      $data = [
+        'content'        => $content,
+        'rooms_csv'      => implode(',', $sel),
+        'interval_sec'   => $intervalSec,
+        'schedule_mode'  => $mode,
+        'weekdays_mask'  => $weekdaysMask,
+        'daily_start_min'=> $dailyStart,
+        'daily_end_min'  => $dailyEnd,
+        'window_start'   => $windowStart,
+        'window_end'     => $windowEnd,
+        'next_run'       => $nextRun,
+        'active'         => 1,
+      ];
+
+      $formats = ['%s','%s','%d','%s','%d','%d','%d','%d','%d','%d','%d'];
+
+      $ok = $wpdb->insert($t['banners'], $data, $formats);
       if ($ok === false) {
         $err = $wpdb->last_error ? esc_html($wpdb->last_error) : 'Okänt databasfel.';
         echo '<div class="error"><p>Kunde inte spara banderoll: '.$err.'</p></div>';
@@ -854,7 +1046,22 @@ function kkchat_admin_banners_page(){
           'content'        => kkchat_html_esc($row['content']),
         ], ['%d','%d','%s','%s','%s','%s','%s','%s','%s']);
       }
-      $wpdb->update($t['banners'], ['last_run'=>$now, 'next_run'=>$now + max(60,(int)$row['interval_sec'])], ['id'=>$id], ['%d','%d'], ['%d']);
+      $calcRow = [
+        'interval_sec'    => (int) ($row['interval_sec'] ?? 0),
+        'schedule_mode'   => $row['schedule_mode'] ?? 'rolling',
+        'weekdays_mask'   => (int) ($row['weekdays_mask'] ?? 0),
+        'daily_start_min' => (int) ($row['daily_start_min'] ?? 0),
+        'daily_end_min'   => (int) ($row['daily_end_min'] ?? 0),
+        'window_start'    => (int) ($row['window_start'] ?? 0),
+        'window_end'      => (int) ($row['window_end'] ?? 0),
+      ];
+      $nextRun = kkchat_banner_next_run($calcRow, $now);
+      if ($nextRun !== null) {
+        $wpdb->update($t['banners'], ['last_run'=>$now, 'next_run'=>$nextRun], ['id'=>$id], ['%d','%d'], ['%d']);
+      } else {
+        $wpdb->update($t['banners'], ['last_run'=>$now], ['id'=>$id], ['%d'], ['%d']);
+        $wpdb->query($wpdb->prepare("UPDATE {$t['banners']} SET next_run = NULL WHERE id = %d", $id));
+      }
       echo '<div class="updated"><p>Banderoll postad.</p></div>';
     }
   }
@@ -887,7 +1094,47 @@ function kkchat_admin_banners_page(){
         </tr>
         <tr>
           <th><label for="kkb_every">Intervall</label></th>
-          <td><input id="kkb_every" name="every_sec" type="number" min="60" step="60" value="600" class="small-text"> sekunder</td>
+          <td>
+            <input id="kkb_every" name="every_min" type="number" min="1" step="1" value="10" class="small-text"> minuter
+            <p class="description">Hur ofta banderollen ska postas när schemat är aktivt.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="kkb_mode">Schematyp</label></th>
+          <td>
+            <select id="kkb_mode" name="schedule_mode">
+              <option value="rolling">Återkommande (utan tidsfönster)</option>
+              <option value="weekly">Veckodagar och tider</option>
+              <option value="window">Datumintervall</option>
+            </select>
+            <p class="description">Välj om banderollen ska ha ett tidsfönster eller gälla löpande.</p>
+          </td>
+        </tr>
+        <tr class="kkb-schedule" data-mode="weekly">
+          <th>Veckodagar</th>
+          <td>
+            <?php foreach (kkchat_admin_weekday_labels() as $idx => $label): ?>
+              <label style="display:inline-block;margin:4px 10px 4px 0">
+                <input type="checkbox" name="weekdays[]" value="<?php echo (int)$idx; ?>"> <?php echo esc_html($label); ?>
+              </label>
+            <?php endforeach; ?>
+            <p class="description">Banner postas endast dessa dagar.</p>
+          </td>
+        </tr>
+        <tr class="kkb-schedule" data-mode="weekly">
+          <th>Tidsintervall</th>
+          <td>
+            <input type="time" name="weekly_start" value="08:00"> – <input type="time" name="weekly_end" value="17:00">
+            <p class="description">Dagligt tidsfönster (lokal tid).</p>
+          </td>
+        </tr>
+        <tr class="kkb-schedule" data-mode="window">
+          <th>Datumintervall</th>
+          <td>
+            <label>Start <input type="datetime-local" name="window_start"></label>
+            <label style="margin-left:12px">Slut <input type="datetime-local" name="window_end"></label>
+            <p class="description">Banner postas endast mellan dessa datum/tider (lokal tid).</p>
+          </td>
         </tr>
       </table>
       <p><button class="button button-primary" name="kk_add_banner" value="1">Spara schema</button></p>
@@ -895,15 +1142,24 @@ function kkchat_admin_banners_page(){
 
     <h2>Scheman</h2>
     <table class="widefat striped">
-      <thead><tr><th>ID</th><th>Innehåll</th><th>Rum</th><th>Intervall</th><th>Nästa körning</th><th>Aktiv</th><th>Åtgärder</th></tr></thead>
+      <thead><tr><th>ID</th><th>Innehåll</th><th>Rum</th><th>Schema</th><th>Nästa körning</th><th>Aktiv</th><th>Åtgärder</th></tr></thead>
       <tbody>
         <?php if ($list): foreach ($list as $b): ?>
           <tr>
             <td><?php echo (int)$b->id; ?></td>
             <td><?php echo esc_html(mb_strimwidth((string)$b->content, 0, 100, '…')); ?></td>
             <td><?php echo esc_html((string)$b->rooms_csv); ?></td>
-            <td><?php echo (int)$b->interval_sec; ?> s</td>
-            <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$b->next_run)); ?></td>
+            <td><?php echo esc_html(kkchat_admin_describe_banner_schedule($b)); ?></td>
+            <td>
+              <?php
+                $nextTs = isset($b->next_run) ? (int) $b->next_run : 0;
+                if ($nextTs > 0) {
+                  echo esc_html(kkchat_admin_format_datetime($nextTs, 'Y-m-d H:i:s'));
+                } else {
+                  echo '—';
+                }
+              ?>
+            </td>
             <td><?php echo $b->active ? 'Ja' : 'Nej'; ?></td>
             <td>
               <?php
@@ -922,6 +1178,23 @@ function kkchat_admin_banners_page(){
       </tbody>
     </table>
   </div>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      const mode = document.getElementById('kkb_mode');
+      const rows = document.querySelectorAll('.kkb-schedule');
+      function syncScheduleRows(){
+        const value = mode ? mode.value : '';
+        rows.forEach(function(row){
+          const showFor = (row.getAttribute('data-mode') || '').split(',');
+          row.style.display = showFor.includes(value) ? '' : 'none';
+        });
+      }
+      if (mode) {
+        mode.addEventListener('change', syncScheduleRows);
+        syncScheduleRows();
+      }
+    });
+  </script>
   <?php
 }
 

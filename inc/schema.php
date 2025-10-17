@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '8');
+  define('KKCHAT_DB_VERSION', '9');
 }
 
 /**
@@ -99,7 +99,13 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `content` TEXT NOT NULL,
     `rooms_csv` TEXT NOT NULL,
     `interval_sec` INT UNSIGNED NOT NULL,
-    `next_run` INT UNSIGNED NOT NULL,
+    `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling',
+    `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0,
+    `daily_start_min` SMALLINT UNSIGNED NULL,
+    `daily_end_min` SMALLINT UNSIGNED NULL,
+    `window_start` INT UNSIGNED NULL,
+    `window_end` INT UNSIGNED NULL,
+    `next_run` INT UNSIGNED NULL,
     `active` TINYINT(1) NOT NULL DEFAULT 1,
     `last_run` INT UNSIGNED NULL,
     PRIMARY KEY (`id`),
@@ -223,6 +229,16 @@ function kkchat_column_exists($table, $column){
   return !empty($exists);
 }
 
+function kkchat_column_is_nullable($table, $column){
+  global $wpdb;
+  $nullable = $wpdb->get_var($wpdb->prepare(
+    "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s LIMIT 1",
+    $table,
+    $column
+  ));
+  return strtoupper((string)$nullable) === 'YES';
+}
+
 // Ensures schema is present and soft-delete columns exist (version-gated)
 function kkchat_maybe_migrate(){
   global $wpdb;
@@ -277,6 +293,30 @@ function kkchat_maybe_migrate(){
     }
   }
 
+  if (kkchat_table_exists($t['banners'])) {
+    if (!kkchat_column_exists($t['banners'], 'schedule_mode')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling' AFTER `interval_sec`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'weekdays_mask')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `schedule_mode`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'daily_start_min')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `daily_start_min` SMALLINT UNSIGNED NULL AFTER `weekdays_mask`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'daily_end_min')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `daily_end_min` SMALLINT UNSIGNED NULL AFTER `daily_start_min`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'window_start')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_start` INT UNSIGNED NULL AFTER `daily_end_min`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'window_end')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_end` INT UNSIGNED NULL AFTER `window_start`");
+    }
+    if (kkchat_column_exists($t['banners'], 'next_run') && !kkchat_column_is_nullable($t['banners'], 'next_run')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` MODIFY `next_run` INT UNSIGNED NULL");
+    }
+  }
+
   // 3) Save version so we don’t re-run unnecessarily
   update_option('kkchat_db_version', KKCHAT_DB_VERSION);
 }
@@ -320,6 +360,117 @@ add_action('init', function () {
 /**
  * Cron runner for scheduled banners
  */
+function kkchat_banner_timezone(): DateTimeZone {
+  if (function_exists('wp_timezone')) {
+    return wp_timezone();
+  }
+
+  $tz_string = get_option('timezone_string');
+  if ($tz_string) {
+    try {
+      return new DateTimeZone($tz_string);
+    } catch (Exception $e) {
+      // fall through to offset fallback
+    }
+  }
+
+  $offset = (float) get_option('gmt_offset', 0);
+  $hours  = (int) $offset;
+  $mins   = (int) round(abs($offset - $hours) * 60);
+  $sign   = $offset >= 0 ? '+' : '-';
+  $tz     = sprintf('%s%02d:%02d', $sign, abs($hours), $mins);
+  return new DateTimeZone($tz);
+}
+
+function kkchat_banner_next_run(array $row, int $after): ?int {
+  $interval = max(60, (int)($row['interval_sec'] ?? 60));
+  $mode     = strtolower((string)($row['schedule_mode'] ?? 'rolling'));
+
+  if ($mode === 'weekly') {
+    return kkchat_banner_next_run_weekly($row, $after, $interval);
+  }
+  if ($mode === 'window') {
+    return kkchat_banner_next_run_window($row, $after, $interval);
+  }
+
+  return $after + $interval;
+}
+
+function kkchat_banner_next_run_weekly(array $row, int $after, int $interval): ?int {
+  $mask = (int)($row['weekdays_mask'] ?? 0);
+  if ($mask === 0) { return null; }
+
+  $startMin = isset($row['daily_start_min']) ? max(0, min(1439, (int)$row['daily_start_min'])) : 0;
+  $endMin   = isset($row['daily_end_min']) ? max(0, min(1440, (int)$row['daily_end_min'])) : 0;
+  if ($endMin <= $startMin) { return null; }
+
+  $tz = kkchat_banner_timezone();
+  $afterLocal = (new DateTimeImmutable('@' . max(0, $after)))->setTimezone($tz);
+  $startOfDay = $afterLocal->setTime(0, 0, 0);
+
+  for ($dayOffset = 0; $dayOffset < 60; $dayOffset++) {
+    $dayBase = $startOfDay->modify('+' . $dayOffset . ' days');
+    $weekday = (int) $dayBase->format('w');
+    if ((($mask >> $weekday) & 1) === 0) { continue; }
+
+    $start = $dayBase->setTime((int) floor($startMin / 60), $startMin % 60, 0);
+    $end   = $dayBase->setTime((int) floor($endMin / 60), $endMin % 60, 0);
+    if ($end <= $start) {
+      $end = $end->modify('+1 day');
+    }
+
+    $candidate = $start;
+    if ($afterLocal >= $candidate) {
+      $diff  = $afterLocal->getTimestamp() - $candidate->getTimestamp();
+      $steps = (int) floor($diff / $interval) + 1;
+      $candidate = $candidate->modify(sprintf('+%d seconds', $steps * $interval));
+    }
+
+    while ($candidate < $end) {
+      $utcTs = $candidate->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
+      if ($utcTs > $after) {
+        return $utcTs;
+      }
+      $candidate = $candidate->modify(sprintf('+%d seconds', $interval));
+    }
+  }
+
+  return null;
+}
+
+function kkchat_banner_next_run_window(array $row, int $after, int $interval): ?int {
+  $start = isset($row['window_start']) ? (int) $row['window_start'] : 0;
+  $end   = isset($row['window_end']) ? (int) $row['window_end'] : 0;
+
+  if ($end > 0 && $start > $end) {
+    return null;
+  }
+
+  $base = $start > 0 ? $start : max(0, $after);
+
+  if ($after < $base) {
+    $candidate = max($base, $after + 1);
+  } else {
+    $elapsed = $after - $base;
+    $steps   = (int) floor($elapsed / $interval) + 1;
+    $candidate = $base + ($steps * $interval);
+  }
+
+  if ($candidate <= $after) {
+    $candidate = $after + $interval;
+  }
+
+  if ($start > 0 && $candidate < $start) {
+    $candidate = $start;
+  }
+
+  if ($end > 0 && $candidate > $end) {
+    return null;
+  }
+
+  return $candidate;
+}
+
 add_action('kkchat_cron_tick', 'kkchat_run_scheduled_banners');
 function kkchat_run_scheduled_banners(){
   global $wpdb; $t = kkchat_tables();
@@ -387,19 +538,36 @@ function kkchat_run_scheduled_banners(){
     // Always stamp last_run
     $fields = ['last_run' => $now];
 
-    // Advance when nothing was attempted (misconfig) OR at least one insert succeeded.
-    // Only hold back (retry soon) when we tried inserts and ALL of them failed.
+    $nextRun = null;
     if ($attempts === 0 || $successes > 0) {
-      $fields['next_run'] = $now + max(60, (int)$r['interval_sec']);
+      $nextRun = kkchat_banner_next_run($r, $now);
     }
 
-    $wpdb->update(
-      $t['banners'],
-      $fields,
-      ['id' => (int)$r['id']],
-      array_fill(0, count($fields), '%d'),
-      ['%d']
-    );
+    if ($nextRun !== null) {
+      $fields['next_run'] = $nextRun;
+      $formats = array_fill(0, count($fields), '%d');
+      $wpdb->update(
+        $t['banners'],
+        $fields,
+        ['id' => (int)$r['id']],
+        $formats,
+        ['%d']
+      );
+    } else {
+      $wpdb->update(
+        $t['banners'],
+        $fields,
+        ['id' => (int)$r['id']],
+        ['%d'],
+        ['%d']
+      );
+      if ($attempts === 0 || $successes > 0) {
+        $wpdb->query($wpdb->prepare(
+          "UPDATE {$t['banners']} SET next_run = NULL WHERE id = %d",
+          (int)$r['id']
+        ));
+      }
+    }
   }
 }
 
