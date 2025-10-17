@@ -404,7 +404,8 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .header {
   position: sticky;
   top: 16px;
-  z-index: 20;
+  z-index: 10020;
+  isolation: isolate;
   background: linear-gradient(150deg, rgba(17, 20, 32, 0.86) 0%, rgba(12, 14, 24, 0.92) 60%, rgba(10, 13, 21, 0.88) 100%);
   border: 1px solid rgba(122, 136, 196, 0.24);
   border-radius: var(--radius-md);
@@ -458,7 +459,7 @@ html, body { margin: 0; height: 100%; }
   display: none;
   flex-direction: column;
   gap: 8px;
-  z-index: 30;
+  z-index: 10040;
   backdrop-filter: var(--frost);
 }
 
@@ -469,7 +470,7 @@ html, body { margin: 0; height: 100%; }
 
 /* 2) Make sure the dropdown floats above everything */
 #kkchat-root .tab-settings-menu {
-  z-index: 10002; /* above sheets/overlays you already use */
+  z-index: 10040; /* above sheets/overlays you already use */
 }
 
 #kkchat-root .tab-settings-menu.is-open {
