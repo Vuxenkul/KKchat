@@ -2,18 +2,29 @@
 @import url('https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;600;800&display=swap');
 
 #kkchat-root .tab[aria-selected="true"] .tab-close {
-  color: #333333;
+  color: #0b0f1c;
 }
 
+body {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 20% -10%, rgba(118, 122, 144, 0.2) 0%, rgba(118, 122, 144, 0) 55%),
+    radial-gradient(circle at 85% 15%, rgba(227, 87, 84, 0.22) 0%, rgba(227, 87, 84, 0) 60%),
+    linear-gradient(135deg, #050608 0%, #090b11 45%, #0d111b 100%);
+  color: #e5e7ff;
+  font-family: "Lexend", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
 
 #kkchat-root .imgfoot.flex .btns #kk-img-act-dm,
 #kkchat-root .imgfoot.flex .btns #kk-img-act-report,
 #kkchat-root .imgfoot.flex .btns #kk-img-act-block,
 #kkchat-root .imgfoot.flex .btns #kk-imgOpen,
 #kkchat-root .imgfoot.flex .btns #kk-imgClose {
-  background: #000 !important;  /* example */
-  padding: 6px 10px !important;
+  background: linear-gradient(135deg, rgba(40, 43, 58, 0.92) 0%, rgba(227, 87, 84, 0.92) 100%) !important;
+  padding: 8px 14px !important;
   font-size: 1rem !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: 0 16px 32px rgba(12, 16, 26, 0.5);
 }
 
 
@@ -84,11 +95,13 @@
 }
 #kk-multiTabModal .kk-multitab__box {
   width: min(520px, 100%);
-  background: #fff;
-  color: #111;
-  border-radius: 16px;
-  padding: 28px 24px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  background: linear-gradient(160deg, rgba(14, 17, 27, 0.92) 0%, rgba(8, 10, 17, 0.95) 100%);
+  color: var(--ink);
+  border-radius: var(--radius-lg);
+  padding: 32px 30px;
+  box-shadow: 0 34px 72px rgba(5, 7, 12, 0.65);
+  border: 1px solid rgba(122, 136, 196, 0.32);
+  backdrop-filter: var(--frost);
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -105,39 +118,44 @@
 }
 #kk-multiTabModal .kk-multitab__btn {
   align-self: center;
-  background: var(--brand, #111827);
-  color: #fff;
+  background: linear-gradient(135deg, rgba(44, 47, 63, 0.95) 0%, rgba(227, 87, 84, 0.95) 100%);
+  color: #0b0f1c;
   border: 0;
   border-radius: 999px;
-  padding: 12px 28px;
+  padding: 14px 32px;
   font-size: 1rem;
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 16px 32px rgba(12, 16, 26, 0.55);
 }
 #kk-multiTabModal .kk-multitab__btn:focus {
-  outline: 3px solid rgba(59, 130, 246, 0.6);
+  outline: 3px solid rgba(122, 136, 196, 0.45);
   outline-offset: 3px;
 }
 #kk-multiTabModal .kk-multitab__btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.25);
+  transform: translateY(-2px);
+  box-shadow: 0 22px 44px rgba(12, 16, 26, 0.65);
 }
 #kk-camBox {
   width: min(96vw, 720px);
-  background: #111;
-  color: #fff;
-  border-radius: 12px;
-  padding: 10px;
+  background: linear-gradient(155deg, rgba(14, 17, 27, 0.95) 0%, rgba(7, 9, 15, 0.95) 100%);
+  color: var(--ink);
+  border-radius: var(--radius-lg);
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  border: 1px solid rgba(122, 136, 196, 0.3);
+  box-shadow: 0 30px 68px rgba(5, 7, 12, 0.6);
+  backdrop-filter: var(--frost);
 }
 #kk-camVideo {
   width: 100%;
   max-height: 60vh;
-  background: #000;
-  border-radius: 8px;
+  background: rgba(6, 8, 14, 0.85);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(122, 136, 196, 0.25);
 }
 #kk-camBtns {
   display: flex;
@@ -145,13 +163,17 @@
   justify-content: flex-end;
 }
 #kk-camBtns button {
-  background: #fff;
-  color: #111;
+  background: linear-gradient(135deg, rgba(46, 50, 66, 0.9) 0%, rgba(227, 87, 84, 0.9) 100%);
+  color: #0b0f1c;
   border: 0;
-  border-radius: 12px;
-  padding: 10px 14px;
-  font-weight: 900;
+  border-radius: var(--radius-sm);
+  padding: 12px 18px;
+  font-weight: 800;
+  box-shadow: 0 16px 32px rgba(12, 16, 26, 0.55);
+  cursor: pointer;
+  transition: transform .15s ease;
 }
+#kk-camBtns button:hover { transform: translateY(-2px); }
 
 /* Admin bubbles */
 #kkchat-root .list .item.them.admin .bubble:not(.img),
@@ -194,18 +216,27 @@
   font-size: 12px;
   margin-right: 6px;
 }
-#kkchat-root .badge-active { background: #e7f7e7; border: 1px solid #9acd9a; }
-#kkchat-root .badge-hidden { background: #fbeaea; border: 1px solid #e3a1a1; }
-#kkchat-root .meta .muted { color: #666; margin-left: 6px; }
+#kkchat-root .badge-active {
+  background: rgba(120, 128, 149, 0.2);
+  border: 1px solid rgba(120, 128, 149, 0.45);
+}
+#kkchat-root .badge-hidden {
+  background: rgba(227, 87, 84, 0.16);
+  border: 1px solid rgba(227, 87, 84, 0.45);
+}
+#kkchat-root .meta .muted { color: var(--ink-muted); margin-left: 6px; }
 
 #kkchat-root .bubble.mention {
-  background: #f472b6 !important;
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.95) 0%, rgba(255, 113, 124, 0.95) 100%) !important;
   color: #fff;
+  border-color: rgba(227, 87, 84, 0.65);
+  box-shadow: 0 18px 34px rgba(227, 87, 84, 0.35);
 }
-#kkchat-root .them .bubble.mention { border-bottom-left-radius: 4px; }
+#kkchat-root .them .bubble.mention { border-bottom-left-radius: 8px; }
 #kkchat-root .me .bubble.mention {
-  background: #ffb8db !important;
-  border-bottom-right-radius: 4px;
+  background: linear-gradient(135deg, rgba(255, 143, 149, 0.95) 0%, rgba(227, 87, 84, 0.95) 100%) !important;
+  border-bottom-right-radius: 8px;
+  color: #0d111e;
 }
 
 
@@ -234,10 +265,11 @@
   bottom: 56px;
   z-index: 1000;
   display: none;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.15);
+  background: rgba(12, 15, 24, 0.92);
+  border: 1px solid rgba(122, 136, 196, 0.35);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 24px 44px rgba(5, 7, 12, 0.55);
+  backdrop-filter: var(--frost);
   max-height: 240px;
   overflow: auto;
   min-width: 260px;
@@ -247,11 +279,11 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   cursor: pointer;
 }
 #kkchat-root .mentionbox .row:hover,
-#kkchat-root .mentionbox .row[active] { background: #fef2f8; }
+#kkchat-root .mentionbox .row[active] { background: rgba(116, 122, 146, 0.22); }
 #kkchat-root .mentionbox .nm { font-weight: 800; font-size: 15px; }
 
 
@@ -271,8 +303,8 @@ html, body { margin: 0; height: 100%; }
 
 #toast-container>.toast-error { display: none; }
 
-#kkchat-root li.item.error { background: #fff5f5; }
-#kkchat-root li.item.error .small .receipt { color: #b91c1c; }
+#kkchat-root li.item.error { background: rgba(227, 87, 84, 0.12); }
+#kkchat-root li.item.error .small .receipt { color: #ff8f96; }
 
 #kkchat-root li.item.me .retry-btn {
   display: none;
@@ -313,19 +345,35 @@ html, body { margin: 0; height: 100%; }
    =========================== */
 
 #kkchat-root {
-  --brand: #E35754;
-  --brandD: #BA4643;
-  --accent: #549EE3;
-  --gold: #E35754;
-  --bg: #fff;
-  --ink: #333333;
-  --muted: #6b7280;
+  --brand: #e35754;
+  --brand-glow: rgba(227, 87, 84, 0.45);
+  --accent: #747fae;
+  --accent-glow: rgba(116, 122, 146, 0.35);
+  --ink: #f5f7ff;
+  --ink-soft: #c5ccff;
+  --ink-muted: #8a90b2;
+  --panel: rgba(19, 22, 33, 0.62);
+  --panel-deep: rgba(11, 13, 20, 0.82);
+  --panel-border: rgba(122, 136, 196, 0.18);
+  --panel-highlight: rgba(255, 255, 255, 0.04);
+  --panel-shadow: 0 24px 60px rgba(6, 7, 12, 0.55);
+  --frost: blur(18px);
+  --radius-lg: 22px;
+  --radius-md: 16px;
+  --radius-sm: 12px;
   font-family: 'Lexend', system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   color: var(--ink);
   height: 95dvh;
   display: flex;
   flex-direction: column;
   overscroll-behavior: contain;
+  background: rgba(10, 13, 21, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 32px 80px rgba(5, 7, 12, 0.65), inset 0 0 0 1px rgba(122, 136, 196, 0.08);
+  backdrop-filter: var(--frost);
+  border: 1px solid rgba(122, 136, 196, 0.14);
+  overflow: hidden;
+  margin: clamp(16px, 4vw, 36px);
 }
 
 @media (max-width: 900px) {
@@ -338,11 +386,12 @@ html, body { margin: 0; height: 100%; }
   width: 100%;
   max-width: min(100%, 980px);
   margin: 0 auto;
-  padding: 0 12px;
+  padding: 28px clamp(16px, 4vw, 36px) 32px;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  gap: 18px;
 }
 
 #kkchat-root .name-offline { opacity: .5; }
@@ -353,18 +402,20 @@ html, body { margin: 0; height: 100%; }
    =========================== */
 
 #kkchat-root .header {
-  display: none !important;
   position: sticky;
-  top: 0;
-  z-index: 10;
-  background: linear-gradient(180deg, #333333 0%, var(--brand) 63%);
-  border-bottom: 3px solid var(--gold);
-  padding: 10px 12px;
+  top: 16px;
+  z-index: 20;
+  background: linear-gradient(150deg, rgba(17, 20, 32, 0.86) 0%, rgba(12, 14, 24, 0.92) 60%, rgba(10, 13, 21, 0.88) 100%);
+  border: 1px solid rgba(122, 136, 196, 0.24);
+  border-radius: var(--radius-md);
+  padding: 14px 20px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 14px;
   justify-content: space-between;
-  color: #fff;
+  color: var(--ink);
+  box-shadow: 0 18px 42px rgba(6, 8, 15, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  backdrop-filter: var(--frost);
   flex: 0 0 auto;
 }
 #kkchat-root .h-left { display: flex; align-items: center; gap: 8px; }
@@ -372,15 +423,18 @@ html, body { margin: 0; height: 100%; }
   font-weight: 900;
   font-family: 'Bebas Neue', system-ui, sans-serif;
   letter-spacing: .5px;
-  color: #fff;
+  color: var(--ink);
+  text-transform: uppercase;
 }
 #kkchat-root .tabicons {
-  background: unset;
-  border: unset;
-  padding: 0px;
+  background: transparent;
+  border: 0;
+  padding: 0 6px 0 0;
   font-size: 1.5rem;
-  padding-right: 5px;
+  color: var(--ink-soft);
+  transition: color .2s ease, transform .2s ease;
 }
+#kkchat-root .tabicons:hover { color: var(--ink); transform: translateY(-1px); }
 #kkchat-root .tab-settings { 
   position: relative;
   display: flex;
@@ -395,16 +449,17 @@ html, body { margin: 0; height: 100%; }
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
-  padding: 8px;
+  background: linear-gradient(165deg, rgba(17, 21, 32, 0.95) 0%, rgba(10, 12, 20, 0.92) 100%);
+  border: 1px solid rgba(122, 136, 196, 0.35);
+  border-radius: var(--radius-md);
+  box-shadow: 0 26px 60px rgba(5, 7, 12, 0.55);
+  padding: 12px;
   min-width: 220px;
   display: none;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   z-index: 30;
+  backdrop-filter: var(--frost);
 }
 
 /* 1) Let the dropdown escape the tabs strip ONLY when it's open */
@@ -421,37 +476,39 @@ html, body { margin: 0; height: 100%; }
   display: flex;
 }
 #kkchat-root .tab-settings-item {
-  background: #f6f7f9;
+  background: rgba(46, 53, 76, 0.35);
   border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
   text-align: left;
   font-size: .95rem;
   cursor: pointer;
-  transition: border-color .15s ease, background-color .15s ease;
+  transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
   display: block;
-  color: inherit;
+  color: var(--ink);
   text-decoration: none;
 }
 #kkchat-root .tab-settings-item:hover,
 #kkchat-root .tab-settings-item:focus {
-  background: #fff;
-  border-color: var(--brand);
+  background: rgba(120, 128, 149, 0.18);
+  border-color: rgba(120, 128, 149, 0.5);
   outline: none;
+  transform: translateY(-1px);
 }
 #kkchat-root .tabs {
   display: flex;
-  gap: 5px;
+  gap: 10px;
   overflow-x: auto;
   overflow-y: visible;
-  padding: 2px 3px 7px;
-  background: white;
+  padding: 10px 12px 14px;
+  background: linear-gradient(160deg, rgba(17, 20, 30, 0.82) 0%, rgba(9, 11, 18, 0.9) 100%);
   -webkit-overflow-scrolling: touch;
   flex: 0 0 auto;
-  font-size: .8em;
-  border-left: 4px solid white;
-  border-top: 4px solid white;
-  border-right: 4px solid white;
+  font-size: .85em;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(122, 136, 196, 0.25);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02), 0 18px 40px rgba(5, 7, 12, 0.5);
+  backdrop-filter: var(--frost);
 }
 #kkchat-root .tab-close {
   font-size: 1.5rem;
@@ -464,28 +521,45 @@ html, body { margin: 0; height: 100%; }
 }
 #kkchat-root .tabs .spacer { flex: 1; }
 #kkchat-root .tab {
-    flex: 0 0 auto;
-    padding: 4px 10px 4px 7px;
-    border: 1px solid #e5e7eb;
-    border-radius: 5px;
-    background: #fff;
-    font-weight: 800;
-    cursor: pointer;
-    white-space: nowrap;
-}#kkchat-root .tab[aria-selected="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
-#kkchat-root .badge {
-  background: #ffd56a;
-  color: #111;
+  flex: 0 0 auto;
+  padding: 8px 14px 8px 12px;
+  border: 1px solid rgba(122, 136, 196, 0.18);
   border-radius: 999px;
-  padding: 2px 8px;
+  background: rgba(33, 38, 56, 0.55);
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--ink-soft);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  transition: color .2s ease, border-color .2s ease, background .2s ease, transform .2s ease;
+}
+#kkchat-root .tab:hover {
+  color: var(--ink);
+  border-color: rgba(120, 128, 149, 0.4);
+  background: rgba(47, 56, 86, 0.65);
+  transform: translateY(-1px);
+}
+#kkchat-root .tab[aria-selected="true"] {
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.95) 0%, rgba(120, 43, 43, 0.95) 100%);
+  color: #fff;
+  border-color: rgba(227, 87, 84, 0.85);
+  box-shadow: 0 12px 32px rgba(227, 87, 84, 0.35);
+}
+#kkchat-root .badge {
+  background: rgba(118, 124, 148, 0.18);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 2px 10px;
   margin-left: 6px;
-  font-weight: 900;
+  font-weight: 800;
+  letter-spacing: .01em;
 }
 #kkchat-root .badge[data-has] {
-  background: var(--accent);
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.9) 0%, rgba(176, 58, 56, 0.9) 100%);
   color: #fff;
   font-size: 0.8rem;
-  font-weight: 700;
+  font-weight: 800;
+  box-shadow: 0 6px 18px rgba(227, 87, 84, 0.35);
 }
 #kkchat-root .tabs .name-offline { opacity: .6; }
 
@@ -506,6 +580,8 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .chat { min-width: 0; }
 
 @media (max-width: 900px) {
+  #kkchat-root .kk-wrap { padding: 18px 16px 24px; }
+  #kkchat-root .header { top: 12px; }
   #kkchat-root .kk-layout { grid-template-columns: 1fr; padding: 0px; }
   #kkchat-root .sidebar { order: 1; }
   #kkchat-root .chat { order: 2; }
@@ -517,37 +593,52 @@ html, body { margin: 0; height: 100%; }
    =========================== */
 
 #kkchat-root .sidebar {
-  background: #fff;
-  border: 1px solid #eee;
-  border-radius: 12px;
+  background: linear-gradient(165deg, rgba(19, 23, 34, 0.85) 0%, rgba(10, 12, 20, 0.92) 60%, rgba(7, 9, 15, 0.9) 100%);
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: var(--frost);
 }
 
 #kkchat-root .lefttabs {
   display: flex;
-  gap: 6px;
-  padding: 8px;
-  border-bottom: 1px solid #eee;
-  background: #fff;
+  gap: 10px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.18);
+  background: transparent;
   flex: 0 0 auto;
 }
 #kkchat-root .lefttabs button {
   flex: 1 1 0;
-  padding: 8px 10px;
-  border: 1px solid #e5e7eb;
+  padding: 10px 14px;
+  border: 1px solid rgba(122, 136, 196, 0.2);
   border-radius: 999px;
-  background: #fff;
-  font-weight: 800;
+  background: rgba(34, 40, 62, 0.55);
+  font-weight: 700;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
+  color: var(--ink-soft);
+  transition: background .2s ease, color .2s ease, border-color .2s ease, transform .2s ease;
 }
-#kkchat-root .lefttabs button[aria-selected="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+#kkchat-root .lefttabs button:hover {
+  color: var(--ink);
+  border-color: rgba(120, 128, 149, 0.45);
+  background: rgba(47, 56, 86, 0.65);
+  transform: translateY(-1px);
+}
+#kkchat-root .lefttabs button[aria-selected="true"] {
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.9) 0%, rgba(161, 49, 52, 0.95) 100%);
+  color: #fff;
+  border-color: rgba(227, 87, 84, 0.9);
+  box-shadow: 0 14px 28px rgba(227, 87, 84, 0.32);
+}
 #kkchat-root .lefttabs .badge { margin-left: 0; }
 
 #kkchat-root .leftview { display: none; }
@@ -559,13 +650,14 @@ html, body { margin: 0; height: 100%; }
 }
 
 #kkchat-root .people {
-  padding: 10px 12px;
-  border-bottom: 1px solid #eee;
-  background: #fff;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.18);
+  background: rgba(17, 21, 33, 0.65);
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 #kkchat-root .user-search-row {
   display: flex;
@@ -576,40 +668,45 @@ html, body { margin: 0; height: 100%; }
   flex: 1 1 auto;
   min-width: 0;
   width: 100%;
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(122, 136, 196, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(13, 16, 25, 0.75);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
+#kkchat-root .user-search-input::placeholder { color: var(--ink-muted); }
 #kkchat-root .user-filter-btn {
   flex: 0 0 auto;
-  width: 42px;
-  height: 42px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  background: #f9fafb;
-  color: #1f2937;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(28, 32, 48, 0.65);
+  color: var(--ink);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-      padding: 8px;
+  padding: 10px;
   transition: background .2s ease, color .2s ease, border-color .2s ease, box-shadow .2s ease;
 }
 #kkchat-root .user-filter-btn:hover {
-  background: #f3f4f6;
+  background: rgba(47, 56, 86, 0.7);
 }
 #kkchat-root .user-filter-btn:focus-visible {
   outline: none;
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px rgba(224, 51, 71, 0.2);
+  border-color: rgba(120, 128, 149, 0.55);
+  box-shadow: 0 0 0 3px rgba(120, 128, 149, 0.25);
 }
 #kkchat-root .user-filter-btn[data-active="1"] {
-  background: var(--brand);
-  border-color: var(--brand);
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.9) 0%, rgba(176, 58, 56, 0.95) 100%);
+  border-color: rgba(227, 87, 84, 0.9);
   color: #fff;
+  box-shadow: 0 12px 24px rgba(227, 87, 84, 0.35);
 }
 #kkchat-root .user-filter-btn[data-active="1"]:hover {
-  background: var(--brand);
+  background: linear-gradient(135deg, rgba(227, 87, 84, 1) 0%, rgba(176, 58, 56, 1) 100%);
 }
 #kkchat-root .user-filter-ico {
   width: 1.5rem;   /* ~24px at 16px base font-size */
@@ -621,11 +718,12 @@ html, body { margin: 0; height: 100%; }
 }
 
 #kkchat-root .user-filter-menu {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 12px;
-  background: #fff;
-  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  background: rgba(15, 18, 28, 0.92);
+  box-shadow: 0 22px 46px rgba(5, 7, 12, 0.55);
+  backdrop-filter: var(--frost);
 }
 #kkchat-root .user-filter-menu[hidden] {
   display: none;
@@ -648,7 +746,7 @@ html, body { margin: 0; height: 100%; }
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  color: #111827;
+  color: var(--ink);
   max-height: 20px;
 }
 #kkchat-root .user-filter-menu input[type="checkbox"] {
@@ -689,12 +787,16 @@ html, body { margin: 0; height: 100%; }
   grid-auto-rows: minmax(0, auto);
   align-items: center;
   gap: 0;
-  padding: 1px 8px;
-  border-bottom: none;
-  background: #fff;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.12);
+  background: rgba(18, 22, 34, 0.35);
+  transition: background .2s ease, border-color .2s ease, transform .2s ease;
 }
-#kkchat-root .users .user:nth-child(odd) { background: #eaeaea; }
-#kkchat-root .users .user:nth-child(even) { background: #fff; }
+#kkchat-root .user:hover {
+  background: rgba(33, 40, 61, 0.55);
+  border-color: rgba(120, 128, 149, 0.3);
+  transform: translateY(-1px);
+}
 #kkchat-root .user:last-child { border-bottom: none; }
 
 #kkchat-root .user-main { min-width: 0; line-height: 1.2em; }
@@ -709,13 +811,17 @@ html, body { margin: 0; height: 100%; }
   flex-wrap: wrap;
 }
 #kkchat-root .user .badge-sm {
-  background: #e5e7eb;
-  color: #111;
+  background: rgba(120, 128, 149, 0.18);
+  color: var(--ink);
   border-radius: 999px;
-  padding: 2px 8px;
-  font-weight: 900;
+  padding: 2px 10px;
+  font-weight: 800;
 }
-#kkchat-root .user .badge-sm[data-has] { background: var(--accent); color: #fff; }
+#kkchat-root .user .badge-sm[data-has] {
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.9) 0%, rgba(176, 58, 56, 0.92) 100%);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(227, 87, 84, 0.32);
+}
 
 #kkchat-root .openbtn {
   background: unset;
@@ -724,6 +830,8 @@ html, body { margin: 0; height: 100%; }
   padding: unset;
   cursor: pointer;
   font-size: 1.5rem;
+  color: var(--ink-soft);
+  transition: color .2s ease;
 }
 #kkchat-root .logoutbtn {
   background: unset;
@@ -732,8 +840,13 @@ html, body { margin: 0; height: 100%; }
   padding: unset;
   cursor: pointer;
   font-size: 1rem;
+  color: var(--ink-soft);
+  transition: color .2s ease;
 }
 #kkchat-root .logoutbtn b { font-size: 1.5rem; }
+
+#kkchat-root .openbtn:hover,
+#kkchat-root .logoutbtn:hover { color: var(--ink); }
 
 #kkchat-root .openbtn[aria-current="true"] { border-color: var(--brand); color: var(--brand); }
 
@@ -744,13 +857,16 @@ html, body { margin: 0; height: 100%; }
   padding: unset;
   cursor: pointer;
   font-size: 1.5rem;
+  color: var(--ink-soft);
+  transition: color .2s ease;
 }
+#kkchat-root .modbtn:hover { color: var(--ink); }
 #kkchat-root .modgrp { display: inline-flex; align-items: center; gap: 0px; }
 
 #kkchat-root .last-msg-prev {
   grid-column: 1/-1;
   margin-top: 6px;
-  color: #6b7280;
+  color: var(--ink-muted);
   font-size: 11px;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -758,11 +874,14 @@ html, body { margin: 0; height: 100%; }
 }
 
 #kkchat-root .last-msg-prev .last-msg-time {
-  color: #9ca3af;
+  color: rgba(197, 204, 255, 0.55);
 }
 
-#kkchat-root .user[data-flag="1"] { background: #fff1f2; border-left: 4px solid #b91c1c; }
-#kkchat-root .user[data-flag="1"] .user-main b { color: #b91c1c; }
+#kkchat-root .user[data-flag="1"] {
+  background: rgba(227, 87, 84, 0.16);
+  border-left: 4px solid rgba(227, 87, 84, 0.65);
+}
+#kkchat-root .user[data-flag="1"] .user-main b { color: #ff8f96; }
 
 
 /* ===========================
@@ -770,11 +889,14 @@ html, body { margin: 0; height: 100%; }
    =========================== */
 
 #kkchat-root .chat {
-  background: #333333;
-  border-radius: 12px;
+  background: linear-gradient(175deg, rgba(17, 21, 34, 0.9) 0%, rgba(9, 11, 19, 0.92) 55%, rgba(7, 9, 15, 0.94) 100%);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(122, 136, 196, 0.24);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: var(--frost);
 }
 
 #kkchat-root .view { display: none; }
@@ -788,11 +910,9 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .msgwrap { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; height: auto !important; }
 
 #kkchat-root .list {
-  border-left: 4px solid white;
-  border-right: 4px solid white;
   list-style: none;
   margin: 0;
-  padding: 10px 10px calc(80px + env(safe-area-inset-bottom) + var(--kb-offset, 0px));
+  padding: 24px 22px calc(110px + env(safe-area-inset-bottom) + var(--kb-offset, 0px));
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
@@ -800,6 +920,7 @@ html, body { margin: 0; height: 100%; }
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
+  backdrop-filter: var(--frost);
 }
 
 
@@ -812,12 +933,12 @@ html, body { margin: 0; height: 100%; }
   left: 0;
   right: 0;
   bottom: 0;
-  background: #fff;
-  border-top: 1px solid #eee;
+  background: rgba(10, 12, 20, 0.9);
+  border-top: 1px solid rgba(122, 136, 196, 0.18);
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  padding: 2px 10px;
+  padding: 16px 20px;
   flex: 0 0 auto;
   padding-bottom: env(safe-area-inset-bottom);
 }
@@ -831,7 +952,22 @@ html, body { margin: 0; height: 100%; }
 
 #kkchat-root .inputbar textarea,
 #kkchat-root .inputbar input[type="text"],
-#kkchat-root .inputbar input[type="search"] { font-size: 16px; }
+#kkchat-root .inputbar input[type="search"] {
+  font-size: 16px;
+  flex: 1 1 auto;
+  min-height: 52px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  background: rgba(17, 21, 33, 0.85);
+  color: var(--ink);
+  padding: 12px 16px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+#kkchat-root .inputbar textarea::placeholder,
+#kkchat-root .inputbar input[type="text"]::placeholder,
+#kkchat-root .inputbar input[type="search"]::placeholder {
+  color: var(--ink-muted);
+}
 
 
 /* ===========================
@@ -843,9 +979,6 @@ html, body { margin: 0; height: 100%; }
   height: 95vh;
   height: 95svh;
   height: 95dvh;
-  display: flex;
-  flex-direction: column;
-  overscroll-behavior: contain;
 }
 
 
@@ -861,12 +994,16 @@ html, body { margin: 0; height: 100%; }
   max-width: 100%;
 }
 #kkchat-root .bubble {
-  padding: 4px 12px;
-  border-radius: 14px;
+  padding: 10px 16px;
+  border-radius: 18px;
   max-width: 85%;
   word-wrap: break-word;
   white-space: pre-wrap;
   font-size: 16px;
+  background: rgba(28, 32, 48, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03), 0 18px 36px rgba(5, 7, 12, 0.35);
+  border: 1px solid rgba(122, 136, 196, 0.2);
+  backdrop-filter: blur(12px);
 }
 #kkchat-root .bubble-meta {
   min-width: 52px;
@@ -896,13 +1033,23 @@ html, body { margin: 0; height: 100%; }
   line-height: 1.3;
 }
 #kkchat-root .me { justify-content: flex-end; }
-#kkchat-root .me .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
-#kkchat-root .them .bubble { background: #fff; border-bottom-left-radius: 4px; }
+#kkchat-root .me .bubble {
+  background: linear-gradient(135deg, rgba(52, 57, 76, 0.95) 0%, rgba(116, 122, 146, 0.95) 100%);
+  color: #f4f5fc;
+  border-bottom-right-radius: 6px;
+  border-color: rgba(116, 122, 146, 0.55);
+  box-shadow: 0 22px 38px rgba(26, 29, 40, 0.55);
+}
+#kkchat-root .them .bubble {
+  background: rgba(32, 36, 54, 0.72);
+  color: var(--ink);
+  border-bottom-left-radius: 6px;
+}
 #kkchat-root .small {
   font-size: 0.7rem;
-  color: #E35754;
+  color: var(--ink-muted);
   line-height: normal;
-  font-weight: 400;
+  font-weight: 500;
 }
 #kkchat-root .list .item.them .bubble:not(.img) { cursor: pointer; }
 
@@ -917,7 +1064,7 @@ html, body { margin: 0; height: 100%; }
   max-width: min(300px, 60vw);
   max-height: 60vh;
   border-radius: 12px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid rgba(122, 136, 196, 0.28);
   cursor: zoom-in;
 }
 #kkchat-root .list .item.them .bubble.img img.imgmsg { cursor: zoom-in; }
@@ -957,25 +1104,34 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .inputbar textarea {
   flex: 1;
   resize: none;
-  min-height: 38px;
-  max-height: 120px;
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  min-height: 52px;
+  max-height: 160px;
+  padding: 12px 16px;
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-sm);
   font-size: 15px;
+  background: rgba(17, 21, 33, 0.85);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 #kkchat-root .inputbar button {
-  background: #f6f7f9;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  padding: 8px 12px;
+  background: rgba(34, 40, 62, 0.7);
+  border: 1px solid rgba(122, 136, 196, 0.24);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
   text-align: left;
   font-size: .95rem;
   cursor: pointer;
-  transition: border-color .15s ease, background-color .15s ease;
+  transition: border-color .15s ease, background-color .15s ease, transform .15s ease;
   display: block;
-  color: inherit;
+  color: var(--ink);
   text-decoration: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+#kkchat-root .inputbar button:hover {
+  background: rgba(58, 73, 118, 0.85);
+  border-color: rgba(120, 128, 149, 0.4);
+  transform: translateY(-1px);
 }
 
 
@@ -994,9 +1150,10 @@ html, body { margin: 0; height: 100%; }
   padding: 0 !important;
   font-size: 1.6rem !important;
   line-height: 1;
-  color: inherit;
+  color: var(--ink-soft);
   cursor: pointer;
 }
+#kkchat-root .input-actions-toggle:hover { color: var(--ink); }
 #kkchat-root .input-actions.is-open .input-actions-toggle {
   color: var(--brand);
 }
@@ -1006,37 +1163,40 @@ html, body { margin: 0; height: 100%; }
   left: 0;
   display: none;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   min-width: 220px;
-  padding: 8px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(122, 136, 196, 0.3);
+  background: rgba(13, 16, 26, 0.95);
+  box-shadow: 0 22px 44px rgba(5, 7, 12, 0.55);
   z-index: 30;
+  backdrop-filter: var(--frost);
 }
 #kkchat-root .input-actions.is-open .input-actions-menu {
   display: flex;
 }
 #kkchat-root .input-actions-item {
-  background: transparent;
+  background: rgba(39, 45, 66, 0.45);
   border: 0;
   width: 100%;
-  color: #0f172a;
+  color: var(--ink);
   font-size: 0.95rem;
   line-height: 1.35;
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
   text-align: left;
   display: flex;
   align-items: center;
   gap: 10px;
   cursor: pointer;
+  transition: background .15s ease, transform .15s ease;
 }
 #kkchat-root .input-actions-item:hover,
 #kkchat-root .input-actions-item:focus {
-  background: #f1f5f9;
+  background: rgba(116, 122, 146, 0.24);
   outline: none;
+  transform: translateY(-1px);
 }
 #kkchat-root .input-actions-item[disabled] {
   opacity: 0.55;
@@ -1055,16 +1215,17 @@ html, body { margin: 0; height: 100%; }
 
 #kkchat-root .item.banner { justify-content: center; }
 #kkchat-root .item.banner .banner-bubble {
-  background: #e35754;
-  border: 1px solid #e35754;
-  color: WHITE;
-  padding: 8px 30px;
-  border-radius: 50px;
-  font-size: .8rem;
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.95) 0%, rgba(161, 57, 59, 0.95) 100%);
+  border: 1px solid rgba(227, 87, 84, 0.75);
+  color: #fff;
+  padding: 10px 34px;
+  border-radius: 999px;
+  font-size: .85rem;
   font-weight: 800;
   text-align: center;
   max-width: 80%;
   white-space: pre-wrap;
+  box-shadow: 0 18px 36px rgba(227, 87, 84, 0.35);
 }
 #kkchat-root .fab {
     position: fixed;
@@ -1073,30 +1234,106 @@ html, body { margin: 0; height: 100%; }
     z-index: 9;
     border: 0;
     border-radius: 999px;
-    padding: 10px 12px;
-    background: var(--brand);
-    color: #fff;
+    padding: 12px 14px;
+    background: linear-gradient(135deg, rgba(46, 50, 66, 0.95) 0%, rgba(227, 87, 84, 0.95) 100%);
+    color: #0b0f1c;
     font-weight: 900;
-    box-shadow: 0 4px 12px rgba(0,0,0,.15);
+    box-shadow: 0 22px 44px rgba(11, 14, 24, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
     display: none;
 }
+#kkchat-root .fab:hover { box-shadow: 0 26px 50px rgba(13, 16, 26, 0.65); transform: translateY(-2px); }
 #kkchat-root .fab.show { display: inline-flex; }
 #kkchat-root .toast {
+  --toast-glow: rgba(116, 122, 146, 0.45);
   position: fixed;
   left: 50%;
   bottom: 110px;
-  transform: translateX(-50%);
-  background: #111;
-  color: #fff;
-  padding: 8px 12px;
-  border-radius: 999px;
-  font-size: 13px;
+  transform: translateX(-50%) translateY(20px);
+  min-width: clamp(240px, 60vw, 360px);
+  padding: 18px 24px 20px 84px;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #1d1f27 0%, #12141b 65%, #0c101a 100%);
+  color: #f8f9fc;
+  font-size: 0.95rem;
+  font-family: 'Lexend', 'Segoe UI', sans-serif;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
   opacity: 0;
-  transition: opacity .2s;
+  transition: opacity 0.25s ease, transform 0.25s ease;
   z-index: 11;
+  box-shadow: 0 28px 60px rgba(9, 14, 24, 0.55), 0 0 0 1px rgba(88, 102, 129, 0.35);
+  overflow: hidden;
 }
-#kkchat-root .toast.show { opacity: 1; }
-#kkchat-root .receipt { display: inline-block; margin-top: 2px; font-size: 11px; color: #6b7280; }
+#kkchat-root .toast::before {
+  content: "\2713";
+  position: absolute;
+  inset: 18px auto 18px 24px;
+  width: 44px;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #3b4250 0%, #262b36 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), 0 10px 18px rgba(10, 15, 25, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.4rem;
+  color: var(--accent);
+}
+#kkchat-root .toast::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: linear-gradient(90deg, rgba(116, 122, 146, 0.9) 0%, rgba(66, 71, 95, 0.9) 100%);
+  transform-origin: left;
+  transform: scaleX(0);
+  opacity: 0.95;
+}
+#kkchat-root .toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+#kkchat-root .toast.show::after {
+  animation: kkchat-toast-progress 1.2s ease forwards;
+}
+#kkchat-root .toast[data-variant="error"],
+#kkchat-root .toast.toast-error {
+  --toast-glow: rgba(233, 80, 92, 0.5);
+  background: linear-gradient(135deg, #2a1014 0%, #1b0b0f 68%, #110608 100%);
+  box-shadow: 0 28px 60px rgba(18, 5, 7, 0.6), 0 0 0 1px rgba(214, 85, 104, 0.38);
+}
+#kkchat-root .toast[data-variant="error"]::before,
+#kkchat-root .toast.toast-error::before {
+  content: "\2715";
+  background: linear-gradient(145deg, #5c1f28 0%, #381017 100%);
+  color: #fe6c9b;
+}
+#kkchat-root .toast[data-variant="error"]::after,
+#kkchat-root .toast.toast-error::after {
+  background: linear-gradient(90deg, #fe6c9b 0%, #d83d4e 60%, #a1222d 100%);
+}
+#kkchat-root .toast[data-variant="muted"],
+#kkchat-root .toast.toast-muted {
+  background: linear-gradient(135deg, #1f1f21 0%, #131314 65%, #0e0e10 100%);
+  box-shadow: 0 24px 52px rgba(6, 6, 8, 0.6), 0 0 0 1px rgba(98, 102, 112, 0.45);
+}
+#kkchat-root .toast[data-variant="muted"]::after,
+#kkchat-root .toast.toast-muted::after {
+  background: linear-gradient(90deg, #8892a6 0%, #626a7c 55%, #3b4150 100%);
+}
+#kkchat-root .toast[data-variant="muted"]::before,
+#kkchat-root .toast.toast-muted::before {
+  content: "\26A0";
+  font-size: 1.25rem;
+  color: #8892a6;
+}
+
+@keyframes kkchat-toast-progress {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+#kkchat-root .receipt { display: inline-block; margin-top: 2px; font-size: 11px; color: var(--ink-muted); }
 #kkchat-root .receipt.read { color: var(--accent); }
 
 
@@ -1107,11 +1344,12 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .login {
   max-width: 600px;
   margin: 40px auto;
-  padding: 20px;
-  background: #fff;
-  border: 1px solid #eee;
-  border-radius: 16px;
-  box-shadow: 0 4px 16px rgba(0,0,0,.05);
+  padding: 32px;
+  background: linear-gradient(160deg, rgba(15, 18, 28, 0.92) 0%, rgba(8, 10, 17, 0.95) 100%);
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 32px 68px rgba(5, 7, 12, 0.6);
+  backdrop-filter: var(--frost);
 }
 
 #kkchat-root .login h1 {
@@ -1127,21 +1365,29 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .login input,
 #kkchat-root .login select {
   width: 100%;
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-sm);
+  background: rgba(13, 16, 25, 0.85);
+  color: var(--ink);
 }
+#kkchat-root .login input::placeholder,
+#kkchat-root .login select::placeholder { color: var(--ink-muted); }
 #kkchat-root .login button {
-  margin-top: 12px;
-  background: var(--brand);
-  color: #fff;
+  margin-top: 18px;
+  background: linear-gradient(135deg, rgba(44, 47, 63, 0.95) 0%, rgba(227, 87, 84, 0.95) 100%);
+  color: #0b0f1c;
   border: 0;
   border-radius: 999px;
-  padding: 10px 14px;
+  padding: 12px 20px;
   font-weight: 900;
+  box-shadow: 0 20px 44px rgba(11, 14, 24, 0.55);
+  cursor: pointer;
+  transition: transform .15s ease;
 }
-#kkchat-root .err { color: #b91c1c; font-weight: 700; margin-top: 8px; }
-#kkchat-root button { color: #333333; }
+#kkchat-root .login button:hover { transform: translateY(-2px); }
+#kkchat-root .err { color: #ff8f96; font-weight: 700; margin-top: 8px; }
+#kkchat-root button { color: var(--ink); }
 
 @media (min-width: 900px) { #kkchat-root .bubble { max-width: 70%; } }
 @media (prefers-reduced-motion: reduce) { #kkchat-root .fab, #kkchat-root .toast { transition: none; } }
@@ -1160,33 +1406,36 @@ html, body { margin: 0; height: 100%; }
 }
 #kkchat-root .logpanel[open] { display: flex; align-items: center; justify-content: center; }
 #kkchat-root .logbox {
-  background: #fff;
+  background: linear-gradient(165deg, rgba(15, 19, 29, 0.95) 0%, rgba(8, 10, 17, 0.95) 100%);
   width: min(920px, 96vw);
   max-height: 80vh;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border: 1px solid rgba(122, 136, 196, 0.32);
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
+  box-shadow: 0 34px 72px rgba(5, 7, 12, 0.65);
+  backdrop-filter: var(--frost);
 }
 #kkchat-root .loghead {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid #eee;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.2);
 }
 #kkchat-root .loglist { list-style: none; margin: 0; padding: 0; overflow: auto; }
 #kkchat-root .logitem {
   display: grid;
   grid-template-columns: 120px 1fr;
   gap: 10px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: 14px 20px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.12);
+  color: var(--ink);
 }
-#kkchat-root .logitem .meta { font-size: 12px; color: #6b7280; }
+#kkchat-root .logitem .meta { font-size: 12px; color: var(--ink-muted); }
 #kkchat-root .logfoot {
-  padding: 10px 12px;
-  border-top: 1px solid #eee;
+  padding: 14px 20px;
+  border-top: 1px solid rgba(122, 136, 196, 0.2);
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -1202,12 +1451,14 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .side-toggle {
   display: none;
   width: 100%;
-  padding: .6rem .9rem;
+  padding: .75rem 1rem;
   text-align: left;
-  background: #fff;
-  border: 1px solid #eee;
-  border-radius: 12px;
+  background: rgba(18, 22, 34, 0.8);
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  border-radius: var(--radius-sm);
   font-weight: 600;
+  color: var(--ink);
+  box-shadow: 0 18px 36px rgba(5, 7, 12, 0.45);
 }
 #kkchat-root .side-toggle .chev { float: right; transition: transform .2s ease; }
 
@@ -1237,7 +1488,7 @@ html, body { margin: 0; height: 100%; }
   #kkchat-root .modbtn { font-size: 1.3rem; }
 
   #kkchat-root .list {
-    padding: 10px 0px calc(80px + env(safe-area-inset-bottom) + var(--kb-offset, 0px));
+    padding: 18px 16px calc(110px + env(safe-area-inset-bottom) + var(--kb-offset, 0px));
   }
 }
 
@@ -1264,24 +1515,25 @@ body.kkchat-no-scroll { overflow: hidden; }
 #kkchat-sideOverlay[open] { display: flex; }
 
 #kkchat-sideOverlay .side-sheet {
-  background: #fff;
+  background: linear-gradient(160deg, rgba(14, 17, 27, 0.95) 0%, rgba(8, 10, 17, 0.95) 100%);
   width: 100%;
   height: 100%;
   display: grid;
   grid-template-rows: auto 1fr;
+  color: var(--ink);
 }
 #kkchat-sideOverlay .side-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  border-bottom: 1px solid #eee;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.22);
   margin-top: 0px;
 }
 #kkchat-sideOverlay .side-content {
   overflow: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 8px;
+  padding: 16px;
 }
 
 @media (min-width: 901px) {
@@ -1302,32 +1554,37 @@ body.kkchat-no-scroll { overflow: hidden; }
 }
 #kk-msgSheet[open] { display: flex; align-items: flex-end; justify-content: center; }
 #kk-msgSheet .box {
-  background: #fff;
+  background: linear-gradient(160deg, rgba(14, 17, 27, 0.95) 0%, rgba(8, 10, 17, 0.95) 100%);
   width: min(520px, 96vw);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   position: relative;
   bottom: 10px;
-  box-shadow: 0 -6px 20px rgba(0,0,0,.2);
-  padding: 8px;
+  box-shadow: 0 -12px 32px rgba(5, 7, 12, 0.55);
+  padding: 16px;
   font-size: 15px;
+  border: 1px solid rgba(122, 136, 196, 0.28);
+  color: var(--ink);
 }
 #kk-msgSheet .head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 10px;
-  border-bottom: 1px solid #eee;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(122, 136, 196, 0.2);
 }
 #kk-msgSheet .row { display: flex; gap: 8px; padding: 10px; }
 #kk-msgSheet .row button {
   flex: 1;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  background: rgba(39, 45, 66, 0.55);
+  border: 1px solid rgba(122, 136, 196, 0.24);
+  border-radius: var(--radius-sm);
   padding: 12px;
   font-weight: 800;
   cursor: pointer;
+  color: var(--ink);
+  transition: background .15s ease, transform .15s ease;
 }
+#kk-msgSheet .row button:hover { background: rgba(116, 122, 146, 0.24); transform: translateY(-1px); }
 
 
 /* ===========================
@@ -1342,8 +1599,8 @@ body.kkchat-no-scroll { overflow: hidden; }
 #kkchat-root .kk-login-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0,0,0,.15);
-  border-radius: 16px;
+  background: rgba(6, 8, 14, 0.55);
+  border-radius: var(--radius-lg);
   display: none;
   align-items: center;
   justify-content: center;
@@ -1354,8 +1611,8 @@ body.kkchat-no-scroll { overflow: hidden; }
 #kkchat-root .kk-login-spinner {
   width: 48px;
   height: 48px;
-  border: 4px solid #fff;
-  border-top-color: transparent;
+  border: 4px solid rgba(116, 122, 146, 0.45);
+  border-top-color: rgba(227, 87, 84, 0.8);
   border-radius: 50%;
   animation: kkspin 1s linear infinite;
 }
