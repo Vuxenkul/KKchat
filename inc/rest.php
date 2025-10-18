@@ -28,7 +28,7 @@ add_action('rest_api_init', function () {
      * @param array $opts          Optional flags: include_flagged.
      */
     function kkchat_public_presence_snapshot(int $now, int $window, array $admin_names, array $opts = []): array {
-      kkchat_wpdb_reconnect_if_needed();
+      kkchat_db_check_connection();
       global $wpdb; $t = kkchat_tables();
 
       $includeFlagged = !empty($opts['include_flagged']);
@@ -57,6 +57,44 @@ add_action('rest_api_init', function () {
         if (is_array($cached)) {
           return $cached;
         }
+      }
+
+      if ($autoBlock !== null) {
+        $blocked = kkchat_db_try(function () use ($t, $me_id, $autoBlock) {
+          global $wpdb;
+
+          $wpdb->query('START TRANSACTION');
+
+          $ins = $wpdb->insert($t['blocks'], $autoBlock['data'], $autoBlock['format']);
+          if ($ins === false) {
+            $wpdb->query('ROLLBACK');
+            return false;
+          }
+
+          if (!empty($autoBlock['expires_null'])) {
+            $id = (int) $wpdb->insert_id;
+            $nullSet = $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id = %d", $id));
+            if ($nullSet === false) {
+              $wpdb->query('ROLLBACK');
+              return false;
+            }
+          }
+
+          $del = $wpdb->delete($t['users'], ['id' => $me_id], ['%d']);
+          if ($del === false) {
+            $wpdb->query('ROLLBACK');
+            return false;
+          }
+
+          $wpdb->query('COMMIT');
+          return true;
+        });
+
+        if ($blocked === false) {
+          kkchat_json(['ok' => false, 'err' => 'db'], 500);
+        }
+
+        kkchat_json(['ok' => false, 'err' => 'auto_moderated', 'cause' => $autoBlock['cause']], 403);
       }
 
       if ($window > 0) {
@@ -704,31 +742,35 @@ add_action('rest_api_init', function () {
       $now = time();
 
       // Clean old presences
-      $wpdb->query($wpdb->prepare("DELETE FROM {$t['users']} WHERE %d - last_seen > %d", $now, kkchat_user_ttl()));
+      kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
+        $now,
+        kkchat_user_ttl()
+      )));
 
       // Insert presence (wp_username is NULL for guests)
       $name_lc = mb_strtolower($nick, 'UTF-8');
-      $ins = $wpdb->insert($t['users'], [
+      $ins = kkchat_db_try(fn() => $wpdb->insert($t['users'], [
         'name'        => $nick,
         'name_lc'     => $name_lc,
         'gender'      => $gender,
         'last_seen'   => $now,
         'ip'          => $ip,
         'wp_username' => $via_wp ? $wp_username : null,
-      ], ['%s','%s','%s','%d','%s','%s']);
+      ], ['%s','%s','%s','%d','%s','%s']), 1);
 
       if (!$ins) {
         if ($via_wp) {
           // For WP users, replace abandoned presence with same name_lc
-          $wpdb->delete($t['users'], ['name_lc' => $name_lc], ['%s']);
-          $ins2 = $wpdb->insert($t['users'], [
+          kkchat_db_try(fn() => $wpdb->delete($t['users'], ['name_lc' => $name_lc], ['%s']));
+          $ins2 = kkchat_db_try(fn() => $wpdb->insert($t['users'], [
             'name'        => $nick,
             'name_lc'     => $name_lc,
             'gender'      => $gender,
             'last_seen'   => $now,
             'ip'          => $ip,
             'wp_username' => $wp_username,
-          ], ['%s','%s','%s','%d','%s','%s']);
+          ], ['%s','%s','%s','%d','%s','%s']), 1);
           if (!$ins2) kkchat_json(['ok'=>false,'err'=>'Namnet är upptaget']);
         } else {
           kkchat_json(['ok'=>false,'err'=>'Namnet är upptaget']);
@@ -1202,7 +1244,7 @@ register_rest_route($ns, '/ping', [
     // Release the PHP session lock ASAP — ping is frequent
     kkchat_close_session_if_open();
 
-    kkchat_wpdb_reconnect_if_needed();
+    kkchat_db_check_connection();
     global $wpdb;
     $t   = kkchat_tables();
     $now = time();
@@ -1446,7 +1488,7 @@ register_rest_route($ns, '/fetch', [
     'callback' => function (WP_REST_Request $req) {
       kkchat_require_login(); kkchat_assert_not_blocked_or_fail(); kkchat_check_csrf_or_fail($req);
       global $wpdb; $t = kkchat_tables();
-      kkchat_wpdb_reconnect_if_needed();
+      kkchat_db_check_connection();
       $me_id = kkchat_current_user_id();
       $me_nm = kkchat_current_user_name();
 
@@ -1489,6 +1531,9 @@ register_rest_route($ns, '/fetch', [
         if ($txt==='' || mb_strlen($txt) > 2000) kkchat_json(['ok'=>false], 400);
       }
 
+      $watchUpdate = null;
+      $autoBlock   = null;
+
       // === Auto moderation by Word Rules (non-admin only) ===
       if ($kind === 'chat' && !kkchat_is_admin()) {
         $rules = kkchat_rules_active();
@@ -1499,7 +1544,12 @@ register_rest_route($ns, '/fetch', [
           if ($r['kind']==='forbid' && !$hit_forbid) $hit_forbid = $r;
         }
         if ($hit_watch){
-          $wpdb->update($t['users'], ['watch_flag'=>1,'watch_flag_at'=>time()], ['id'=>$me_id], ['%d','%d'], ['%d']);
+          $watchUpdate = [
+            'data'  => ['watch_flag' => 1, 'watch_flag_at' => time()],
+            'where' => ['id' => $me_id],
+            'data_format'  => ['%d','%d'],
+            'where_format' => ['%d'],
+          ];
         }
         if ($hit_forbid){
           $now = time();
@@ -1507,42 +1557,27 @@ register_rest_route($ns, '/fetch', [
           $cause = 'Forbidden word: "'.$hit_forbid['word'].'"';
           $dur   = $hit_forbid['duration_sec']; // NULL => infinite
           $ip    = kkchat_client_ip();
+          $exp   = isset($dur) ? ($now + max(60, (int) $dur)) : null;
 
-          if ($hit_forbid['action'] === 'kick'){
-            $exp = isset($dur) ? ($now + max(60,(int)$dur)) : null;
-            $wpdb->insert($t['blocks'], [
-              'type'=>'kick',
-              'target_user_id'=>$me_id,
-              'target_name'=>$me_nm,
-              'target_wp_username'=>$_SESSION['kkchat_wp_username'] ?? null,
-              'target_ip'=>null,
-              'cause'=>$cause,
-              'created_by'=>$admin ?: null,
-              'created_at'=>$now,
-              'expires_at'=>$exp,
-              'active'=>1
-            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
-            if ($exp === null){ $id=(int)$wpdb->insert_id; $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at=NULL WHERE id=%d",$id)); }
-          } elseif ($hit_forbid['action'] === 'ipban'){
-            $exp = isset($dur) ? ($now + max(60,(int)$dur)) : null;
-            $wpdb->insert($t['blocks'], [
-              'type'=>'ipban',
-              'target_user_id'=>$me_id,
-              'target_name'=>$me_nm,
-              'target_wp_username'=>$_SESSION['kkchat_wp_username'] ?? null,
-              'target_ip'=>kkchat_ip_ban_key($ip),
-              'cause'=>$cause,
-              'created_by'=>$admin ?: null,
-              'created_at'=>$now,
-              'expires_at'=>$exp,
-              'active'=>1
-            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
-            if ($exp === null){ $id=(int)$wpdb->insert_id; $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at=NULL WHERE id=%d",$id)); }
-          }
+          $blockData = [
+            'type'               => $hit_forbid['action'] === 'ipban' ? 'ipban' : 'kick',
+            'target_user_id'     => $me_id,
+            'target_name'        => $me_nm,
+            'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
+            'target_ip'          => $hit_forbid['action'] === 'ipban' ? kkchat_ip_ban_key($ip) : null,
+            'cause'              => $cause,
+            'created_by'         => $admin ?: null,
+            'created_at'         => $now,
+            'expires_at'         => $exp,
+            'active'             => 1,
+          ];
 
-          // Remove presence and block the send
-          $wpdb->delete($t['users'], ['id'=>$me_id], ['%d']);
-          kkchat_json(['ok'=>false,'err'=>'auto_moderated','cause'=>$cause], 403);
+          $autoBlock = [
+            'data'          => $blockData,
+            'format'        => ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d'],
+            'expires_null'  => ($exp === null),
+            'cause'         => $cause,
+          ];
         }
       }
       // === end automod ===
@@ -1630,21 +1665,44 @@ register_rest_route($ns, '/fetch', [
             $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
             $cause = 'Repeat spam (auto)';
 
-            $wpdb->insert($t['blocks'], [
-              'type' => 'kick',
-              'target_user_id' => $me_id,
-              'target_name' => $me_nm,
-              'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
-              'target_ip' => null,
-              'cause' => $cause,
-              'created_by' => $admin ?: null,
-              'created_at' => $now,
-              'expires_at' => $exp,
-              'active' => 1
-            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+            $kicked = kkchat_db_try(function () use ($t, $me_id, $me_nm, $admin, $now, $exp, $cause) {
+              global $wpdb;
+
+              $wpdb->query('START TRANSACTION');
+
+              $ins = $wpdb->insert($t['blocks'], [
+                'type' => 'kick',
+                'target_user_id' => $me_id,
+                'target_name' => $me_nm,
+                'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
+                'target_ip' => null,
+                'cause' => $cause,
+                'created_by' => $admin ?: null,
+                'created_at' => $now,
+                'expires_at' => $exp,
+                'active' => 1
+              ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+
+              if ($ins === false) {
+                $wpdb->query('ROLLBACK');
+                return false;
+              }
+
+              $del = $wpdb->delete($t['users'], ['id' => $me_id], ['%d']);
+              if ($del === false) {
+                $wpdb->query('ROLLBACK');
+                return false;
+              }
+
+              $wpdb->query('COMMIT');
+              return true;
+            });
+
+            if ($kicked === false) {
+              kkchat_json(['ok' => false, 'err' => 'db'], 500);
+            }
 
             unset($_SESSION['kk_dupe'][$key]);
-            $wpdb->delete($t['users'], ['id'=>$me_id], ['%d']);
             kkchat_json(['ok'=>false,'err'=>'auto_moderated','cause'=>$cause], 403);
           }
         }
@@ -1673,14 +1731,44 @@ register_rest_route($ns, '/fetch', [
         $format[] = '%s';
       }
 
-      $ok = $wpdb->insert($t['messages'], $data, $format);
-      if ($ok === false) {
-        kkchat_wpdb_reconnect_if_needed();
-        $ok = $wpdb->insert($t['messages'], $data, $format);
-      }
-      if ($ok === false) kkchat_json(['ok'=>false,'err'=>'db_insert_failed'], 500);
+      $mid = 0;
+      $ok = kkchat_db_try(function () use ($t, $data, $format, $watchUpdate, &$mid) {
+        global $wpdb;
 
-      $mid = (int)$wpdb->insert_id;
+        $wpdb->query('START TRANSACTION');
+
+        if ($watchUpdate !== null) {
+          $updated = $wpdb->update(
+            $t['users'],
+            $watchUpdate['data'],
+            $watchUpdate['where'],
+            $watchUpdate['data_format'],
+            $watchUpdate['where_format']
+          );
+
+          if ($updated === false) {
+            $wpdb->query('ROLLBACK');
+            return false;
+          }
+        }
+
+        $ins = $wpdb->insert($t['messages'], $data, $format);
+        if ($ins === false) {
+          $wpdb->query('ROLLBACK');
+          return false;
+        }
+
+        $mid = (int) $wpdb->insert_id;
+
+        $wpdb->query('COMMIT');
+        return true;
+      }, 1);
+
+      if ($ok === false) {
+        kkchat_json(['ok'=>false,'err'=>'db_insert_failed'], 500);
+      }
+
+      $mid = (int) $mid;
 
     kkchat_json(['ok'=>true,'id'=>$mid]);
 
@@ -1880,7 +1968,7 @@ register_rest_route($ns, '/reads/mark', [
       if (!$u) kkchat_json(['ok'=>false,'err'=>'user_gone'], 400);
 
       $now = time();
-      $wpdb->insert($t['reports'], [
+      $ok = kkchat_db_try(fn() => $wpdb->insert($t['reports'], [
         'created_at'    => $now,
         'reporter_id'   => $me_id,
         'reporter_name' => $me_nm,
@@ -1890,9 +1978,9 @@ register_rest_route($ns, '/reads/mark', [
         'reported_ip'   => (string)($u['ip'] ?? ''),
         'reason'        => $reason,
         'status'        => 'open',
-      ], ['%d','%d','%s','%s','%d','%s','%s','%s','%s']);
+      ], ['%d','%d','%s','%s','%d','%s','%s','%s','%s']));
 
-      if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      if ($ok === false) kkchat_json(['ok'=>false,'err'=>'db'], 500);
       kkchat_json(['ok'=>true]);
     },
     'permission_callback' => '__return_true',
@@ -1952,14 +2040,14 @@ register_rest_route($ns, '/reads/mark', [
       if ($id <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
 
       $now = time();
-      $updated = $wpdb->update(
+      $updated = kkchat_db_try(fn() => $wpdb->update(
         $t['reports'],
         ['status'=>'resolved','resolved_at'=>$now],               // no "resolved_by"
         ['id'=>$id,'status'=>'open'],
         ['%s','%d'],
         ['%d','%s']
-      );
-      if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      ));
+      if ($updated === false) kkchat_json(['ok'=>false,'err'=>'db'], 500);
 
       kkchat_json(['ok'=>true,'updated'=>(int)$updated]);
     },
@@ -1979,8 +2067,8 @@ register_rest_route($ns, '/reads/mark', [
       $id = max(0, (int)$req->get_param('id'));
       if ($id <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
 
-      $deleted = $wpdb->delete($t['reports'], ['id'=>$id], ['%d']);
-      if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      $deleted = kkchat_db_try(fn() => $wpdb->delete($t['reports'], ['id'=>$id], ['%d']));
+      if ($deleted === false) kkchat_json(['ok'=>false,'err'=>'db'], 500);
 
       kkchat_json(['ok'=>true,'deleted'=>(int)$deleted]);
     },
@@ -2060,42 +2148,70 @@ register_rest_route($ns, '/moderate/hide-message', [
 
     $cause = sanitize_text_field((string)$req->get_param('cause'));
 
-    // Mark as hidden
-    $wpdb->query($wpdb->prepare(
-      "UPDATE {$t['messages']}
-          SET hidden_at = %d,
-              hidden_by = %d,
-              hidden_cause = %s
-        WHERE id = %d",
-      time(), get_current_user_id() ?: 0, ($cause !== '' ? $cause : null), $mid
-    ));
+    $nowHide = time();
+    $modPayload = wp_json_encode(['id' => (int)$mid, 'action' => 'hide']);
 
-    // Emit an invisible moderation event to wake long-poll clients
-    // Clients must ignore kind 'mod_hide' and use its content payload to remove the message.
-    if (empty($msg['recipient_id'])) {
-      // Public message (room)
-      $wpdb->insert($t['messages'], [
-        'created_at'     => time(),
-        'kind'           => 'mod_hide',
-        'room'           => $msg['room'],
-        'sender_id'      => 0,          // system
-        'sender_name'    => '',
-        'recipient_id'   => null,
-        'recipient_name' => null,
-        'content'        => wp_json_encode(['id' => (int)$mid, 'action' => 'hide']),
-      ]);
-    } else {
-      // Direct message: insert into the same sender/recipient channel so both sides wake up
-      $wpdb->insert($t['messages'], [
-        'created_at'     => time(),
-        'kind'           => 'mod_hide',
-        'room'           => null,
-        'sender_id'      => (int)$msg['sender_id'],
-        'sender_name'    => '',
-        'recipient_id'   => (int)$msg['recipient_id'],
-        'recipient_name' => null,
-        'content'        => wp_json_encode(['id' => (int)$mid, 'action' => 'hide']),
-      ]);
+    $isPublic = empty($msg['recipient_id']);
+    $modData = $isPublic
+      ? [
+          'created_at'     => $nowHide,
+          'kind'           => 'mod_hide',
+          'room'           => $msg['room'],
+          'sender_id'      => 0,
+          'sender_name'    => '',
+          'recipient_id'   => null,
+          'recipient_name' => null,
+          'content'        => $modPayload,
+        ]
+      : [
+          'created_at'     => $nowHide,
+          'kind'           => 'mod_hide',
+          'room'           => null,
+          'sender_id'      => (int)$msg['sender_id'],
+          'sender_name'    => '',
+          'recipient_id'   => (int)$msg['recipient_id'],
+          'recipient_name' => null,
+          'content'        => $modPayload,
+        ];
+
+    $modFormat = $isPublic
+      ? ['%d','%s','%s','%d','%s','%s','%s','%s']
+      : ['%d','%s','%s','%d','%s','%d','%s','%s'];
+
+    $hidden = kkchat_db_try(function () use ($t, $mid, $cause, $nowHide, $modData, $modFormat) {
+      global $wpdb;
+
+      $wpdb->query('START TRANSACTION');
+
+      $updated = $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['messages']}
+            SET hidden_at = %d,
+                hidden_by = %d,
+                hidden_cause = %s
+          WHERE id = %d",
+        $nowHide,
+        get_current_user_id() ?: 0,
+        ($cause !== '' ? $cause : null),
+        $mid
+      ));
+
+      if ($updated === false) {
+        $wpdb->query('ROLLBACK');
+        return false;
+      }
+
+      $ins = $wpdb->insert($t['messages'], $modData, $modFormat);
+      if ($ins === false) {
+        $wpdb->query('ROLLBACK');
+        return false;
+      }
+
+      $wpdb->query('COMMIT');
+      return true;
+    });
+
+    if ($hidden === false) {
+      kkchat_json(['ok' => false, 'err' => 'db'], 500);
     }
 
     kkchat_json(['ok'=>true]);
@@ -2111,22 +2227,27 @@ register_rest_route($ns, '/moderate/hide-message', [
     
         $mid = (int) $req->get_param('message_id');
         if ($mid <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
-    
+
+        kkchat_db_check_connection();
         $exists = (int)$wpdb->get_var($wpdb->prepare(
           "SELECT COUNT(*) FROM {$t['messages']} WHERE id = %d", $mid
         ));
         if ($exists === 0) kkchat_json(['ok'=>false,'err'=>'no_message'], 404);
-    
+
         // Use raw SQL so NULLs are truly NULL (wpdb->update can coerce)
-        $wpdb->query($wpdb->prepare(
+        $restored = kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
           "UPDATE {$t['messages']}
               SET hidden_at = NULL,
                   hidden_by = NULL,
                   hidden_cause = NULL
             WHERE id = %d",
           $mid
-        ));
-    
+        )));
+
+        if ($restored === false) {
+          kkchat_json(['ok'=>false,'err'=>'db'], 500);
+        }
+
         kkchat_json(['ok'=>true]);
       },
     ]);
@@ -2147,21 +2268,42 @@ register_rest_route($ns, '/moderate/hide-message', [
       $now = time();
       $exp = $now + $minutes*60;
 
-      $wpdb->insert($t['blocks'], [
-        'type'=>'kick',
-        'target_user_id'=>$uid,
-        'target_name'=>$u['name'] ?? null,
-        'target_wp_username'=>$u['wp_username'] ?? null,
-        'target_ip'=>null,
-        'cause'=>$cause ?: null,
-        'created_by'=>$admin ?: null,
-        'created_at'=>$now,
-        'expires_at'=>$exp,
-        'active'=>1
-      ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+      $kicked = kkchat_db_try(function () use ($t, $uid, $u, $cause, $admin, $now, $exp) {
+        global $wpdb;
 
-      // Drop presence immediately
-      $wpdb->delete($t['users'], ['id'=>$uid], ['%d']);
+        $wpdb->query('START TRANSACTION');
+
+        $ins = $wpdb->insert($t['blocks'], [
+          'type' => 'kick',
+          'target_user_id' => $uid,
+          'target_name' => $u['name'] ?? null,
+          'target_wp_username' => $u['wp_username'] ?? null,
+          'target_ip' => null,
+          'cause' => $cause ?: null,
+          'created_by' => $admin ?: null,
+          'created_at' => $now,
+          'expires_at' => $exp,
+          'active' => 1
+        ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+
+        if ($ins === false) {
+          $wpdb->query('ROLLBACK');
+          return false;
+        }
+
+        $del = $wpdb->delete($t['users'], ['id' => $uid], ['%d']);
+        if ($del === false) {
+          $wpdb->query('ROLLBACK');
+          return false;
+        }
+
+        $wpdb->query('COMMIT');
+        return true;
+      });
+
+      if ($kicked === false) {
+        kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      }
 
       kkchat_json(['ok'=>true]);
     },
@@ -2185,25 +2327,51 @@ register_rest_route($ns, '/moderate/hide-message', [
       $now = time();
       $exp = ($minutes > 0) ? ($now + $minutes*60) : null;
 
-      $wpdb->insert($t['blocks'], [
-        'type'               => 'ipban',
-        'target_user_id'     => $uid,
-        'target_name'        => $u['name'] ?? null,
-        'target_wp_username' => $u['wp_username'] ?? null,
-        'target_ip'          => kkchat_ip_ban_key($u['ip']),
-        'cause'              => $cause ?: null,
-        'created_by'         => $admin ?: null,
-        'created_at'         => $now,
-        'expires_at'         => $exp,  // may be null
-        'active'             => 1
-      ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+      $banned = kkchat_db_try(function () use ($t, $uid, $u, $cause, $admin, $now, $exp) {
+        global $wpdb;
 
-      $id = (int)$wpdb->insert_id;
-      if ($exp === null) {
-        $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", $id));
+        $wpdb->query('START TRANSACTION');
+
+        $ins = $wpdb->insert($t['blocks'], [
+          'type'               => 'ipban',
+          'target_user_id'     => $uid,
+          'target_name'        => $u['name'] ?? null,
+          'target_wp_username' => $u['wp_username'] ?? null,
+          'target_ip'          => kkchat_ip_ban_key($u['ip']),
+          'cause'              => $cause ?: null,
+          'created_by'         => $admin ?: null,
+          'created_at'         => $now,
+          'expires_at'         => $exp,  // may be null
+          'active'             => 1
+        ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+
+        if ($ins === false) {
+          $wpdb->query('ROLLBACK');
+          return false;
+        }
+
+        $id = (int) $wpdb->insert_id;
+        if ($exp === null) {
+          $nullSet = $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", $id));
+          if ($nullSet === false) {
+            $wpdb->query('ROLLBACK');
+            return false;
+          }
+        }
+
+        $del = $wpdb->delete($t['users'], ['id' => $uid], ['%d']);
+        if ($del === false) {
+          $wpdb->query('ROLLBACK');
+          return false;
+        }
+
+        $wpdb->query('COMMIT');
+        return true;
+      });
+
+      if ($banned === false) {
+        kkchat_json(['ok'=>false,'err'=>'db'], 500);
       }
-
-      $wpdb->delete($t['users'], ['id'=>$uid], ['%d']);
 
       kkchat_json(['ok'=>true]);
     },
@@ -2216,7 +2384,10 @@ register_rest_route($ns, '/moderate/hide-message', [
       $require_admin(); kkchat_check_csrf_or_fail($req);
       global $wpdb; $t = kkchat_tables();
       $id = (int)$req->get_param('block_id');
-      $wpdb->update($t['blocks'], ['active'=>0], ['id'=>$id], ['%d'], ['%d']);
+      $updated = kkchat_db_try(fn() => $wpdb->update($t['blocks'], ['active'=>0], ['id'=>$id], ['%d'], ['%d']));
+      if ($updated === false) {
+        kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      }
       kkchat_json(['ok'=>true]);
     },
     'permission_callback'=>'__return_true',

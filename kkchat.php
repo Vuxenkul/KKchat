@@ -146,25 +146,47 @@ function kkchat_wpdb_close_connection(): void {
       @mysql_close($wpdb->dbh);
     }
 
-    $wpdb->dbh          = null;
-    $wpdb->ready        = false;
+    $wpdb->dbh           = null;
+    $wpdb->ready         = false;
     $wpdb->has_connected = false;
   }
 }
 
-/** Ensure the global wpdb connection is ready after an intentional close(). */
-function kkchat_wpdb_reconnect_if_needed(): void {
+function kkchat_db_check_connection(): void {
   global $wpdb;
   if (empty($wpdb)) { return; }
 
   if (method_exists($wpdb, 'check_connection')) {
-    $wpdb->check_connection(false);
-    return;
+    $wpdb->check_connection(true);
+  }
+}
+
+function kkchat_db_try(callable $doQuery, int $retries = 1) {
+  global $wpdb;
+
+  for ($i = 0; $i <= $retries; $i++) {
+    kkchat_db_check_connection();
+
+    $res = $doQuery();
+    if ($res !== false) {
+      return $res;
+    }
+
+    $code = (function_exists('mysqli_errno') && !empty($wpdb->use_mysqli) && $wpdb->dbh instanceof mysqli)
+      ? @mysqli_errno($wpdb->dbh)
+      : 0;
+    $msg = (string) ($wpdb->last_error ?? '');
+    $transient = in_array($code, [1205, 1213, 2006, 2013], true)
+      || preg_match('~(deadlock|lock wait timeout|gone away|lost connection)~i', $msg);
+
+    if (!$transient || $i === $retries) {
+      return false;
+    }
+
+    usleep(200000); // 200ms backoff
   }
 
-  if (empty($wpdb->dbh) && method_exists($wpdb, 'db_connect')) {
-    $wpdb->db_connect(false);
-  }
+  return false;
 }
 
 /** SECURITY: use ENT_QUOTES so attributes are safe too. */
@@ -298,7 +320,7 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
   $name_lc  = mb_strtolower($name, 'UTF-8');
 
   if ($refresh_presence) {
-    kkchat_wpdb_reconnect_if_needed();
+    kkchat_db_check_connection();
     global $wpdb; $t = kkchat_tables();
 
     $gender  = (string) ($_SESSION['kkchat_gender'] ?? '');
@@ -306,7 +328,7 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
     $wp_user = kkchat_current_wp_username() ?: null;
 
     // INSERT … ON DUPLICATE KEY UPDATE keyed by uniq_name_lc(name_lc)
-    $wpdb->query($wpdb->prepare(
+    kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
       "INSERT INTO {$t['users']} (name, name_lc, gender, last_seen, ip, wp_username)
        VALUES (%s, %s, %s, %d, %s, %s)
        ON DUPLICATE KEY UPDATE
@@ -316,10 +338,11 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
          ip = VALUES(ip),
          wp_username = VALUES(wp_username)",
       $name, $name_lc, $gender, $now, $ip, $wp_user
-    ));
+    )));
 
     $id = (int) $wpdb->insert_id;
     if ($id <= 0) {
+      kkchat_db_check_connection();
       $id = (int) $wpdb->get_var($wpdb->prepare(
         "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
         $name_lc
@@ -329,7 +352,7 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
       $_SESSION['kkchat_user_id'] = $id;
     }
   } elseif ($id <= 0) {
-    kkchat_wpdb_reconnect_if_needed();
+    kkchat_db_check_connection();
     global $wpdb; $t = kkchat_tables();
     $id = (int) $wpdb->get_var($wpdb->prepare(
       "SELECT id FROM {$t['users']} WHERE name_lc=%s LIMIT 1",
