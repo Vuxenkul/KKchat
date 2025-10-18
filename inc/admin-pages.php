@@ -28,6 +28,7 @@ function kkchat_handle_logs_ipban() {
   }
 
   // Finns redan ett aktivt block på nyckeln?
+  kkchat_db_check_connection();
   $exists = (int)$wpdb->get_var($wpdb->prepare(
     "SELECT COUNT(*) FROM {$t['blocks']} WHERE type='ipban' AND target_ip=%s AND active=1", $ipKey
   ));
@@ -47,6 +48,7 @@ function kkchat_handle_logs_ipban() {
   // 1) Om user_id skickas med (vi har det från loggraden) – använd det
   $uid = isset($_POST['user_id']) ? (int)$_POST['user_id'] : 0;
   if ($uid > 0) {
+    kkchat_db_check_connection();
     $urow = $wpdb->get_row($wpdb->prepare("SELECT id,name,wp_username FROM {$t['users']} WHERE id=%d LIMIT 1", $uid), ARRAY_A);
     if ($urow) {
       $target_user_id     = (int)$urow['id'];
@@ -64,6 +66,7 @@ function kkchat_handle_logs_ipban() {
   }
 
   if ($target_user_id === null && $target_name === null && $target_wp_username === null) {
+    kkchat_db_check_connection();
     $m = $wpdb->get_row($wpdb->prepare(
       "SELECT sender_id, sender_name
          FROM {$t['messages']}
@@ -77,6 +80,7 @@ function kkchat_handle_logs_ipban() {
         $target_user_id = $sid;
         $target_name    = (string)($m['sender_name'] ?? '');
         // Hämta WP-användarnamn om vi har en user-rad
+        kkchat_db_check_connection();
         $urow = $wpdb->get_row($wpdb->prepare("SELECT wp_username,name FROM {$t['users']} WHERE id=%d LIMIT 1", $sid), ARRAY_A);
         if ($urow) {
           $target_wp_username = (string)($urow['wp_username'] ?? '');
@@ -94,26 +98,45 @@ function kkchat_handle_logs_ipban() {
   $exp = $minutes > 0 ? $now + $minutes * 60 : null;
   $admin = wp_get_current_user()->user_login ?? '';
 
-  $ok = $wpdb->insert($t['blocks'], [
-    'type'               => 'ipban',
-    'target_user_id'     => $target_user_id,            // ← nu ifyllt när möjligt
-    'target_name'        => $target_name ?: null,       // ← nu ifyllt när möjligt
-    'target_wp_username' => $target_wp_username ?: null,// ← nu ifyllt när möjligt
-    'target_ip'          => $ipKey,
-    'cause'              => $cause ?: null,
-    'created_by'         => $admin ?: null,
-    'created_at'         => $now,
-    'expires_at'         => $exp,
-    'active'             => 1
-  ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+  $ok = kkchat_db_try(function () use ($t, $target_user_id, $target_name, $target_wp_username, $ipKey, $cause, $admin, $now, $exp) {
+    global $wpdb;
+
+    $wpdb->query('START TRANSACTION');
+
+    $ins = $wpdb->insert($t['blocks'], [
+      'type'               => 'ipban',
+      'target_user_id'     => $target_user_id,
+      'target_name'        => $target_name ?: null,
+      'target_wp_username' => $target_wp_username ?: null,
+      'target_ip'          => $ipKey,
+      'cause'              => $cause ?: null,
+      'created_by'         => $admin ?: null,
+      'created_at'         => $now,
+      'expires_at'         => $exp,
+      'active'             => 1
+    ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+
+    if ($ins === false) {
+      $wpdb->query('ROLLBACK');
+      return false;
+    }
+
+    if ($exp === null) {
+      $id = (int) $wpdb->insert_id;
+      $nullSet = $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", $id));
+      if ($nullSet === false) {
+        $wpdb->query('ROLLBACK');
+        return false;
+      }
+    }
+
+    $wpdb->query('COMMIT');
+    return true;
+  });
 
   if ($ok === false) {
     $err = $wpdb->last_error ? $wpdb->last_error : 'Okänt databasfel.';
     wp_safe_redirect( add_query_arg('kkbanerr', rawurlencode($err), $back) ); exit;
-  }
-
-  if ($exp === null) {
-    $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", (int)$wpdb->insert_id));
   }
   $msg = 'IP '.$ipKey.' blockerad '.($exp ? 'till '.date_i18n('Y-m-d H:i:s', $exp) : 'för alltid').'.';
   wp_safe_redirect( add_query_arg('kkbanok', rawurlencode($msg), $back) ); exit;
@@ -896,6 +919,7 @@ function kkchat_admin_banners_page(){
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
   $nonce_key = 'kkchat_banners';
+  kkchat_db_check_connection();
   $rooms = $wpdb->get_results("SELECT slug,title FROM {$t['rooms']} ORDER BY sort ASC, title ASC", ARRAY_A);
 
   if (isset($_POST['kk_add_banner'])) {
@@ -1004,7 +1028,7 @@ function kkchat_admin_banners_page(){
 
       $formats = ['%s','%s','%d','%s','%d','%d','%d','%d','%d','%d','%d'];
 
-      $ok = $wpdb->insert($t['banners'], $data, $formats);
+      $ok = kkchat_db_try(fn() => $wpdb->insert($t['banners'], $data, $formats), 1);
       if ($ok === false) {
         $err = $wpdb->last_error ? esc_html($wpdb->last_error) : 'Okänt databasfel.';
         echo '<div class="error"><p>Kunde inte spara banderoll: '.$err.'</p></div>';
@@ -1016,25 +1040,28 @@ function kkchat_admin_banners_page(){
 
   if (isset($_GET['kk_toggle']) && check_admin_referer($nonce_key)) {
     $id  = (int)$_GET['kk_toggle'];
+    kkchat_db_check_connection();
     $cur = (int)$wpdb->get_var($wpdb->prepare("SELECT active FROM {$t['banners']} WHERE id=%d", $id));
     if ($cur !== null) {
-      $wpdb->update($t['banners'], ['active'=>$cur?0:1], ['id'=>$id], ['%d'], ['%d']);
+      kkchat_db_try(fn() => $wpdb->update($t['banners'], ['active'=>$cur?0:1], ['id'=>$id], ['%d'], ['%d']));
       echo '<div class="updated"><p>Status uppdaterad.</p></div>';
     }
   }
   if (isset($_GET['kk_delete']) && check_admin_referer($nonce_key)) {
     $id = (int)$_GET['kk_delete'];
-    $wpdb->delete($t['banners'], ['id'=>$id], ['%d']);
+    kkchat_db_try(fn() => $wpdb->delete($t['banners'], ['id'=>$id], ['%d']));
     echo '<div class="updated"><p>Banderoll raderad.</p></div>';
   }
   if (isset($_GET['kk_run_now']) && check_admin_referer($nonce_key)) {
     $id = (int)$_GET['kk_run_now'];
+    kkchat_db_check_connection();
     $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['banners']} WHERE id=%d", $id), ARRAY_A);
     if ($row && (int)$row['active'] === 1) {
       $now = time();
       $roomsSel = array_filter(array_map('kkchat_sanitize_room_slug', explode(',', (string)$row['rooms_csv'])));
+      $messageFailed = false;
       foreach ($roomsSel as $slug) {
-        $wpdb->insert($t['messages'], [
+        $inserted = kkchat_db_try(fn() => $wpdb->insert($t['messages'], [
           'created_at'     => $now,
           'sender_id'      => 0,
           'sender_name'    => 'System',
@@ -1044,7 +1071,15 @@ function kkchat_admin_banners_page(){
           'room'           => $slug,
           'kind'           => 'banner',
           'content'        => kkchat_html_esc($row['content']),
-        ], ['%d','%d','%s','%s','%s','%s','%s','%s','%s']);
+        ], ['%d','%d','%s','%s','%s','%s','%s','%s','%s']));
+        if ($inserted === false) {
+          $messageFailed = true;
+          break;
+        }
+      }
+      if ($messageFailed) {
+        echo '<div class="error"><p>Kunde inte posta banderoll i alla rum.</p></div>';
+        return;
       }
       $calcRow = [
         'interval_sec'    => (int) ($row['interval_sec'] ?? 0),
@@ -1057,15 +1092,16 @@ function kkchat_admin_banners_page(){
       ];
       $nextRun = kkchat_banner_next_run($calcRow, $now);
       if ($nextRun !== null) {
-        $wpdb->update($t['banners'], ['last_run'=>$now, 'next_run'=>$nextRun], ['id'=>$id], ['%d','%d'], ['%d']);
+        kkchat_db_try(fn() => $wpdb->update($t['banners'], ['last_run'=>$now, 'next_run'=>$nextRun], ['id'=>$id], ['%d','%d'], ['%d']));
       } else {
-        $wpdb->update($t['banners'], ['last_run'=>$now], ['id'=>$id], ['%d'], ['%d']);
-        $wpdb->query($wpdb->prepare("UPDATE {$t['banners']} SET next_run = NULL WHERE id = %d", $id));
+        kkchat_db_try(fn() => $wpdb->update($t['banners'], ['last_run'=>$now], ['id'=>$id], ['%d'], ['%d']));
+        kkchat_db_try(fn() => $wpdb->query($wpdb->prepare("UPDATE {$t['banners']} SET next_run = NULL WHERE id = %d", $id)));
       }
       echo '<div class="updated"><p>Banderoll postad.</p></div>';
     }
   }
 
+  kkchat_db_check_connection();
   $list = $wpdb->get_results("SELECT * FROM {$t['banners']} ORDER BY id DESC");
   $banners_base = menu_page_url('kkchat_banners', false);
   ?>

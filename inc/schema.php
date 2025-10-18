@@ -213,29 +213,56 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
 
 function kkchat_table_exists($table){
   global $wpdb;
-  $exists = $wpdb->get_var($wpdb->prepare(
+  $sql = $wpdb->prepare(
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = %s",
     $table
-  ));
+  );
+  $exists = $wpdb->get_var($sql);
+
+  if ($exists === null && !empty($wpdb->last_error)) {
+    $wpdb->last_error = '';
+    $fallback = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    return !empty($fallback);
+  }
+
   return !empty($exists);
 }
 
 function kkchat_column_exists($table, $column){
   global $wpdb;
-  $exists = $wpdb->get_var($wpdb->prepare(
+  $sql = $wpdb->prepare(
     "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
     $table, $column
-  ));
+  );
+  $exists = $wpdb->get_var($sql);
+
+  if ($exists === null && !empty($wpdb->last_error)) {
+    $wpdb->last_error = '';
+    $fallback = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM `{$table}` LIKE %s", $column));
+    return !empty($fallback);
+  }
+
   return !empty($exists);
 }
 
 function kkchat_column_is_nullable($table, $column){
   global $wpdb;
-  $nullable = $wpdb->get_var($wpdb->prepare(
+  $sql = $wpdb->prepare(
     "SELECT IS_NULLABLE FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s LIMIT 1",
     $table,
     $column
-  ));
+  );
+  $nullable = $wpdb->get_var($sql);
+
+  if ($nullable === null && !empty($wpdb->last_error)) {
+    $wpdb->last_error = '';
+    $info = $wpdb->get_row($wpdb->prepare("SHOW COLUMNS FROM `{$table}` LIKE %s", $column), ARRAY_A);
+    if ($info && array_key_exists('Null', $info)) {
+      return strtoupper((string)$info['Null']) === 'YES';
+    }
+    return false;
+  }
+
   return strtoupper((string)$nullable) === 'YES';
 }
 
@@ -244,6 +271,7 @@ function kkchat_maybe_migrate(){
   global $wpdb;
   if (!function_exists('kkchat_tables')) return; // safety
   $t = kkchat_tables();
+  $prevSuppress = method_exists($wpdb, 'suppress_errors') ? $wpdb->suppress_errors(true) : null;
 
   // 1) Ensure messages table exists (fallback to installer)
   if (!kkchat_table_exists($t['messages']) && function_exists('kkchat_activate')) {
@@ -264,11 +292,18 @@ function kkchat_maybe_migrate(){
 
     // Index helpers
     $has_index = function($name) use ($wpdb, $t){
-      return (bool)$wpdb->get_var($wpdb->prepare(
+      $sql = $wpdb->prepare(
         "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s LIMIT 1",
-         $t['messages'], $name
-      ));
+        $t['messages'], $name
+      );
+      $exists = $wpdb->get_var($sql);
+      if ($exists === null && !empty($wpdb->last_error)) {
+        $wpdb->last_error = '';
+        $fallback = $wpdb->get_var($wpdb->prepare("SHOW INDEX FROM `{$t['messages']}` WHERE Key_name = %s", $name));
+        return !empty($fallback);
+      }
+      return !empty($exists);
     };
 
     // Either idx_hidden_at OR legacy idx_hidden counts
@@ -319,6 +354,14 @@ function kkchat_maybe_migrate(){
 
   // 3) Save version so we don’t re-run unnecessarily
   update_option('kkchat_db_version', KKCHAT_DB_VERSION);
+
+  if (!empty($wpdb->last_error)) {
+    error_log('[KKchat] Schema migration error: ' . $wpdb->last_error);
+    $wpdb->last_error = '';
+  }
+  if (method_exists($wpdb, 'suppress_errors')) {
+    $wpdb->suppress_errors($prevSuppress);
+  }
 }
 
 // Run once on load if version bumped or option missing
@@ -477,6 +520,7 @@ function kkchat_run_scheduled_banners(){
   $now = time();
 
   // Fetch due, active banners
+  kkchat_db_check_connection();
   $rows = $wpdb->get_results(
     $wpdb->prepare("SELECT * FROM {$t['banners']} WHERE active=1 AND next_run <= %d", $now),
     ARRAY_A
@@ -484,6 +528,7 @@ function kkchat_run_scheduled_banners(){
   if (!$rows) return;
 
   // ① Build maps: valid slugs and lowercase title->slug
+  kkchat_db_check_connection();
   $rows_rooms = $wpdb->get_results("SELECT slug, title FROM {$t['rooms']}", ARRAY_A);
   $valid = []; $by_title = [];
   if ($rows_rooms) {
@@ -518,14 +563,14 @@ function kkchat_run_scheduled_banners(){
       $content = (string)$r['content'];
       foreach ($rooms as $slug) {
         $attempts++;
-        $ok = $wpdb->insert($t['messages'], [
+        $ok = kkchat_db_try(fn() => $wpdb->insert($t['messages'], [
           'created_at'  => $now,
           'sender_id'   => 0,
           'sender_name' => 'System',
           'room'        => $slug,
           'kind'        => 'banner',
           'content'     => $content,
-        ], ['%d','%d','%s','%s','%s','%s']);
+        ], ['%d','%d','%s','%s','%s','%s']));
 
         if ($ok === false) {
           error_log('[KKchat] Banner insert failed (room='.$slug.'): '.$wpdb->last_error);
@@ -546,26 +591,26 @@ function kkchat_run_scheduled_banners(){
     if ($nextRun !== null) {
       $fields['next_run'] = $nextRun;
       $formats = array_fill(0, count($fields), '%d');
-      $wpdb->update(
+      kkchat_db_try(fn() => $wpdb->update(
         $t['banners'],
         $fields,
         ['id' => (int)$r['id']],
         $formats,
         ['%d']
-      );
+      ));
     } else {
-      $wpdb->update(
+      kkchat_db_try(fn() => $wpdb->update(
         $t['banners'],
         $fields,
         ['id' => (int)$r['id']],
         ['%d'],
         ['%d']
-      );
+      ));
       if ($attempts === 0 || $successes > 0) {
-        $wpdb->query($wpdb->prepare(
+        kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
           "UPDATE {$t['banners']} SET next_run = NULL WHERE id = %d",
           (int)$r['id']
-        ));
+        )));
       }
     }
   }
