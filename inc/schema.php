@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '9');
+  define('KKCHAT_DB_VERSION', '10');
 }
 
 /**
@@ -182,10 +182,23 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     KEY `idx_active` (`active`)
   ) $charset;";
 
+  $sql10 = "CREATE TABLE IF NOT EXISTS `{$t['user_last_messages']}` (
+    `user_id` INT UNSIGNED NOT NULL,
+    `message_id` BIGINT UNSIGNED NOT NULL,
+    `content` TEXT NOT NULL,
+    `room` VARCHAR(64) NULL,
+    `recipient_id` INT UNSIGNED NULL,
+    `recipient_name` VARCHAR(64) NULL,
+    `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
+    `created_at` INT UNSIGNED NOT NULL,
+    PRIMARY KEY (`user_id`),
+    KEY `idx_message` (`message_id`)
+  ) $charset;";
+
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
   dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4);
   dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8);
-  dbDelta($sql9);
+  dbDelta($sql9); dbDelta($sql10);
 
   // Remove legacy typing columns if they linger after dbDelta
   foreach (['typing_text', 'typing_room', 'typing_to', 'typing_at'] as $col) {
@@ -276,6 +289,23 @@ function kkchat_maybe_migrate(){
   // 1) Ensure messages table exists (fallback to installer)
   if (!kkchat_table_exists($t['messages']) && function_exists('kkchat_activate')) {
     kkchat_activate();
+  }
+
+  if (!kkchat_table_exists($t['user_last_messages'])) {
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    $charset = $wpdb->get_charset_collate();
+    dbDelta("CREATE TABLE `{$t['user_last_messages']}` (
+      `user_id` INT UNSIGNED NOT NULL,
+      `message_id` BIGINT UNSIGNED NOT NULL,
+      `content` TEXT NOT NULL,
+      `room` VARCHAR(64) NULL,
+      `recipient_id` INT UNSIGNED NULL,
+      `recipient_name` VARCHAR(64) NULL,
+      `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
+      `created_at` INT UNSIGNED NOT NULL,
+      PRIMARY KEY (`user_id`),
+      KEY `idx_message` (`message_id`)
+    ) $charset;");
   }
 
   // 2) Add soft-delete columns / indexes if missing

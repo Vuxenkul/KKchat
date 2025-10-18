@@ -206,19 +206,9 @@ add_action('rest_api_init', function () {
       $since_pub = (int) ($ctx['since_pub'] ?? 0);
       $is_admin_viewer = !empty($ctx['is_admin_viewer']);
 
-      $wpdb->query($wpdb->prepare(
-        "DELETE FROM {$t['users']}
-          WHERE %d - last_seen > %d",
-        $now, kkchat_user_ttl()
-      ));
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET watch_flag = 0, watch_flag_at = NULL
-          WHERE watch_flag = 1
-            AND watch_flag_at IS NOT NULL
-            AND %d - watch_flag_at > %d",
-        $now, kkchat_watch_reset_after()
-      ));
+      if (function_exists('kkchat_schedule_presence_sweep')) {
+        kkchat_schedule_presence_sweep();
+      }
       $admin_names = kkchat_admin_usernames();
       $presence    = [];
       if ($is_admin_viewer) {
@@ -230,31 +220,14 @@ add_action('rest_api_init', function () {
                     u.watch_flag,
                     u.wp_username,
                     u.last_seen,
-                    lm.last_content,
-                    lm.last_room,
-                    lm.last_recipient_id,
-                    lm.last_recipient_name,
-                    lm.last_kind,
-                    lm.last_created_at
+                    lm.content AS last_content,
+                    lm.room AS last_room,
+                    lm.recipient_id AS last_recipient_id,
+                    lm.recipient_name AS last_recipient_name,
+                    lm.kind AS last_kind,
+                    lm.created_at AS last_created_at
                FROM {$t['users']} u
-          LEFT JOIN (
-                SELECT m.sender_id,
-                       SUBSTRING(m.content, 1, 200) AS last_content,
-                       m.room AS last_room,
-                       m.recipient_id AS last_recipient_id,
-                       m.recipient_name AS last_recipient_name,
-                       m.kind AS last_kind,
-                       m.created_at AS last_created_at
-                  FROM {$t['messages']} m
-            INNER JOIN (
-                      SELECT sender_id, MAX(id) AS last_id
-                        FROM {$t['messages']}
-                       WHERE hidden_at IS NULL
-                    GROUP BY sender_id
-                    ) latest
-                    ON latest.sender_id = m.sender_id AND latest.last_id = m.id
-                 WHERE m.hidden_at IS NULL
-              ) lm ON lm.sender_id = u.id
+          LEFT JOIN {$t['user_last_messages']} lm ON lm.user_id = u.id
               WHERE %d - u.last_seen <= %d
               ORDER BY u.name_lc ASC
               LIMIT %d",
@@ -741,12 +714,9 @@ add_action('rest_api_init', function () {
       global $wpdb; $t = kkchat_tables();
       $now = time();
 
-      // Clean old presences
-      kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
-        "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
-        $now,
-        kkchat_user_ttl()
-      )));
+      if (function_exists('kkchat_schedule_presence_sweep')) {
+        kkchat_schedule_presence_sweep();
+      }
 
       // Insert presence (wp_username is NULL for guests)
       $name_lc = mb_strtolower($nick, 'UTF-8');
@@ -1116,27 +1086,9 @@ register_rest_route($ns, '/users', [
     // without blocking other requests (especially long-pollers).
     kkchat_close_session_if_open();
 
-    // Housekeeping: purge stale presences
-    $wpdb->query(
-      $wpdb->prepare(
-        "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
-        $now,
-        kkchat_user_ttl()
-      )
-    );
-
-    // Auto-clear watchlist highlights after N seconds
-    $wpdb->query(
-      $wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET watch_flag = 0, watch_flag_at = NULL
-          WHERE watch_flag = 1
-            AND watch_flag_at IS NOT NULL
-            AND %d - watch_flag_at > %d",
-        $now,
-        kkchat_watch_reset_after()
-      )
-    );
+    if (function_exists('kkchat_schedule_presence_sweep')) {
+      kkchat_schedule_presence_sweep();
+    }
 
     if ($is_admin_viewer) {
       $rows = $wpdb->get_results(
@@ -1146,31 +1098,14 @@ register_rest_route($ns, '/users', [
                 u.watch_flag,
                 u.wp_username,
                 u.last_seen,
-                lm.last_content,
-                lm.last_room,
-                lm.last_recipient_id,
-                lm.last_recipient_name,
-                lm.last_kind,
-                lm.last_created_at
+                lm.content AS last_content,
+                lm.room AS last_room,
+                lm.recipient_id AS last_recipient_id,
+                lm.recipient_name AS last_recipient_name,
+                lm.kind AS last_kind,
+                lm.created_at AS last_created_at
            FROM {$t['users']} u
-      LEFT JOIN (
-            SELECT m.sender_id,
-                   SUBSTRING(m.content, 1, 200) AS last_content,
-                   m.room AS last_room,
-                   m.recipient_id AS last_recipient_id,
-                   m.recipient_name AS last_recipient_name,
-                   m.kind AS last_kind,
-                   m.created_at AS last_created_at
-              FROM {$t['messages']} m
-        INNER JOIN (
-                  SELECT sender_id, MAX(id) AS last_id
-                    FROM {$t['messages']}
-                   WHERE hidden_at IS NULL
-                GROUP BY sender_id
-                ) latest
-                ON latest.sender_id = m.sender_id AND latest.last_id = m.id
-             WHERE m.hidden_at IS NULL
-          ) lm ON lm.sender_id = u.id
+      LEFT JOIN {$t['user_last_messages']} lm ON lm.user_id = u.id
        ORDER BY u.name ASC",
         ARRAY_A
       );
@@ -1249,29 +1184,8 @@ register_rest_route($ns, '/ping', [
     $t   = kkchat_tables();
     $now = time();
 
-    // Clear expired watch flags
-    $wpdb->query(
-      $wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET watch_flag = 0, watch_flag_at = NULL
-          WHERE watch_flag = 1
-            AND watch_flag_at IS NOT NULL
-            AND %d - watch_flag_at > %d",
-        $now,
-        kkchat_watch_reset_after()
-      )
-    );
-
-    // (Optional) light, probabilistic purge of very stale presences
-    if (mt_rand(1, 20) === 1) {
-      $wpdb->query(
-        $wpdb->prepare(
-          "DELETE FROM {$t['users']}
-            WHERE %d - last_seen > %d",
-          $now,
-          kkchat_user_ttl()
-        )
-      );
+    if (function_exists('kkchat_schedule_presence_sweep')) {
+      kkchat_schedule_presence_sweep();
     }
 
     // --- Admin-only: open report count + rising-edge anchor (cheap) ---
@@ -1760,6 +1674,42 @@ register_rest_route($ns, '/fetch', [
 
         $mid = (int) $wpdb->insert_id;
 
+        if (!empty($t['user_last_messages'])) {
+          $summaryText = mb_substr((string) ($data['content'] ?? ''), 0, 200, 'UTF-8');
+          $summaryRoom = isset($data['room']) ? (string) $data['room'] : '';
+          $summaryRecipientId = isset($data['recipient_id']) ? (int) $data['recipient_id'] : 0;
+          $summaryRecipientName = isset($data['recipient_name']) ? (string) $data['recipient_name'] : '';
+          $summaryKind = (string) ($data['kind'] ?? 'chat');
+          $summaryCreatedAt = (int) ($data['created_at'] ?? time());
+          $senderId = (int) ($data['sender_id'] ?? 0);
+
+          $sql = $wpdb->prepare(
+            "INSERT INTO {$t['user_last_messages']} (user_id, message_id, content, room, recipient_id, recipient_name, kind, created_at)
+             VALUES (%d,%d,%s,NULLIF(%s,''),NULLIF(%d,0),NULLIF(%s,''),%s,%d)
+             ON DUPLICATE KEY UPDATE
+               message_id = GREATEST(message_id, VALUES(message_id)),
+               content = CASE WHEN VALUES(message_id) >= message_id THEN VALUES(content) ELSE content END,
+               room = CASE WHEN VALUES(message_id) >= message_id THEN VALUES(room) ELSE room END,
+               recipient_id = CASE WHEN VALUES(message_id) >= message_id THEN VALUES(recipient_id) ELSE recipient_id END,
+               recipient_name = CASE WHEN VALUES(message_id) >= message_id THEN VALUES(recipient_name) ELSE recipient_name END,
+               kind = CASE WHEN VALUES(message_id) >= message_id THEN VALUES(kind) ELSE kind END,
+               created_at = CASE WHEN VALUES(message_id) >= message_id THEN VALUES(created_at) ELSE created_at END",
+            $senderId,
+            $mid,
+            $summaryText,
+            $summaryRoom,
+            $summaryRecipientId,
+            $summaryRecipientName,
+            $summaryKind,
+            $summaryCreatedAt
+          );
+
+          if ($sql === false || $wpdb->query($sql) === false) {
+            $wpdb->query('ROLLBACK');
+            return false;
+          }
+        }
+
         $wpdb->query('COMMIT');
         return true;
       }, 1);
@@ -1860,25 +1810,34 @@ register_rest_route($ns, '/reads/mark', [
     }
 
     if (!empty($dmUpdates) && !empty($t['last_dm_reads'])) {
+      $values = [];
+      $params = [];
+
       foreach ($dmUpdates as $peer => $mid) {
         $peer = (int) $peer;
         $mid  = (int) $mid;
         if ($peer <= 0 || $mid <= 0) { continue; }
 
-        $wpdb->query(
-          $wpdb->prepare(
-            "INSERT INTO {$t['last_dm_reads']} (user_id, peer_id, last_msg_id, updated_at)
-             VALUES (%d,%d,%d,%d)
-             ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),
-                                     updated_at = VALUES(updated_at)",
-            $me,
-            $peer,
-            $mid,
-            $now
-          )
-        );
+        $values[] = '(%d,%d,%d,%d)';
+        $params[] = $me;
+        $params[] = $peer;
+        $params[] = $mid;
+        $params[] = $now;
+      }
+
+      if (!empty($values)) {
+        $sql = "INSERT INTO {$t['last_dm_reads']} (user_id, peer_id, last_msg_id, updated_at) VALUES "
+          . implode(',', $values)
+          . " ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),"
+          . " updated_at = VALUES(updated_at)";
+
+        $prepared = $wpdb->prepare($sql, ...$params);
+        if ($prepared !== false) {
+          kkchat_db_try(fn() => $wpdb->query($prepared));
+        }
       }
     }
+
 
     if ($room_slug !== '' && $room_last_id > 0) {
       $row = $wpdb->get_row(
@@ -1899,33 +1858,53 @@ register_rest_route($ns, '/reads/mark', [
     }
 
     if (!empty($roomUpdates) && !empty($t['last_reads'])) {
+      $values = [];
+      $params = [];
+      $seenUpdates = [];
+
       foreach ($roomUpdates as $slug => $mid) {
         $slug = kkchat_sanitize_room_slug((string) $slug);
         $mid  = (int) $mid;
         if ($slug === '' || $mid <= 0) { continue; }
 
-        $wpdb->query(
-          $wpdb->prepare(
-            "INSERT INTO {$t['last_reads']} (user_id, room_slug, last_msg_id, updated_at)
-             VALUES (%d,%s,%d,%d)
-             ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),
-                                     updated_at = VALUES(updated_at)",
-            $me,
-            $slug,
-            $mid,
-            $now
-          )
-        );
+        $values[] = '(%d,%s,%d,%d)';
+        $params[] = $me;
+        $params[] = $slug;
+        $params[] = $mid;
+        $params[] = $now;
 
-        $seenAt = (int) ($roomSeenAt[$slug] ?? 0);
-        if ($seenAt > 0) {
-          $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);
-          if ($seenAt > $prev) {
-            $_SESSION['kkchat_seen_at_public'] = $seenAt;
+        $seen = (int) ($roomSeenAt[$slug] ?? 0);
+        if ($seen > 0) {
+          $seenUpdates[$slug] = max($seenUpdates[$slug] ?? 0, $seen);
+        }
+      }
+
+      if (!empty($values)) {
+        $sql = "INSERT INTO {$t['last_reads']} (user_id, room_slug, last_msg_id, updated_at) VALUES "
+          . implode(',', $values)
+          . " ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),"
+          . " updated_at = VALUES(updated_at)";
+
+        $prepared = $wpdb->prepare($sql, ...$params);
+        $result = false;
+        if ($prepared !== false) {
+          $result = kkchat_db_try(fn() => $wpdb->query($prepared));
+        }
+
+        if ($result !== false) {
+          foreach ($seenUpdates as $slug => $seenAt) {
+            $seenAt = (int) $seenAt;
+            if ($seenAt > 0) {
+              $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);
+              if ($seenAt > $prev) {
+                $_SESSION['kkchat_seen_at_public'] = $seenAt;
+              }
+            }
           }
         }
       }
     }
+
 
     if ($public_since > 0) {
       $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);

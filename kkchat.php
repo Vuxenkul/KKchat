@@ -30,6 +30,7 @@ function kkchat_tables(){
     'reads'       => $p.'reads',
     'last_reads'  => $p.'last_reads',
     'last_dm_reads' => $p.'last_dm_reads',
+    'user_last_messages' => $p.'user_last_messages',
     'users'       => $p.'users',      // ← was kkchat_active_users
     'rooms'       => $p.'rooms',
     'banners'     => $p.'banners',
@@ -63,6 +64,62 @@ function kkchat_ensure_users_table() {
   ) $charset;");
 }
 add_action('init', 'kkchat_ensure_users_table', 1);
+
+function kkchat_schedule_presence_sweep(): void {
+  if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_single_event')) {
+    return;
+  }
+
+  $hook = 'kkchat_presence_sweep';
+  $now  = time();
+
+  $next = wp_next_scheduled($hook);
+  if ($next && $next >= ($now - 5)) {
+    return;
+  }
+
+  wp_schedule_single_event($now + 5, $hook);
+}
+
+function kkchat_run_presence_maintenance(): void {
+  kkchat_db_check_connection();
+  global $wpdb; $t = kkchat_tables();
+
+  $now = time();
+
+  $ttl = (int) kkchat_user_ttl();
+  if ($ttl > 0) {
+    kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
+      "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
+      $now,
+      $ttl
+    )));
+
+    if (!empty($t['user_last_messages'])) {
+      kkchat_db_try(fn() => $wpdb->query(
+        "DELETE lm FROM {$t['user_last_messages']} lm"
+        . " LEFT JOIN {$t['users']} u ON u.id = lm.user_id"
+        . " WHERE u.id IS NULL"
+      ));
+    }
+  }
+
+  $resetAfter = (int) kkchat_watch_reset_after();
+  if ($resetAfter > 0) {
+    kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
+      "UPDATE {$t['users']}"
+      . "   SET watch_flag = 0, watch_flag_at = NULL"
+      . " WHERE watch_flag = 1"
+      . "   AND watch_flag_at IS NOT NULL"
+      . "   AND %d - watch_flag_at > %d",
+      $now,
+      $resetAfter
+    )));
+  }
+}
+
+add_action('kkchat_presence_sweep', 'kkchat_run_presence_maintenance');
+add_action('kkchat_cron_tick', 'kkchat_run_presence_maintenance', 5);
 
 
 // Register the front-end stylesheet for the shortcode.
@@ -350,6 +407,10 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
     }
     if ($id > 0) {
       $_SESSION['kkchat_user_id'] = $id;
+    }
+
+    if (function_exists('kkchat_schedule_presence_sweep')) {
+      kkchat_schedule_presence_sweep();
     }
   } elseif ($id <= 0) {
     kkchat_db_check_connection();
