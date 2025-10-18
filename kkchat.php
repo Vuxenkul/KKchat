@@ -122,6 +122,279 @@ add_action('kkchat_presence_sweep', 'kkchat_run_presence_maintenance');
 add_action('kkchat_cron_tick', 'kkchat_run_presence_maintenance', 5);
 
 
+/* ------------------------------
+ * Direct Message cache helpers
+ * ------------------------------ */
+function kkchat_dm_cache_backend(): string {
+  static $backend = null;
+  if ($backend !== null) { return $backend; }
+
+  if (kkchat_dm_cache_use_object_cache()) {
+    $backend = 'object';
+    return $backend;
+  }
+
+  $dir = kkchat_dm_cache_fs_dir();
+  if ($dir !== null) {
+    $backend = 'fs';
+    return $backend;
+  }
+
+  $backend = 'none';
+  return $backend;
+}
+
+function kkchat_dm_cache_use_object_cache(): bool {
+  if (!function_exists('wp_using_ext_object_cache')) {
+    return false;
+  }
+  return wp_using_ext_object_cache();
+}
+
+function kkchat_dm_cache_fs_dir(): ?string {
+  static $dir = null;
+  if ($dir === false) { return null; }
+  if (is_string($dir)) { return $dir; }
+
+  if (!function_exists('wp_upload_dir')) {
+    $dir = false;
+    return null;
+  }
+
+  $uploads = wp_upload_dir();
+  $base = isset($uploads['basedir']) ? (string) $uploads['basedir'] : '';
+  if ($base === '') {
+    $dir = false;
+    return null;
+  }
+
+  if (function_exists('trailingslashit')) {
+    $path = trailingslashit($base) . 'kkchat/dm-cache';
+  } else {
+    $path = rtrim($base, '\/') . '/kkchat/dm-cache';
+  }
+
+  if (!is_dir($path)) {
+    if (function_exists('wp_mkdir_p')) {
+      wp_mkdir_p($path);
+    } else {
+      @mkdir($path, 0755, true);
+    }
+  }
+
+  if (is_dir($path) && is_writable($path)) {
+    $dir = $path;
+    return $dir;
+  }
+
+  $dir = false;
+  return null;
+}
+
+function kkchat_dm_cache_enabled(): bool {
+  $backend = kkchat_dm_cache_backend();
+  $default = ($backend !== 'none');
+  return (bool) apply_filters('kkchat_dm_cache_enabled', $default);
+}
+
+function kkchat_dm_cache_key(int $a, int $b): string {
+  $x = max(0, (int) $a);
+  $y = max(0, (int) $b);
+  if ($x === $y) {
+    return 'solo:' . $x;
+  }
+  if ($x > $y) {
+    [$x, $y] = [$y, $x];
+  }
+  return 'pair:' . $x . ':' . $y;
+}
+
+function kkchat_dm_cache_normalize_rows(array $rows): array {
+  $normalized = [];
+  foreach ($rows as $row) {
+    if (!is_array($row)) { continue; }
+    $id = isset($row['id']) ? (int) $row['id'] : 0;
+    if ($id <= 0) { continue; }
+
+    $senderId = isset($row['sender_id']) ? (int) $row['sender_id'] : 0;
+    $recipientId = isset($row['recipient_id']) ? (int) $row['recipient_id'] : 0;
+
+    $normalized[$id] = [
+      'id'             => $id,
+      'room'           => isset($row['room']) ? ($row['room'] !== null ? (string) $row['room'] : null) : null,
+      'sender_id'      => $senderId,
+      'sender_name'    => (string) ($row['sender_name'] ?? ''),
+      'recipient_id'   => ($recipientId > 0) ? $recipientId : null,
+      'recipient_name' => isset($row['recipient_name']) ? ($row['recipient_name'] !== null ? (string) $row['recipient_name'] : null) : null,
+      'content'        => (string) ($row['content'] ?? ''),
+      'created_at'     => isset($row['created_at']) ? (int) $row['created_at'] : 0,
+      'kind'           => (string) ($row['kind'] ?? 'chat'),
+      'hidden_at'      => isset($row['hidden_at']) && $row['hidden_at'] !== null ? (int) $row['hidden_at'] : null,
+    ];
+  }
+
+  if (empty($normalized)) {
+    return [];
+  }
+
+  ksort($normalized, SORT_NUMERIC);
+  $items = array_values($normalized);
+
+  $cap = (int) apply_filters('kkchat_dm_cache_max_messages', 200);
+  if ($cap > 0 && count($items) > $cap) {
+    $items = array_slice($items, -$cap);
+  }
+
+  return $items;
+}
+
+function kkchat_dm_cache_get_pair(int $a, int $b): ?array {
+  if (!kkchat_dm_cache_enabled()) { return null; }
+
+  $backend = kkchat_dm_cache_backend();
+  $key = kkchat_dm_cache_key($a, $b);
+
+  if ($backend === 'object' && function_exists('wp_cache_get')) {
+    $cached = wp_cache_get($key, 'kkchat_dm');
+    if ($cached !== false) {
+      return is_array($cached) ? $cached : [];
+    }
+    return null;
+  }
+
+  if ($backend === 'fs') {
+    $dir = kkchat_dm_cache_fs_dir();
+    if ($dir === null) { return null; }
+    $path = $dir . '/' . md5($key) . '.json';
+    if (!is_readable($path)) { return null; }
+    $raw = file_get_contents($path);
+    if ($raw === false || $raw === '') { return null; }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+      @unlink($path);
+      return null;
+    }
+    $expires = isset($decoded['expires']) ? (int) $decoded['expires'] : 0;
+    if ($expires > 0 && $expires < time()) {
+      @unlink($path);
+      return null;
+    }
+    $data = isset($decoded['data']) && is_array($decoded['data']) ? $decoded['data'] : [];
+    return $data;
+  }
+
+  return null;
+}
+
+function kkchat_dm_cache_store_pair(int $a, int $b, array $rows): void {
+  if (!kkchat_dm_cache_enabled()) { return; }
+
+  $normalized = kkchat_dm_cache_normalize_rows($rows);
+  $key = kkchat_dm_cache_key($a, $b);
+  $ttl = max(0, (int) apply_filters('kkchat_dm_cache_ttl', 45));
+  if ($ttl <= 0) { $ttl = 60; }
+
+  $backend = kkchat_dm_cache_backend();
+
+  if ($backend === 'object' && function_exists('wp_cache_set')) {
+    wp_cache_set($key, $normalized, 'kkchat_dm', $ttl);
+    return;
+  }
+
+  if ($backend === 'fs') {
+    $dir = kkchat_dm_cache_fs_dir();
+    if ($dir === null) { return; }
+    $path = $dir . '/' . md5($key) . '.json';
+    $payload = [
+      'expires' => time() + $ttl,
+      'data'    => $normalized,
+    ];
+    $json = function_exists('wp_json_encode') ? wp_json_encode($payload) : json_encode($payload);
+    if ($json !== false) {
+      file_put_contents($path, $json, LOCK_EX);
+    }
+  }
+}
+
+function kkchat_dm_cache_merge_pair(int $a, int $b, array $rows): void {
+  if (!kkchat_dm_cache_enabled() || empty($rows)) { return; }
+
+  $existing = kkchat_dm_cache_get_pair($a, $b);
+  if ($existing === null) {
+    kkchat_dm_cache_store_pair($a, $b, $rows);
+    return;
+  }
+
+  $merged = array_merge($existing, $rows);
+  kkchat_dm_cache_store_pair($a, $b, $merged);
+}
+
+function kkchat_dm_cache_select(int $a, int $b, int $since, int $limit): ?array {
+  $stored = kkchat_dm_cache_get_pair($a, $b);
+  if ($stored === null) { return null; }
+
+  $limit = max(1, $limit);
+
+  if ($since < 0) {
+    if (count($stored) > $limit) {
+      return array_slice($stored, -$limit);
+    }
+    return $stored;
+  }
+
+  $filtered = [];
+  foreach ($stored as $row) {
+    if ((int) ($row['id'] ?? 0) > $since) {
+      $filtered[] = $row;
+      if (count($filtered) >= $limit) { break; }
+    }
+  }
+
+  return $filtered;
+}
+
+function kkchat_dm_cache_drop_pair(int $a, int $b): void {
+  if (!kkchat_dm_cache_enabled()) { return; }
+
+  $backend = kkchat_dm_cache_backend();
+  $key = kkchat_dm_cache_key($a, $b);
+
+  if ($backend === 'object' && function_exists('wp_cache_delete')) {
+    wp_cache_delete($key, 'kkchat_dm');
+    return;
+  }
+
+  if ($backend === 'fs') {
+    $dir = kkchat_dm_cache_fs_dir();
+    if ($dir === null) { return; }
+    $path = $dir . '/' . md5($key) . '.json';
+    if (file_exists($path)) {
+      @unlink($path);
+    }
+  }
+}
+
+function kkchat_dm_cache_after_fetch(int $a, int $b, array $rows, int $since): void {
+  if (!kkchat_dm_cache_enabled()) { return; }
+
+  if ($since < 0) {
+    kkchat_dm_cache_store_pair($a, $b, $rows);
+  } else {
+    kkchat_dm_cache_merge_pair($a, $b, $rows);
+  }
+}
+
+function kkchat_dm_cache_append_message(array $row): void {
+  if (!kkchat_dm_cache_enabled()) { return; }
+
+  $sender = isset($row['sender_id']) ? (int) $row['sender_id'] : 0;
+  $recipient = isset($row['recipient_id']) ? (int) $row['recipient_id'] : 0;
+  if ($sender <= 0 || $recipient <= 0) { return; }
+
+  kkchat_dm_cache_merge_pair($sender, $recipient, [$row]);
+}
+
+
 // Register the front-end stylesheet for the shortcode.
 add_action('wp_enqueue_scripts', function () {
     $css_path = plugin_dir_path(__FILE__) . 'assets/css/kkchat.css';

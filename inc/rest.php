@@ -408,34 +408,48 @@ add_action('rest_api_init', function () {
         }
       } else {
         if ($peer) {
-          if ($since < 0) {
-            $rows = $wpdb->get_results(
-              $wpdb->prepare(
-                "SELECT $msgColumns FROM {$t['messages']}
-                 WHERE hidden_at IS NULL
-                   AND ((sender_id = %d AND recipient_id = %d) OR
-                        (sender_id = %d AND recipient_id = %d))
-                 ORDER BY id DESC
-                 LIMIT %d",
-                $me, $peer, $peer, $me, $limit
-              ),
-              ARRAY_A
-            ) ?: [];
-            $rows = array_reverse($rows);
-          } else {
-            $rows = $wpdb->get_results(
-              $wpdb->prepare(
-                "SELECT $msgColumns FROM {$t['messages']}
-                 WHERE id > %d
-                   AND hidden_at IS NULL
-                   AND ((sender_id = %d AND recipient_id = %d) OR
-                        (sender_id = %d AND recipient_id = %d))
-                 ORDER BY id ASC
-                 LIMIT %d",
-                $since, $me, $peer, $peer, $me, $limit
-              ),
-              ARRAY_A
-            ) ?: [];
+          $rows = null;
+          if (function_exists('kkchat_dm_cache_select')) {
+            $cached = kkchat_dm_cache_select($me, $peer, $since, $limit);
+            if ($cached !== null) {
+              $rows = $cached;
+            }
+          }
+
+          if ($rows === null) {
+            if ($since < 0) {
+              $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                  "SELECT $msgColumns FROM {$t['messages']}
+                   WHERE hidden_at IS NULL
+                     AND ((sender_id = %d AND recipient_id = %d) OR
+                          (sender_id = %d AND recipient_id = %d))
+                   ORDER BY id DESC
+                   LIMIT %d",
+                  $me, $peer, $peer, $me, $limit
+                ),
+                ARRAY_A
+              ) ?: [];
+              $rows = array_reverse($rows);
+            } else {
+              $rows = $wpdb->get_results(
+                $wpdb->prepare(
+                  "SELECT $msgColumns FROM {$t['messages']}
+                   WHERE id > %d
+                     AND hidden_at IS NULL
+                     AND ((sender_id = %d AND recipient_id = %d) OR
+                          (sender_id = %d AND recipient_id = %d))
+                   ORDER BY id ASC
+                   LIMIT %d",
+                  $since, $me, $peer, $peer, $me, $limit
+                ),
+                ARRAY_A
+              ) ?: [];
+            }
+
+            if (function_exists('kkchat_dm_cache_after_fetch')) {
+              kkchat_dm_cache_after_fetch($me, $peer, $rows, $since);
+            }
           }
         } else {
           $rows = $wpdb->get_results(
@@ -1720,6 +1734,21 @@ register_rest_route($ns, '/fetch', [
 
       $mid = (int) $mid;
 
+      if ($recipient !== null && function_exists('kkchat_dm_cache_append_message')) {
+        kkchat_dm_cache_append_message([
+          'id' => $mid,
+          'room' => null,
+          'sender_id' => $me_id,
+          'sender_name' => $me_nm,
+          'recipient_id' => $recipient,
+          'recipient_name' => $recipient_name,
+          'content' => $content,
+          'created_at' => $now,
+          'kind' => $kind,
+          'hidden_at' => null,
+        ]);
+      }
+
     kkchat_json(['ok'=>true,'id'=>$mid]);
 
     },
@@ -2193,6 +2222,10 @@ register_rest_route($ns, '/moderate/hide-message', [
       kkchat_json(['ok' => false, 'err' => 'db'], 500);
     }
 
+    if (!empty($msg['recipient_id']) && function_exists('kkchat_dm_cache_drop_pair')) {
+      kkchat_dm_cache_drop_pair((int) $msg['sender_id'], (int) $msg['recipient_id']);
+    }
+
     kkchat_json(['ok'=>true]);
   },
 ]);
@@ -2213,6 +2246,11 @@ register_rest_route($ns, '/moderate/hide-message', [
         ));
         if ($exists === 0) kkchat_json(['ok'=>false,'err'=>'no_message'], 404);
 
+        $participants = $wpdb->get_row($wpdb->prepare(
+          "SELECT sender_id, recipient_id FROM {$t['messages']} WHERE id = %d LIMIT 1",
+          $mid
+        ), ARRAY_A);
+
         // Use raw SQL so NULLs are truly NULL (wpdb->update can coerce)
         $restored = kkchat_db_try(fn() => $wpdb->query($wpdb->prepare(
           "UPDATE {$t['messages']}
@@ -2227,7 +2265,12 @@ register_rest_route($ns, '/moderate/hide-message', [
           kkchat_json(['ok'=>false,'err'=>'db'], 500);
         }
 
+        if (!empty($participants['recipient_id']) && function_exists('kkchat_dm_cache_drop_pair')) {
+          kkchat_dm_cache_drop_pair((int) ($participants['sender_id'] ?? 0), (int) $participants['recipient_id']);
+        }
+
         kkchat_json(['ok'=>true]);
+
       },
     ]);
 
