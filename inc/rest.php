@@ -260,16 +260,56 @@ add_action('rest_api_init', function () {
       $hook   = 'kkchat_sync_queue_run';
       $target = time() + max(0, $delay);
       $next   = wp_next_scheduled($hook);
+      $shouldSpawn = false;
+      $dueAt = $next ?: $target;
 
       if ($next && $next <= $target) {
+        $shouldSpawn = true;
+        $dueAt       = $next;
+      } else {
+        if ($next && function_exists('wp_unschedule_event')) {
+          wp_unschedule_event($next, $hook);
+        }
+
+        $scheduled = wp_schedule_single_event($target, $hook);
+        if ($scheduled !== false) {
+          $shouldSpawn = true;
+          $dueAt       = $target;
+        }
+      }
+
+      if ($shouldSpawn) {
+        kkchat_sync_trigger_cron_runner($dueAt);
+      }
+    }
+  }
+
+  if (!function_exists('kkchat_sync_trigger_cron_runner')) {
+    function kkchat_sync_trigger_cron_runner(int $dueAt): void {
+      if (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON) { return; }
+      if (function_exists('wp_doing_cron') && wp_doing_cron()) { return; }
+      if (!function_exists('spawn_cron') && !function_exists('wp_cron')) { return; }
+
+      $now       = time();
+      $threshold = (int) apply_filters('kkchat_sync_cron_spawn_threshold', 5);
+      if ($threshold < 0) { $threshold = 0; }
+      if ($dueAt - $now > $threshold) { return; }
+
+      $lockKey  = 'kkchat_sync_spawn_lock';
+      $throttle = max(1, (int) apply_filters('kkchat_sync_cron_spawn_throttle', 5));
+      if (function_exists('get_transient') && get_transient($lockKey)) { return; }
+      if (function_exists('set_transient')) {
+        set_transient($lockKey, 1, $throttle);
+      }
+
+      if (function_exists('spawn_cron')) {
+        spawn_cron($now);
         return;
       }
 
-      if ($next && function_exists('wp_unschedule_event')) {
-        wp_unschedule_event($next, $hook);
+      if (function_exists('wp_cron')) {
+        wp_cron();
       }
-
-      wp_schedule_single_event($target, $hook);
     }
   }
 
