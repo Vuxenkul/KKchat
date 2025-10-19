@@ -443,6 +443,7 @@ f.addEventListener('submit', async (ev)=>{
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
   const POLL_SETTINGS = Object.freeze(<?= wp_json_encode($poll_settings) ?>);
+  const SITE_TIME = Object.freeze(<?= wp_json_encode(kkchat_site_js_time_settings()) ?>);
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -469,6 +470,102 @@ f.addEventListener('submit', async (ev)=>{
   function iconMarkup(name, { filled = false } = {}) {
     const cls = filled ? `${MATERIAL_ICON_CLASS} icon-fill` : MATERIAL_ICON_CLASS;
     return `<span class="${cls}" aria-hidden="true">${name}</span>`;
+  }
+
+  const DEFAULT_LOCALE = (SITE_TIME && typeof SITE_TIME.locale === 'string' && SITE_TIME.locale)
+    ? SITE_TIME.locale
+    : 'sv-SE';
+
+  function formatSiteTime(rawTs, display) {
+    const preset = typeof display === 'string' ? display.trim() : '';
+    if (preset) return preset;
+
+    const ts = Number(rawTs);
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+
+    const date = new Date(ts * 1000);
+    const locale = DEFAULT_LOCALE;
+    const baseOpts = { hour: '2-digit', minute: '2-digit' };
+
+    if (SITE_TIME && typeof SITE_TIME.timeZone === 'string' && SITE_TIME.timeZone) {
+      const options = { ...baseOpts, timeZone: SITE_TIME.timeZone };
+      try {
+        return date.toLocaleTimeString(locale, options);
+      } catch (err) {
+        try {
+          return new Intl.DateTimeFormat(locale, options).format(date);
+        } catch (_) {}
+      }
+    }
+
+    if (SITE_TIME && Number.isFinite(Number(SITE_TIME.offsetSeconds))) {
+      const offset = Number(SITE_TIME.offsetSeconds);
+      const offsetDate = new Date((ts + offset) * 1000);
+      const hh = String(offsetDate.getUTCHours()).padStart(2, '0');
+      const mm = String(offsetDate.getUTCMinutes()).padStart(2, '0');
+      return `${hh}:${mm}`;
+    }
+
+    try {
+      return date.toLocaleTimeString(locale, baseOpts);
+    } catch (_) {}
+
+    try {
+      return date.toLocaleTimeString();
+    } catch (_) {}
+
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+
+  function formatSiteDateTime(rawTs, display) {
+    const preset = typeof display === 'string' ? display.trim() : '';
+    if (preset) return preset;
+
+    const ts = Number(rawTs);
+    if (!Number.isFinite(ts) || ts <= 0) return '';
+
+    const date = new Date(ts * 1000);
+    const locale = DEFAULT_LOCALE;
+    const baseOpts = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' };
+
+    if (SITE_TIME && typeof SITE_TIME.timeZone === 'string' && SITE_TIME.timeZone) {
+      const options = { ...baseOpts, timeZone: SITE_TIME.timeZone };
+      try {
+        return date.toLocaleString(locale, options);
+      } catch (err) {
+        try {
+          return new Intl.DateTimeFormat(locale, options).format(date);
+        } catch (_) {}
+      }
+    }
+
+    if (SITE_TIME && Number.isFinite(Number(SITE_TIME.offsetSeconds))) {
+      const offset = Number(SITE_TIME.offsetSeconds);
+      const offsetDate = new Date((ts + offset) * 1000);
+      const y = offsetDate.getUTCFullYear();
+      const m = String(offsetDate.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(offsetDate.getUTCDate()).padStart(2, '0');
+      const h = String(offsetDate.getUTCHours()).padStart(2, '0');
+      const min = String(offsetDate.getUTCMinutes()).padStart(2, '0');
+      return `${y}-${m}-${d} ${h}:${min}`;
+    }
+
+    try {
+      return date.toLocaleString(locale, baseOpts);
+    } catch (_) {}
+
+    try {
+      return date.toLocaleString();
+    } catch (_) {}
+
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    const h = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${d} ${h}:${min}`;
   }
 
   multiTabUseHere?.addEventListener('click', (ev)=>{
@@ -2051,7 +2148,7 @@ async function doLogout(){
   const mid = Number(m.id);
   const sid = Number(m.sender_id||0);
   const who = m.sender_name || 'Okänd';
-  const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+  const when = formatSiteTime(m?.time, m?.time_display);
   const roleClass = isAdminById?.(sid) ? ' admin' : '';
   rememberName(sid, m.sender_name);
   const gender = genderById(sid);
@@ -2362,7 +2459,7 @@ function renderList(el, items){
       rememberName(m.sender_id, m.sender_name);
       const gender = genderById(m.sender_id);
 
-      const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+      const when = formatSiteTime(m?.time, m?.time_display);
       const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
       let bubbleHTML = '';
@@ -2763,8 +2860,8 @@ function normalizeUnreadMap(map) {
 
   const ts = Number(info.time);
   const timeLabel = Number.isFinite(ts) && ts > 0
-    ? new Date(ts * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
-    : '';
+    ? formatSiteTime(ts, info.time_display)
+    : (typeof info.time_display === 'string' ? info.time_display : '');
 
   const ctxPart = ctx ? `${esc(ctx)}: ` : '';
   const timePart = timeLabel ? ` <span class="last-msg-time">${esc(timeLabel)}</span>` : '';
@@ -3009,6 +3106,7 @@ function coerceLastMessage(raw){
   const toVal = src.to ?? src.recipient_id ?? src.last_recipient_id ?? null;
   const kindVal = src.kind ?? src.last_kind ?? 'chat';
   const timeVal = src.time ?? src.last_created_at ?? src.created_at ?? null;
+  const timeDisplayVal = src.time_display ?? src.last_time_display ?? src.created_at_display ?? null;
   const textVal = src.text ?? src.content ?? src.last_content ?? '';
   const recipName = src.recipient_name ?? src.last_recipient_name ?? null;
 
@@ -3019,6 +3117,7 @@ function coerceLastMessage(raw){
     recipient_name: recipName ? String(recipName) : null,
     kind: String(kindVal || 'chat'),
     time: Number.isFinite(Number(timeVal)) ? Math.floor(Number(timeVal)) : null,
+    time_display: typeof timeDisplayVal === 'string' ? timeDisplayVal : null,
   };
 
   const meaningfulText = normalized.text.trim();
@@ -3044,6 +3143,9 @@ function updateLastMessageFromMessage(m){
     time: Number.isFinite(Number(m?.time)) ? Number(m.time)
         : (Number.isFinite(Number(m?.created_at)) ? Number(m.created_at) : Math.floor(Date.now()/1000)),
   };
+  info.time_display = typeof m?.time_display === 'string'
+    ? m.time_display
+    : formatSiteTime(info.time);
 
   cacheLastMessage(sid, info);
   USERS = USERS.map(u => (Number(u.id) === sid ? { ...u, last_message: info } : u));
@@ -4604,8 +4706,8 @@ function appendPendingMessage(text){
     li.dataset.sname = ME_NM || '';
   }
 
-  const now = new Date();
-  const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const now = Math.floor(Date.now() / 1000);
+  const when = formatSiteTime(now);
   const who = typeof ME_NM !== 'undefined' ? ME_NM || '' : '';
   const gender = (typeof genderById === 'function' && typeof ME_ID !== 'undefined')
     ? genderById(ME_ID)
@@ -4659,8 +4761,9 @@ function finalizePendingMessage(pending, payload){
 
     const bubbleMeta = pending.querySelector('.bubble-meta-text');
     const serverTime = Number(payload?.time ?? 0);
-    if (bubbleMeta && Number.isFinite(serverTime) && serverTime > 0) {
-      const when = new Date(serverTime * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+    const display = typeof payload?.time_display === 'string' ? payload.time_display : null;
+    if (bubbleMeta && (Number.isFinite(serverTime) && serverTime > 0 || display)) {
+      const when = formatSiteTime(serverTime, display);
       const parts = bubbleMeta.innerHTML.split('<br>');
       if (parts.length === 2) {
         parts[1] = esc(when);
@@ -5181,8 +5284,14 @@ jumpBtn.addEventListener('click', ()=>{
   logClose?.addEventListener('click', closeLogs);
   logPanel?.addEventListener('click', (e)=>{ if (e.target === logPanel) closeLogs(); });
 
-  function fmtWhen(ts){
-    try{ return new Date(ts*1000).toLocaleString('sv-SE'); }catch(_){ return String(ts); }
+  function fmtWhen(ts, display){
+    const label = formatSiteDateTime(ts, display);
+    if (label) return label;
+    try {
+      return String(ts);
+    } catch (_) {
+      return '';
+    }
   }
     function playReportOnce(){
     try{
@@ -5206,7 +5315,7 @@ jumpBtn.addEventListener('click', ()=>{
       return `
         <div class="user report" data-id="${id}">
           <div class="user-main">
-            <b>#${id} • ${fmtWhen(ts)}</b>
+            <b>#${id} • ${fmtWhen(ts, r.created_at_display)}</b>
             <div class="small">Reporter: ${esc(rep)} → Reported: ${esc(tgt)}</div>
             <div class="small">${esc(reason)}</div>
           </div>
@@ -5280,7 +5389,7 @@ jumpBtn.addEventListener('click', ()=>{
     const left = document.createElement('div');
     left.className = 'meta';
     left.innerHTML =
-      `<div>${fmtWhen(m.time)}</div>
+      `<div>${fmtWhen(m.time, m.time_display_full || m.time_display)}</div>
        <div>${dmOrRoom(m)}</div>
        <div>${esc(m.kind||'chat')}</div>
        <div>ID: ${m.id || '-'}</div>`;

@@ -476,6 +476,7 @@ add_action('rest_api_init', function () {
 
         foreach ($presence_rows as $r) {
           $lastMsg = null;
+          $lastTs = isset($r['last_created_at']) ? (int) $r['last_created_at'] : 0;
           if (
             isset($r['last_content']) ||
             isset($r['last_room']) ||
@@ -488,7 +489,8 @@ add_action('rest_api_init', function () {
               'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
               'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
               'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-              'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+              'time'            => $lastTs > 0 ? $lastTs : null,
+              'time_display'    => $lastTs > 0 ? kkchat_site_time_display($lastTs) : null,
             ];
           }
 
@@ -713,9 +715,11 @@ add_action('rest_api_init', function () {
           }
           foreach ($rows as $r) {
             $mid = (int) $r['id'];
+            $ts  = isset($r['created_at']) ? (int) $r['created_at'] : 0;
             $msgs[] = [
               'id'             => $mid,
-              'time'           => (int) $r['created_at'],
+              'time'           => $ts,
+              'time_display'   => $ts > 0 ? kkchat_site_time_display($ts) : null,
               'kind'           => $r['kind'] ?: 'chat',
               'room'           => $r['room'] ?: null,
               'sender_id'      => (int) $r['sender_id'],
@@ -1463,6 +1467,7 @@ register_rest_route($ns, '/users', [
       $out = [];
       foreach ($rows ?? [] as $r) {
         $lastMsg = null;
+        $lastTs = isset($r['last_created_at']) ? (int) $r['last_created_at'] : 0;
         if (
           isset($r['last_content']) ||
           isset($r['last_room']) ||
@@ -1475,7 +1480,8 @@ register_rest_route($ns, '/users', [
             'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
             'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
             'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-            'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+            'time'            => $lastTs > 0 ? $lastTs : null,
+            'time_display'    => $lastTs > 0 ? kkchat_site_time_display($lastTs) : null,
           ];
         }
 
@@ -1750,9 +1756,11 @@ register_rest_route($ns, '/fetch', [
     if ($rows) {
       foreach ($rows as $r) {
         $mid = (int)$r['id'];
+        $ts  = isset($r['created_at']) ? (int)$r['created_at'] : 0;
         $out[] = [
           'id'           => $mid,
-          'time'         => (int)$r['created_at'],
+          'time'         => $ts,
+          'time_display' => $ts > 0 ? kkchat_site_time_display($ts) : null,
           'kind'         => $r['kind'] ?: 'chat',
           'room'         => $r['room'] ?: null,
           'sender_id'    => (int)$r['sender_id'],
@@ -2009,7 +2017,12 @@ register_rest_route($ns, '/fetch', [
 
       $mid = (int)$wpdb->insert_id;
 
-    kkchat_json(['ok'=>true,'id'=>$mid]);
+    kkchat_json([
+      'ok'           => true,
+      'id'           => $mid,
+      'time'         => $now,
+      'time_display' => kkchat_site_time_display($now),
+    ]);
 
     },
     'permission_callback' => '__return_true',
@@ -2312,9 +2325,11 @@ register_rest_route($ns, '/reads/mark', [
       );
 
       kkchat_json(['ok'=>true,'rows'=>array_map(static function($r){
+        $createdTs = isset($r['created_at']) ? (int)$r['created_at'] : 0;
         return [
           'id'            => (int)$r['id'],
           'created_at'    => (int)$r['created_at'],
+          'created_at_display' => $createdTs > 0 ? kkchat_site_datetime_display($createdTs) : null,
           'reporter_id'   => (int)$r['reporter_id'],
           'reporter_name' => (string)$r['reporter_name'],
           'reported_id'   => (int)$r['reported_id'],
@@ -2660,9 +2675,12 @@ register_rest_route($ns, '/admin/user-messages', [
     $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$limit])), ARRAY_A) ?: [];
 
     $out = array_map(function($m){
+      $ts = isset($m['created_at']) ? (int)$m['created_at'] : 0;
       return [
         'id'             => (int)$m['id'],
-        'time'           => (int)$m['created_at'],
+        'time'           => $ts,
+        'time_display'   => $ts > 0 ? kkchat_site_time_display($ts) : null,
+        'time_display_full' => $ts > 0 ? kkchat_site_datetime_display($ts) : null,
         'kind'           => $m['kind'] ?: 'chat',
         'room'           => $m['room'] ?: null,
         'sender_id'      => (int)$m['sender_id'],

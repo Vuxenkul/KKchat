@@ -124,6 +124,126 @@ function kkchat_json($data, int $code = 200) {
 
   exit;
 }
+
+function kkchat_site_timezone(): DateTimeZone {
+  static $tz = null;
+
+  if ($tz instanceof DateTimeZone) {
+    return $tz;
+  }
+
+  if (function_exists('wp_timezone')) {
+    $tz = wp_timezone();
+    return $tz;
+  }
+
+  $tz_string = '';
+  if (function_exists('wp_timezone_string')) {
+    $tz_string = (string) wp_timezone_string();
+  }
+  if ($tz_string === '') {
+    $tz_string = (string) get_option('timezone_string');
+  }
+
+  if ($tz_string !== '') {
+    try {
+      $tz = new DateTimeZone($tz_string);
+      return $tz;
+    } catch (Exception $e) {
+      // fall through to GMT offset fallback
+    }
+  }
+
+  $offset = (float) get_option('gmt_offset', 0);
+  $hours  = (int) $offset;
+  $mins   = (int) round(abs($offset - $hours) * 60);
+  $sign   = $offset >= 0 ? '+' : '-';
+
+  try {
+    $tz = new DateTimeZone(sprintf('%s%02d:%02d', $sign, abs($hours), $mins));
+  } catch (Exception $e) {
+    $tz = new DateTimeZone('UTC');
+  }
+
+  return $tz;
+}
+
+function kkchat_site_timezone_identifier(DateTimeZone $tz): string {
+  if (function_exists('wp_timezone_string')) {
+    $tz_string = (string) wp_timezone_string();
+    if ($tz_string !== '') {
+      return $tz_string;
+    }
+  }
+
+  $name = $tz->getName();
+  if ($name && preg_match('/^[A-Za-z_\/]+$/', $name)) {
+    return $name;
+  }
+
+  if (preg_match('/^([+-])(\d{2}):(\d{2})$/', $name, $m)) {
+    $hours = (int) $m[2];
+    $mins  = (int) $m[3];
+    if ($hours === 0 && $mins === 0) {
+      return 'UTC';
+    }
+    if ($mins === 0) {
+      $sign = ($m[1] === '+') ? '-' : '+'; // Etc/GMT has inverted sign
+      return sprintf('Etc/GMT%s%d', $sign, $hours);
+    }
+  }
+
+  return 'UTC';
+}
+
+function kkchat_site_format_time(int $timestamp, string $format = 'H:i'): string {
+  $timestamp = (int) $timestamp;
+  if ($timestamp <= 0) {
+    return '';
+  }
+
+  $tz = kkchat_site_timezone();
+
+  if (function_exists('wp_date')) {
+    $formatted = wp_date($format, $timestamp, $tz);
+    if (is_string($formatted)) {
+      return $formatted;
+    }
+  }
+
+  try {
+    return (new DateTimeImmutable('@' . $timestamp))->setTimezone($tz)->format($format);
+  } catch (Exception $e) {
+    return date_i18n($format, $timestamp);
+  }
+}
+
+function kkchat_site_time_display(int $timestamp): ?string {
+  $formatted = kkchat_site_format_time($timestamp, 'H:i');
+  return $formatted !== '' ? $formatted : null;
+}
+
+function kkchat_site_datetime_display(int $timestamp): ?string {
+  $formatted = kkchat_site_format_time($timestamp, 'Y-m-d H:i');
+  return $formatted !== '' ? $formatted : null;
+}
+
+function kkchat_site_js_time_settings(): array {
+  $tz        = kkchat_site_timezone();
+  $now_local = new DateTimeImmutable('now', $tz);
+  $identifier = kkchat_site_timezone_identifier($tz);
+  $locale     = (string) get_locale();
+  if ($locale === '') {
+    $locale = 'sv_SE';
+  }
+  $locale = str_replace('_', '-', $locale);
+
+  return [
+    'timeZone'      => $identifier,
+    'offsetSeconds' => $now_local->getOffset(),
+    'locale'        => $locale !== '' ? $locale : 'sv-SE',
+  ];
+}
 /**
  * Release the global wpdb connection so long-running requests (e.g. long poll)
  * do not keep MySQL connections open while idling. Falls back gracefully if
