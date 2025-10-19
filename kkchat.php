@@ -297,7 +297,15 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
   $id       = (int) ($_SESSION['kkchat_user_id'] ?? 0);
   $name_lc  = mb_strtolower($name, 'UTF-8');
 
-  if ($refresh_presence) {
+  $refresh_interval = (int) apply_filters('kkchat_presence_refresh_min_interval', 15);
+  $last_presence_at = (int) ($_SESSION['kkchat_last_presence_refresh'] ?? 0);
+  $should_refresh_presence = $refresh_presence;
+
+  if ($should_refresh_presence && $refresh_interval > 0 && $last_presence_at > 0 && ($now - $last_presence_at) < $refresh_interval) {
+    $should_refresh_presence = false;
+  }
+
+  if ($should_refresh_presence) {
     kkchat_wpdb_reconnect_if_needed();
     global $wpdb; $t = kkchat_tables();
 
@@ -328,6 +336,7 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
     if ($id > 0) {
       $_SESSION['kkchat_user_id'] = $id;
     }
+    $_SESSION['kkchat_last_presence_refresh'] = $now;
   } elseif ($id <= 0) {
     kkchat_wpdb_reconnect_if_needed();
     global $wpdb; $t = kkchat_tables();
