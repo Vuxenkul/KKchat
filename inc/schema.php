@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '9');
+  define('KKCHAT_DB_VERSION', '10');
 }
 
 /**
@@ -183,9 +183,31 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
   ) $charset;";
 
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+  $sql10 = "CREATE TABLE IF NOT EXISTS `{$t['sync_jobs']}` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    `view_key` VARCHAR(128) NOT NULL,
+    `status` VARCHAR(16) NOT NULL DEFAULT 'pending',
+    `context_json` LONGTEXT NOT NULL,
+    `response_json` LONGTEXT NULL,
+    `error_message` TEXT NULL,
+    `access_token` VARCHAR(64) NOT NULL,
+    `created_at` INT UNSIGNED NOT NULL,
+    `started_at` INT UNSIGNED NULL,
+    `finished_at` INT UNSIGNED NULL,
+    `attempts` TINYINT UNSIGNED NOT NULL DEFAULT 0,
+    `cursor` BIGINT UNSIGNED NULL,
+    `retry_after` INT UNSIGNED NULL,
+    `etag` VARCHAR(191) NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uniq_token` (`access_token`),
+    KEY `idx_status_created` (`status`,`created_at`),
+    KEY `idx_user_view` (`user_id`,`view_key`,`status`)
+  ) $charset;";
+
   dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4);
   dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8);
-  dbDelta($sql9);
+  dbDelta($sql9); dbDelta($sql10);
 
   // Remove legacy typing columns if they linger after dbDelta
   foreach (['typing_text', 'typing_room', 'typing_to', 'typing_at'] as $col) {
@@ -291,6 +313,33 @@ function kkchat_maybe_migrate(){
     if (!$has_index('idx_recipient_sender_id')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`)");
     }
+  }
+
+  if (!kkchat_table_exists($t['sync_jobs'])) {
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    $charset = $wpdb->get_charset_collate();
+    $sql = "CREATE TABLE IF NOT EXISTS `{$t['sync_jobs']}` (
+      `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      `user_id` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      `view_key` VARCHAR(128) NOT NULL,
+      `status` VARCHAR(16) NOT NULL DEFAULT 'pending',
+      `context_json` LONGTEXT NOT NULL,
+      `response_json` LONGTEXT NULL,
+      `error_message` TEXT NULL,
+      `access_token` VARCHAR(64) NOT NULL,
+      `created_at` INT UNSIGNED NOT NULL,
+      `started_at` INT UNSIGNED NULL,
+      `finished_at` INT UNSIGNED NULL,
+      `attempts` TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      `cursor` BIGINT UNSIGNED NULL,
+      `retry_after` INT UNSIGNED NULL,
+      `etag` VARCHAR(191) NULL,
+      PRIMARY KEY (`id`),
+      UNIQUE KEY `uniq_token` (`access_token`),
+      KEY `idx_status_created` (`status`,`created_at`),
+      KEY `idx_user_view` (`user_id`,`view_key`,`status`)
+    ) $charset;";
+    dbDelta($sql);
   }
 
   if (kkchat_table_exists($t['banners'])) {

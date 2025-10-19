@@ -37,6 +37,7 @@ function kkchat_tables(){
     'rules'       => $p.'rules',      // ← was kkchat_word_rules
     'reports'     => $p.'reports',
     'user_blocks' => $p.'user_blocks',
+    'sync_jobs'   => $p.'sync_jobs',
   ];
 }
 

@@ -1,6 +1,13 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+add_action('init', function () {
+  if (!defined('DOING_CRON') || !DOING_CRON) { return; }
+  if (function_exists('rest_get_server')) {
+    rest_get_server();
+  }
+}, 5);
+
 /**
  * REST API (public + admin)
  *
@@ -171,6 +178,10 @@ add_action('rest_api_init', function () {
         'avg_duration_ms'     => 0.0,
         'duration_samples'    => 0,
         'last_request_at'     => 0,
+        'queue_enqueued'      => 0,
+        'queue_completed'     => 0,
+        'queue_failed'        => 0,
+        'queue_active'        => 0,
       ];
 
       $stored = get_option('kkchat_sync_metrics');
@@ -209,6 +220,344 @@ add_action('rest_api_init', function () {
       kkchat_sync_metrics_store($metrics);
     }
   }
+
+  if (!function_exists('kkchat_sync_store_context')) {
+    function kkchat_sync_store_context(array $ctx): array {
+      $keys = ['me','guest','is_admin_viewer','since_pub','since','room','peer','only_public','limit'];
+      $stored = [];
+      foreach ($keys as $key) {
+        if (array_key_exists($key, $ctx)) {
+          $stored[$key] = $ctx[$key];
+        }
+      }
+      return $stored;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_restore_context')) {
+    function kkchat_sync_restore_context(array $stored): array {
+      $ctx = $stored;
+      $ctx['tables'] = kkchat_tables();
+      return $ctx;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_refresh_queue')) {
+    function kkchat_sync_metrics_refresh_queue(): void {
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+      $active = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$t['sync_jobs']} WHERE status IN ('pending','running')");
+      $metrics = kkchat_sync_metrics_get();
+      $metrics['queue_active'] = $active;
+      kkchat_sync_metrics_store($metrics);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_schedule_runner')) {
+    function kkchat_sync_schedule_runner(int $delay = 0): void {
+      if (!function_exists('wp_schedule_single_event') || !function_exists('wp_next_scheduled')) { return; }
+
+      $hook   = 'kkchat_sync_queue_run';
+      $target = time() + max(0, $delay);
+      $next   = wp_next_scheduled($hook);
+
+      if ($next && $next <= $target) {
+        return;
+      }
+
+      if ($next && function_exists('wp_unschedule_event')) {
+        wp_unschedule_event($next, $hook);
+      }
+
+      wp_schedule_single_event($target, $hook);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_enqueue_job')) {
+    function kkchat_sync_enqueue_job(array $ctx) {
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+
+      $stored = kkchat_sync_store_context($ctx);
+      $encoded = wp_json_encode($stored, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+      if ($encoded === false) { $encoded = '{}'; }
+
+      $token = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : wp_generate_password(32, false, false);
+      $now   = time();
+
+      $inserted = $wpdb->insert(
+        $t['sync_jobs'],
+        [
+          'user_id'      => (int) ($ctx['me'] ?? 0),
+          'view_key'     => kkchat_sync_view_key($ctx),
+          'status'       => 'pending',
+          'context_json' => $encoded,
+          'access_token' => $token,
+          'created_at'   => $now,
+        ],
+        ['%d','%s','%s','%s','%s','%d']
+      );
+
+      if ($inserted === false) {
+        return new WP_Error('kkchat_sync_enqueue_failed', __('Unable to enqueue sync job', 'kkchat'));
+      }
+
+      $jobId = (int) $wpdb->insert_id;
+
+      kkchat_sync_metrics_bump('queue_enqueued');
+      kkchat_sync_metrics_refresh_queue();
+      kkchat_sync_schedule_runner(0);
+
+      $poll = add_query_arg(['token' => $token], rest_url(sprintf('kkchat/v1/sync/jobs/%d', $jobId)));
+
+      return [
+        'id'     => $jobId,
+        'token'  => $token,
+        'status' => 'pending',
+        'poll'   => $poll,
+      ];
+    }
+  }
+
+  if (!function_exists('kkchat_sync_claim_job')) {
+    function kkchat_sync_claim_job(): ?array {
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+
+      while (true) {
+        $row = $wpdb->get_row("SELECT * FROM {$t['sync_jobs']} WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1", ARRAY_A);
+        if (!$row) { return null; }
+
+        $now      = time();
+        $attempts = max(0, (int) ($row['attempts'] ?? 0)) + 1;
+        $updated  = $wpdb->update(
+          $t['sync_jobs'],
+          [
+            'status'     => 'running',
+            'started_at' => $now,
+            'attempts'   => $attempts,
+          ],
+          [
+            'id'     => (int) $row['id'],
+            'status' => 'pending',
+          ],
+          ['%s','%d','%d'],
+          ['%d','%s']
+        );
+
+        if ($updated === 1) {
+          $row['status']     = 'running';
+          $row['started_at'] = $now;
+          $row['attempts']   = $attempts;
+          return $row;
+        }
+      }
+    }
+  }
+
+  if (!function_exists('kkchat_sync_mark_job_pending')) {
+    function kkchat_sync_mark_job_pending(int $jobId): void {
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+      $wpdb->update(
+        $t['sync_jobs'],
+        [
+          'status'     => 'pending',
+          'started_at' => null,
+        ],
+        ['id' => $jobId],
+        ['%s','%s'],
+        ['%d']
+      );
+    }
+  }
+
+  if (!function_exists('kkchat_sync_prepare_response')) {
+    function kkchat_sync_prepare_response(array $payload, array $ctx): array {
+      $since   = (int) ($ctx['since'] ?? -1);
+      $cursor  = kkchat_sync_max_cursor($payload, $since);
+      $hasChanges = ($since < 0) ? true : ($cursor > $since);
+
+      $retryAfter = kkchat_sync_retry_after_hint($payload, $ctx, $hasChanges);
+      $etag       = kkchat_sync_build_etag($ctx, $cursor);
+
+      $headers = [
+        'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma'        => 'no-cache',
+      ];
+
+      if ($retryAfter > 0) { $headers['Retry-After'] = (string) $retryAfter; }
+      if ($etag !== '')    { $headers['ETag']        = $etag; }
+
+      if (!$hasChanges) {
+        return [
+          'status'      => 204,
+          'headers'     => $headers,
+          'body'        => null,
+          'cursor'      => $cursor,
+          'retry_after' => $retryAfter,
+          'etag'        => $etag,
+          'has_changes' => false,
+        ];
+      }
+
+      $events = kkchat_sync_format_events($payload, $since < 0);
+
+      $data = [
+        'now'        => (int) ($payload['now'] ?? time()),
+        'next'       => $cursor,
+        'retryAfter' => $retryAfter,
+        'events'     => $events,
+      ];
+
+      unset($payload['now']);
+      foreach ($payload as $k => $v) {
+        if (!array_key_exists($k, $data)) {
+          $data[$k] = $v;
+        }
+      }
+
+      return [
+        'status'      => 200,
+        'headers'     => $headers,
+        'body'        => $data,
+        'cursor'      => $cursor,
+        'retry_after' => $retryAfter,
+        'etag'        => $etag,
+        'has_changes' => true,
+      ];
+    }
+  }
+
+  if (!function_exists('kkchat_sync_process_queue')) {
+    function kkchat_sync_process_queue(): void {
+      $batchLimit = (int) apply_filters('kkchat_sync_worker_batch', kkchat_sync_concurrency_limit());
+      if ($batchLimit <= 0) { $batchLimit = kkchat_sync_concurrency_limit(); }
+      if ($batchLimit <= 0) { $batchLimit = 1; }
+
+      $processed = 0;
+
+      while ($processed < $batchLimit) {
+        $job = kkchat_sync_claim_job();
+        if (!$job) { break; }
+
+        $slotToken = kkchat_sync_acquire_slot();
+        if ($slotToken === null) {
+          kkchat_sync_mark_job_pending((int) $job['id']);
+          kkchat_sync_metrics_bump('concurrency_denied');
+          $retryBusy = (int) apply_filters('kkchat_sync_busy_retry', 8);
+          kkchat_sync_schedule_runner(max(1, $retryBusy));
+          break;
+        }
+
+        $processed++;
+        $startedAt = microtime(true);
+
+        try {
+          $stored = json_decode((string) ($job['context_json'] ?? '{}'), true);
+          if (!is_array($stored)) { $stored = []; }
+          $ctx = kkchat_sync_restore_context($stored);
+
+          $payload = kkchat_sync_build_payload($ctx);
+
+          if (is_wp_error($payload)) {
+            $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $payload);
+            kkchat_sync_breaker_note_failure();
+            kkchat_wpdb_reconnect_if_needed();
+            global $wpdb; $t = kkchat_tables();
+            $wpdb->update(
+              $t['sync_jobs'],
+              [
+                'status'       => 'failed',
+                'error_message'=> $payload->get_error_message(),
+                'finished_at'  => time(),
+                'retry_after'  => $cooldown,
+              ],
+              ['id' => (int) $job['id']],
+              ['%s','%s','%d','%d'],
+              ['%d']
+            );
+            kkchat_sync_metrics_bump('queue_failed');
+            kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
+            continue;
+          }
+
+          $response = kkchat_sync_prepare_response($payload, $ctx);
+          $encoded  = wp_json_encode(
+            [
+              'status'  => $response['status'],
+              'headers' => $response['headers'],
+              'body'    => $response['body'],
+            ],
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+          );
+          if ($encoded === false) { $encoded = '{}'; }
+
+          kkchat_wpdb_reconnect_if_needed();
+          global $wpdb; $t = kkchat_tables();
+          $wpdb->update(
+            $t['sync_jobs'],
+            [
+              'status'       => 'complete',
+              'response_json'=> $encoded,
+              'error_message'=> null,
+              'finished_at'  => time(),
+              'cursor'       => (int) $response['cursor'],
+              'retry_after'  => (int) $response['retry_after'],
+              'etag'         => (string) $response['etag'],
+            ],
+            ['id' => (int) $job['id']],
+            ['%s','%s','%s','%d','%d','%d','%s'],
+            ['%d']
+          );
+
+          kkchat_sync_breaker_note_success();
+          kkchat_sync_metrics_bump('queue_completed');
+          kkchat_sync_metrics_bump('total_success');
+          kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
+        } catch (\Throwable $th) {
+          kkchat_sync_breaker_note_failure();
+          kkchat_wpdb_reconnect_if_needed();
+          global $wpdb; $t = kkchat_tables();
+          $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $th);
+          $wpdb->update(
+            $t['sync_jobs'],
+            [
+              'status'       => 'failed',
+              'error_message'=> $th->getMessage(),
+              'finished_at'  => time(),
+              'retry_after'  => $cooldown,
+            ],
+            ['id' => (int) $job['id']],
+            ['%s','%s','%d','%d'],
+            ['%d']
+          );
+          kkchat_sync_metrics_bump('queue_failed');
+          kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
+        } finally {
+          kkchat_sync_release_slot($slotToken);
+        }
+      }
+
+      kkchat_sync_metrics_refresh_queue();
+
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+      $pending = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$t['sync_jobs']} WHERE status = 'pending'");
+      if ($pending > 0) {
+        kkchat_sync_schedule_runner(0);
+      }
+    }
+  }
+
+  add_action('kkchat_sync_queue_run', 'kkchat_sync_process_queue');
+
+  if (!function_exists('kkchat_sync_queue_tick')) {
+    function kkchat_sync_queue_tick(): void {
+      kkchat_sync_schedule_runner(0);
+    }
+  }
+  add_action('kkchat_cron_tick', 'kkchat_sync_queue_tick');
 
   if (!function_exists('kkchat_sync_concurrency_limit')) {
     function kkchat_sync_concurrency_limit(): int {
@@ -358,6 +707,13 @@ add_action('rest_api_init', function () {
         "UPDATE {$t['users']}\n            SET watch_flag = 0, watch_flag_at = NULL\n          WHERE watch_flag = 1\n            AND watch_flag_at IS NOT NULL\n            AND %d - watch_flag_at > %d",
         $now,
         kkchat_watch_reset_after()
+      ));
+
+      $jobTtl = max(300, (int) apply_filters('kkchat_sync_job_ttl', 1800));
+      $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$t['sync_jobs']}\n          WHERE status IN ('complete','failed')\n            AND finished_at IS NOT NULL\n            AND %d - finished_at > %d",
+        $now,
+        $jobTtl
       ));
     }
   }
@@ -1208,104 +1564,146 @@ register_rest_route($ns, '/sync', [
       return $resp;
     }
 
-    $slotToken = kkchat_sync_acquire_slot();
-    if ($slotToken === null) {
-      $retryBusy = (int) apply_filters('kkchat_sync_busy_retry', 8);
-      $resp = new WP_REST_Response(['err' => 'sync_busy'], 429);
-      if ($retryBusy > 0) { $resp->header('Retry-After', (string) $retryBusy); }
-      kkchat_sync_metrics_bump('concurrency_denied');
-      return $resp;
-    }
-
-    $startedAt = microtime(true);
-    try {
-      $payload = kkchat_sync_build_payload($ctx);
-    } catch (\Throwable $th) {
-      kkchat_sync_breaker_note_failure();
-      $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $th);
+    $job = kkchat_sync_enqueue_job($ctx);
+    if (is_wp_error($job)) {
+      $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $job);
       $resp = new WP_REST_Response(['err' => 'sync_unavailable'], 503);
       if ($cooldown > 0) { $resp->header('Retry-After', (string) $cooldown); }
-      if (defined('WP_DEBUG') && WP_DEBUG) {
-        error_log('KKchat sync failure: ' . $th->getMessage());
-      }
-      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
-      return $resp;
-    } finally {
-      kkchat_sync_release_slot($slotToken);
-    }
-
-    if (is_wp_error($payload)) {
-      kkchat_sync_breaker_note_failure();
-      $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $payload);
-      $resp = new WP_REST_Response(['err' => 'sync_unavailable'], 503);
-      if ($cooldown > 0) { $resp->header('Retry-After', (string) $cooldown); }
-      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
       return $resp;
     }
 
-    kkchat_sync_breaker_note_success();
+    $retryPoll = (int) apply_filters('kkchat_sync_job_poll_retry', 2, $job, $ctx);
+    if ($retryPoll <= 0) { $retryPoll = 2; }
 
-    $since   = (int) ($ctx['since'] ?? -1);
-    $cursor  = kkchat_sync_max_cursor($payload, $since);
-    $hasChanges = ($since < 0) ? true : ($cursor > $since);
+    $resp = new WP_REST_Response([
+      'job' => [
+        'id'     => (int) ($job['id'] ?? 0),
+        'status' => (string) ($job['status'] ?? 'pending'),
+        'token'  => (string) ($job['token'] ?? ''),
+        'poll'   => (string) ($job['poll'] ?? ''),
+      ],
+    ], 202);
 
-    $retryAfter = kkchat_sync_retry_after_hint($payload, $ctx, $hasChanges);
-    $etag       = kkchat_sync_build_etag($ctx, $cursor);
+    $resp->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    $resp->header('Pragma', 'no-cache');
+    $resp->header('Retry-After', (string) $retryPoll);
 
-    $headers = [
-      'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
-      'Pragma'        => 'no-cache',
-    ];
-
-    if ($retryAfter > 0) {
-      $headers['Retry-After'] = (string) $retryAfter;
-    }
-    if ($etag !== '') {
-      $headers['ETag'] = $etag;
-    }
-
-    $ifNoneMatch = isset($_SERVER['HTTP_IF_NONE_MATCH']) ? trim((string) $_SERVER['HTTP_IF_NONE_MATCH']) : '';
-
-    if (!$hasChanges && $etag !== '' && $ifNoneMatch !== '' && $ifNoneMatch === $etag) {
-      $resp = new WP_REST_Response(null, 304);
-      foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
-      kkchat_sync_metrics_bump('total_success');
-      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
-      return $resp;
-    }
-
-    if (!$hasChanges) {
-      $resp = new WP_REST_Response(null, 204);
-      foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
-      kkchat_sync_metrics_bump('total_success');
-      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
-      return $resp;
-    }
-
-    $events = kkchat_sync_format_events($payload, $since < 0);
-
-    $data = [
-      'now'        => (int) ($payload['now'] ?? time()),
-      'next'       => $cursor,
-      'retryAfter' => $retryAfter,
-      'events'     => $events,
-    ];
-
-    unset($payload['now']);
-    foreach ($payload as $k => $v) {
-      if (!array_key_exists($k, $data)) {
-        $data[$k] = $v;
-      }
-    }
-
-    $resp = new WP_REST_Response($data, 200);
-    kkchat_sync_metrics_bump('total_success');
-    kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
-    foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
     return $resp;
   },
   'permission_callback' => '__return_true',
 ]);
+
+  register_rest_route($ns, '/sync/jobs/(?P<id>\d+)', [
+    'methods'  => 'GET',
+    'callback' => function (WP_REST_Request $req) use ($ns) {
+      $jobId = (int) $req->get_param('id');
+      $token = (string) $req->get_param('token');
+
+      if ($jobId <= 0) {
+        return new WP_REST_Response(['err' => 'invalid_job'], 400);
+      }
+
+      if ($token === '') {
+        return new WP_REST_Response(['err' => 'missing_token'], 400);
+      }
+
+      kkchat_require_login(false);
+      kkchat_assert_not_blocked_or_fail();
+
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+
+      $row = $wpdb->get_row(
+        $wpdb->prepare(
+          "SELECT * FROM {$t['sync_jobs']} WHERE id = %d AND access_token = %s LIMIT 1",
+          $jobId,
+          $token
+        ),
+        ARRAY_A
+      );
+
+      if (!$row) {
+        return new WP_REST_Response(['err' => 'job_not_found'], 404);
+      }
+
+      $currentUser = (int) kkchat_current_user_id();
+      $jobUser     = isset($row['user_id']) ? (int) $row['user_id'] : 0;
+      if ($jobUser > 0 && $currentUser > 0 && $jobUser !== $currentUser) {
+        return new WP_REST_Response(['err' => 'job_forbidden'], 403);
+      }
+
+      $poll = add_query_arg(['token' => $token], rest_url(sprintf('%s/sync/jobs/%d', $ns, $jobId)));
+      $status = (string) ($row['status'] ?? 'pending');
+
+      if ($status === 'complete') {
+        $payload = json_decode((string) ($row['response_json'] ?? ''), true);
+        if (!is_array($payload)) {
+          return new WP_REST_Response(['err' => 'job_corrupt'], 500);
+        }
+
+        $body    = $payload['body'] ?? null;
+        $code    = isset($payload['status']) ? (int) $payload['status'] : 200;
+        $headers = is_array($payload['headers'] ?? null) ? $payload['headers'] : [];
+
+        $resp = new WP_REST_Response($body, $code);
+        foreach ($headers as $hk => $hv) {
+          if ($hk !== '' && $hv !== null && $hv !== '') {
+            $resp->header($hk, (string) $hv);
+          }
+        }
+        $resp->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        $resp->header('Pragma', 'no-cache');
+        $resp->header('X-KKchat-Job-Status', 'complete');
+        $resp->header('X-KKchat-Job-Id', (string) $jobId);
+        $resp->header('X-KKchat-Job-Poll', $poll);
+        $resp->header('X-KKchat-Job-Token', $token);
+        return $resp;
+      }
+
+      if ($status === 'failed') {
+        $retry = isset($row['retry_after']) ? (int) $row['retry_after'] : 0;
+        if ($retry <= 0) { $retry = (int) apply_filters('kkchat_sync_failure_retry', 30, $row); }
+        $resp = new WP_REST_Response([
+          'err'     => 'job_failed',
+          'message' => (string) ($row['error_message'] ?? ''),
+          'job'     => [
+            'id'     => $jobId,
+            'status' => $status,
+            'poll'   => $poll,
+            'token'  => $token,
+          ],
+        ], 503);
+        $resp->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        $resp->header('Pragma', 'no-cache');
+        if ($retry > 0) { $resp->header('Retry-After', (string) $retry); }
+        return $resp;
+      }
+
+      $retry = isset($row['retry_after']) ? (int) $row['retry_after'] : 0;
+      if ($retry <= 0) { $retry = (int) apply_filters('kkchat_sync_job_poll_retry', 2, $row); }
+      if ($retry <= 0) { $retry = 2; }
+
+      $resp = new WP_REST_Response([
+        'job' => [
+          'id'         => $jobId,
+          'status'     => $status,
+          'created_at' => isset($row['created_at']) ? (int) $row['created_at'] : null,
+          'started_at' => isset($row['started_at']) ? (int) $row['started_at'] : null,
+          'poll'       => $poll,
+          'token'      => $token,
+        ],
+      ], 202);
+      $resp->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      $resp->header('Pragma', 'no-cache');
+      $resp->header('Retry-After', (string) $retry);
+      $resp->header('X-KKchat-Job-Status', $status);
+      $resp->header('X-KKchat-Job-Id', (string) $jobId);
+      $resp->header('X-KKchat-Job-Poll', $poll);
+      $resp->header('X-KKchat-Job-Token', $token);
+      return $resp;
+    },
+    'permission_callback' => '__return_true',
+  ]);
 
   $legacy_gone = function () {
     $resp = new WP_REST_Response(['err' => 'gone'], 410);
