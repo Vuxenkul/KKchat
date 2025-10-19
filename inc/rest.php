@@ -157,9 +157,9 @@ add_action('rest_api_init', function () {
     }
   }
 
-  if (!function_exists('kkchat_sync_metrics_get')) {
-    function kkchat_sync_metrics_get(): array {
-      $defaults = [
+  if (!function_exists('kkchat_sync_metrics_defaults')) {
+    function kkchat_sync_metrics_defaults(): array {
+      return [
         'total_requests'      => 0,
         'total_success'       => 0,
         'rate_limited'        => 0,
@@ -172,17 +172,64 @@ add_action('rest_api_init', function () {
         'duration_samples'    => 0,
         'last_request_at'     => 0,
       ];
+    }
+  }
 
-      $stored = get_option('kkchat_sync_metrics');
-      if (!is_array($stored)) { $stored = []; }
+  if (!function_exists('kkchat_sync_metrics_state')) {
+    function &kkchat_sync_metrics_state(): array {
+      static $metrics = null;
+      if ($metrics === null) {
+        $stored = get_option('kkchat_sync_metrics');
+        if (!is_array($stored)) { $stored = []; }
+        $metrics = array_merge(kkchat_sync_metrics_defaults(), $stored);
+      }
+      return $metrics;
+    }
+  }
 
-      return array_merge($defaults, $stored);
+  if (!function_exists('kkchat_sync_metrics_dirty_flag')) {
+    function kkchat_sync_metrics_dirty_flag(?bool $set = null): bool {
+      static $dirty = false;
+      if ($set !== null) {
+        $dirty = (bool) $set;
+      }
+      return $dirty;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_register_flush')) {
+    function kkchat_sync_metrics_register_flush(): void {
+      static $registered = false;
+      if ($registered) { return; }
+      $registered = true;
+      register_shutdown_function('kkchat_sync_metrics_flush_now');
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_flush_now')) {
+    function kkchat_sync_metrics_flush_now(): void {
+      if (!kkchat_sync_metrics_dirty_flag()) {
+        return;
+      }
+      $metrics = kkchat_sync_metrics_get();
+      update_option('kkchat_sync_metrics', $metrics, false);
+      kkchat_sync_metrics_dirty_flag(false);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_get')) {
+    function kkchat_sync_metrics_get(): array {
+      $state = kkchat_sync_metrics_state();
+      return $state;
     }
   }
 
   if (!function_exists('kkchat_sync_metrics_store')) {
     function kkchat_sync_metrics_store(array $metrics): void {
-      update_option('kkchat_sync_metrics', $metrics, false);
+      $state =& kkchat_sync_metrics_state();
+      $state = array_merge(kkchat_sync_metrics_defaults(), $metrics);
+      kkchat_sync_metrics_dirty_flag(true);
+      kkchat_sync_metrics_register_flush();
     }
   }
 
@@ -2052,10 +2099,31 @@ register_rest_route($ns, '/reads/mark', [
     }
 
     if (!empty($dmUpdates) && !empty($t['last_dm_reads'])) {
+      $existing = [];
+      $peerIds  = array_keys($dmUpdates);
+      $peerIds  = array_values(array_filter(array_map('intval', $peerIds), fn($id) => $id > 0));
+
+      if (!empty($peerIds)) {
+        $placeholders = implode(',', array_fill(0, count($peerIds), '%d'));
+        $rows = $wpdb->get_results(
+          $wpdb->prepare(
+            "SELECT peer_id, last_msg_id FROM {$t['last_dm_reads']} WHERE user_id = %d AND peer_id IN ($placeholders)",
+            $me,
+            ...$peerIds
+          ),
+          ARRAY_A
+        ) ?: [];
+
+        foreach ($rows as $row) {
+          $existing[(int) ($row['peer_id'] ?? 0)] = (int) ($row['last_msg_id'] ?? 0);
+        }
+      }
+
       foreach ($dmUpdates as $peer => $mid) {
         $peer = (int) $peer;
         $mid  = (int) $mid;
         if ($peer <= 0 || $mid <= 0) { continue; }
+        if ($mid <= ($existing[$peer] ?? 0)) { continue; }
 
         $wpdb->query(
           $wpdb->prepare(
@@ -2069,6 +2137,8 @@ register_rest_route($ns, '/reads/mark', [
             $now
           )
         );
+
+        $existing[$peer] = $mid;
       }
     }
 
@@ -2091,29 +2161,67 @@ register_rest_route($ns, '/reads/mark', [
     }
 
     if (!empty($roomUpdates) && !empty($t['last_reads'])) {
+      $normalizedUpdates = [];
+      $normalizedSeenAt  = [];
+
       foreach ($roomUpdates as $slug => $mid) {
         $slug = kkchat_sanitize_room_slug((string) $slug);
         $mid  = (int) $mid;
         if ($slug === '' || $mid <= 0) { continue; }
 
-        $wpdb->query(
-          $wpdb->prepare(
-            "INSERT INTO {$t['last_reads']} (user_id, room_slug, last_msg_id, updated_at)
-             VALUES (%d,%s,%d,%d)
-             ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),
-                                     updated_at = VALUES(updated_at)",
-            $me,
-            $slug,
-            $mid,
-            $now
-          )
-        );
+        $normalizedUpdates[$slug] = max($normalizedUpdates[$slug] ?? 0, $mid);
+        if (isset($roomSeenAt[$slug])) {
+          $normalizedSeenAt[$slug] = max($normalizedSeenAt[$slug] ?? 0, (int) $roomSeenAt[$slug]);
+        }
+      }
 
-        $seenAt = (int) ($roomSeenAt[$slug] ?? 0);
-        if ($seenAt > 0) {
-          $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);
-          if ($seenAt > $prev) {
-            $_SESSION['kkchat_seen_at_public'] = $seenAt;
+      if (!empty($normalizedUpdates)) {
+        $existing = [];
+        $validSlugs = array_keys($normalizedUpdates);
+        $validSlugs = array_values(array_filter(array_map('strval', $validSlugs), fn($slug) => $slug !== ''));
+
+        if (!empty($validSlugs)) {
+          $placeholders = implode(',', array_fill(0, count($validSlugs), '%s'));
+          $rows = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT room_slug, last_msg_id FROM {$t['last_reads']} WHERE user_id = %d AND room_slug IN ($placeholders)",
+              $me,
+              ...$validSlugs
+            ),
+            ARRAY_A
+          ) ?: [];
+
+          foreach ($rows as $row) {
+            $slug = (string) ($row['room_slug'] ?? '');
+            if ($slug === '') { continue; }
+            $existing[$slug] = (int) ($row['last_msg_id'] ?? 0);
+          }
+        }
+
+        foreach ($normalizedUpdates as $slug => $mid) {
+          if ($mid <= ($existing[$slug] ?? 0)) { continue; }
+
+          $wpdb->query(
+            $wpdb->prepare(
+              "INSERT INTO {$t['last_reads']} (user_id, room_slug, last_msg_id, updated_at)
+               VALUES (%d,%s,%d,%d)
+               ON DUPLICATE KEY UPDATE last_msg_id = GREATEST(last_msg_id, VALUES(last_msg_id)),
+                                       updated_at = VALUES(updated_at)",
+              $me,
+              $slug,
+              $mid,
+              $now
+            )
+          );
+
+          $existing[$slug] = $mid;
+
+          $seenAt = (int) ($normalizedSeenAt[$slug] ?? 0);
+          if ($seenAt > 0) {
+            $prev = (int) ($_SESSION['kkchat_seen_at_public'] ?? 0);
+            if ($seenAt > $prev) {
+              $_SESSION['kkchat_seen_at_public'] = $seenAt;
+            }
           }
         }
       }
