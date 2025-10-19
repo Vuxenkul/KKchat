@@ -120,6 +120,42 @@ add_shortcode('kkchat', function () {
       <?php endif; ?>
     </div>
     <script>
+    const STOCKHOLM_TZ = 'Europe/Stockholm';
+    const STOCKHOLM_LOCALE = 'sv-SE';
+
+    function formatStockholmTime(ts, extraOpts = {}) {
+      const num = Number(ts);
+      if (!Number.isFinite(num)) return '';
+      try {
+        return new Date(num * 1000).toLocaleTimeString(
+          STOCKHOLM_LOCALE,
+          { hour: '2-digit', minute: '2-digit', timeZone: STOCKHOLM_TZ, ...extraOpts }
+        );
+      } catch (_err) {
+        try {
+          return new Date(num * 1000).toLocaleString(
+            STOCKHOLM_LOCALE,
+            { timeZone: STOCKHOLM_TZ }
+          );
+        } catch (__err) {
+          return String(ts);
+        }
+      }
+    }
+
+    function formatStockholmDateTime(ts, extraOpts = {}) {
+      const num = Number(ts);
+      if (!Number.isFinite(num)) return '';
+      try {
+        return new Date(num * 1000).toLocaleString(
+          STOCKHOLM_LOCALE,
+          { timeZone: STOCKHOLM_TZ, ...extraOpts }
+        );
+      } catch (_err) {
+        return formatStockholmTime(num, extraOpts);
+      }
+    }
+
     (function(){
       const API = "<?= $ns ?>";
       const REST_NONCE = "<?= $rest_nonce ?>";
@@ -2051,7 +2087,7 @@ async function doLogout(){
   const mid = Number(m.id);
   const sid = Number(m.sender_id||0);
   const who = m.sender_name || 'Okänd';
-  const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+  const when = formatStockholmTime(m.time || 0);
   const roleClass = isAdminById?.(sid) ? ' admin' : '';
   rememberName(sid, m.sender_name);
   const gender = genderById(sid);
@@ -2362,7 +2398,7 @@ function renderList(el, items){
       rememberName(m.sender_id, m.sender_name);
       const gender = genderById(m.sender_id);
 
-      const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+      const when = formatStockholmTime(m.time || 0);
       const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
       let bubbleHTML = '';
@@ -2763,7 +2799,7 @@ function normalizeUnreadMap(map) {
 
   const ts = Number(info.time);
   const timeLabel = Number.isFinite(ts) && ts > 0
-    ? new Date(ts * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+    ? formatStockholmTime(ts)
     : '';
 
   const ctxPart = ctx ? `${esc(ctx)}: ` : '';
@@ -4604,8 +4640,7 @@ function appendPendingMessage(text){
     li.dataset.sname = ME_NM || '';
   }
 
-  const now = new Date();
-  const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const when = formatStockholmTime(Math.floor(Date.now() / 1000));
   const who = typeof ME_NM !== 'undefined' ? ME_NM || '' : '';
   const gender = (typeof genderById === 'function' && typeof ME_ID !== 'undefined')
     ? genderById(ME_ID)
@@ -4660,7 +4695,7 @@ function finalizePendingMessage(pending, payload){
     const bubbleMeta = pending.querySelector('.bubble-meta-text');
     const serverTime = Number(payload?.time ?? 0);
     if (bubbleMeta && Number.isFinite(serverTime) && serverTime > 0) {
-      const when = new Date(serverTime * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+      const when = formatStockholmTime(serverTime);
       const parts = bubbleMeta.innerHTML.split('<br>');
       if (parts.length === 2) {
         parts[1] = esc(when);
@@ -5182,7 +5217,8 @@ jumpBtn.addEventListener('click', ()=>{
   logPanel?.addEventListener('click', (e)=>{ if (e.target === logPanel) closeLogs(); });
 
   function fmtWhen(ts){
-    try{ return new Date(ts*1000).toLocaleString('sv-SE'); }catch(_){ return String(ts); }
+    const label = formatStockholmDateTime(ts);
+    return label || String(ts);
   }
     function playReportOnce(){
     try{
