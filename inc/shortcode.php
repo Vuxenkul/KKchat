@@ -5,7 +5,7 @@ add_shortcode('kkchat', function () {
   $ns = esc_js( wp_make_link_relative( rest_url('kkchat/v1') ) );
   $csrf = esc_js($_SESSION['kkchat_csrf'] ?? '');
   $me_logged = isset($_SESSION['kkchat_user_id'], $_SESSION['kkchat_user_name']);
-  if ($me_logged && empty($_SESSION['kkchat_seen_at_public'])) $_SESSION['kkchat_seen_at_public'] = time();
+  if ($me_logged && empty($_SESSION['kkchat_seen_at_public'])) $_SESSION['kkchat_seen_at_public'] = kkchat_now();
 
   $me_id = $me_logged ? (int)$_SESSION['kkchat_user_id'] : 0;
   $me_nm = $me_logged ? (string)$_SESSION['kkchat_user_name'] : '';

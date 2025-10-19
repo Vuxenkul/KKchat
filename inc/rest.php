@@ -252,7 +252,7 @@ add_action('rest_api_init', function () {
         $metrics[$field] = 0;
       }
       $metrics[$field] = (int) $metrics[$field] + $delta;
-      $metrics['last_request_at'] = time();
+      $metrics['last_request_at'] = kkchat_now();
       kkchat_sync_metrics_store($metrics);
     }
   }
@@ -334,7 +334,7 @@ add_action('rest_api_init', function () {
   if (!function_exists('kkchat_sync_breaker_is_open')) {
     function kkchat_sync_breaker_is_open(?int &$retryAfter = null): bool {
       $state = kkchat_sync_breaker_state();
-      $now   = time();
+      $now   = kkchat_now();
       if (!empty($state['open_until']) && $state['open_until'] > $now) {
         $retryAfter = (int) max(1, $state['open_until'] - $now);
         return true;
@@ -353,7 +353,7 @@ add_action('rest_api_init', function () {
     function kkchat_sync_breaker_note_failure(): void {
       $cfg   = kkchat_sync_breaker_config();
       $state = kkchat_sync_breaker_state();
-      $now   = time();
+      $now   = kkchat_now();
 
       if ($state['first_failure'] === 0 || ($now - (int) $state['first_failure']) > $cfg['window']) {
         $state['first_failure'] = $now;
@@ -387,7 +387,7 @@ add_action('rest_api_init', function () {
     function kkchat_sync_queue_housekeeping(): void {
       if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_single_event')) { return; }
       if (wp_next_scheduled('kkchat_sync_housekeeping')) { return; }
-      wp_schedule_single_event(time() + 2, 'kkchat_sync_housekeeping');
+      wp_schedule_single_event(kkchat_now() + 2, 'kkchat_sync_housekeeping');
     }
   }
 
@@ -395,7 +395,7 @@ add_action('rest_api_init', function () {
     function kkchat_sync_run_housekeeping(): void {
       kkchat_wpdb_reconnect_if_needed();
       global $wpdb; $t = kkchat_tables();
-      $now = time();
+      $now = kkchat_now();
       $wpdb->query($wpdb->prepare(
         "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
         $now,
@@ -414,7 +414,7 @@ add_action('rest_api_init', function () {
     function kkchat_sync_build_payload(array $ctx): array {
       global $wpdb; $t = kkchat_tables();
 
-      $now = time();
+      $now = kkchat_now();
 
       $me      = (int) ($ctx['me'] ?? 0);
       $guest   = !empty($ctx['guest']) ? 1 : 0;
@@ -948,7 +948,7 @@ add_action('rest_api_init', function () {
       }
 
       global $wpdb; $t = kkchat_tables();
-      $now = time();
+      $now = kkchat_now();
 
       // Clean old presences
       $wpdb->query($wpdb->prepare("DELETE FROM {$t['users']} WHERE %d - last_seen > %d", $now, kkchat_user_ttl()));
@@ -987,7 +987,7 @@ add_action('rest_api_init', function () {
       $_SESSION['kkchat_user_name']      = $nick;
       $_SESSION['kkchat_gender']         = $gender;
       $_SESSION['kkchat_is_guest']       = $via_wp ? 0 : 1;
-      $_SESSION['kkchat_seen_at_public'] = time();
+      $_SESSION['kkchat_seen_at_public'] = kkchat_now();
       kkchat_touch_active_user();
 
       if ($via_wp) {
@@ -1031,7 +1031,7 @@ add_action('rest_api_init', function () {
       // Simple rate limit to deter abuse (default: 3s gap)
       $gap  = (int) apply_filters('kkchat_upload_min_gap', 3);
       $last = (int) ($_SESSION['kk_last_upload_at'] ?? 0);
-      if ($gap > 0 && time() - $last < $gap) {
+      if ($gap > 0 && kkchat_now() - $last < $gap) {
         kkchat_json(['ok'=>false,'err'=>'too_fast'], 429);
       }
 
@@ -1120,7 +1120,7 @@ add_action('rest_api_init', function () {
         }
       }
 
-      $_SESSION['kk_last_upload_at'] = time();
+      $_SESSION['kk_last_upload_at'] = kkchat_now();
         kkchat_close_session_if_open(); 
       kkchat_json(['ok'=>true,'url'=>$moved['url']]);
     },
@@ -1332,7 +1332,7 @@ register_rest_route($ns, '/sync', [
     $events = kkchat_sync_format_events($payload, $since < 0);
 
     $data = [
-      'now'        => (int) ($payload['now'] ?? time()),
+      'now'        => (int) ($payload['now'] ?? kkchat_now()),
       'next'       => $cursor,
       'retryAfter' => $retryAfter,
       'events'     => $events,
@@ -1387,7 +1387,7 @@ register_rest_route($ns, '/users', [
 
     global $wpdb;
     $t   = kkchat_tables();
-    $now = time();
+    $now = kkchat_now();
 
     // Read any session-driven bits BEFORE closing session.
     $is_admin_viewer = kkchat_is_admin();
@@ -1532,7 +1532,7 @@ register_rest_route($ns, '/ping', [
     kkchat_wpdb_reconnect_if_needed();
     global $wpdb;
     $t   = kkchat_tables();
-    $now = time();
+    $now = kkchat_now();
 
     // Clear expired watch flags
     $wpdb->query(
@@ -1826,10 +1826,10 @@ register_rest_route($ns, '/fetch', [
           if ($r['kind']==='forbid' && !$hit_forbid) $hit_forbid = $r;
         }
         if ($hit_watch){
-          $wpdb->update($t['users'], ['watch_flag'=>1,'watch_flag_at'=>time()], ['id'=>$me_id], ['%d','%d'], ['%d']);
+          $wpdb->update($t['users'], ['watch_flag'=>1,'watch_flag_at'=>kkchat_now()], ['id'=>$me_id], ['%d','%d'], ['%d']);
         }
         if ($hit_forbid){
-          $now = time();
+          $now = kkchat_now();
           $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
           $cause = 'Forbidden word: "'.$hit_forbid['word'].'"';
           $dur   = $hit_forbid['duration_sec']; // NULL => infinite
@@ -1877,7 +1877,7 @@ register_rest_route($ns, '/fetch', [
       // Minimal anti-flood: min interval between messages
       $minGap = max(0, kkchat_min_interval_seconds());
       if ($minGap > 0) {
-        $now = time();
+        $now = kkchat_now();
         $recent = (int)$wpdb->get_var($wpdb->prepare(
           "SELECT COUNT(*) FROM {$t['messages']} WHERE sender_id = %d AND created_at > %d",
           $me_id, $now - $minGap
@@ -1914,7 +1914,7 @@ register_rest_route($ns, '/fetch', [
         if (!kkchat_can_access_room($room)) kkchat_json(['ok'=>false,'err'=>'no_room_access'], 403);
       }
 
-      $now = time();
+      $now = kkchat_now();
       $sender_ip = kkchat_client_ip();
 
       // Prepare content + dedupe basis
@@ -2042,7 +2042,7 @@ register_rest_route($ns, '/reads/mark', [
     $room_slug     = kkchat_sanitize_room_slug($room_slug_raw);
     $room_last_id  = (int) ($req->get_param('room_last_id') ?? 0);
 
-    $now         = time();
+    $now         = kkchat_now();
     $dmUpdates   = [];
     $roomUpdates = [];
     $roomSeenAt  = [];
@@ -2267,7 +2267,7 @@ register_rest_route($ns, '/reads/mark', [
       $u = $wpdb->get_row($wpdb->prepare("SELECT id,name,ip FROM {$t['users']} WHERE id=%d", $reported_id), ARRAY_A);
       if (!$u) kkchat_json(['ok'=>false,'err'=>'user_gone'], 400);
 
-      $now = time();
+      $now = kkchat_now();
       $wpdb->insert($t['reports'], [
         'created_at'    => $now,
         'reporter_id'   => $me_id,
@@ -2339,7 +2339,7 @@ register_rest_route($ns, '/reads/mark', [
       $id  = max(0, (int)$req->get_param('id'));
       if ($id <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
 
-      $now = time();
+      $now = kkchat_now();
       $updated = $wpdb->update(
         $t['reports'],
         ['status'=>'resolved','resolved_at'=>$now],               // no "resolved_by"
@@ -2455,7 +2455,7 @@ register_rest_route($ns, '/moderate/hide-message', [
               hidden_by = %d,
               hidden_cause = %s
         WHERE id = %d",
-      time(), get_current_user_id() ?: 0, ($cause !== '' ? $cause : null), $mid
+      kkchat_now(), get_current_user_id() ?: 0, ($cause !== '' ? $cause : null), $mid
     ));
 
     // Emit an invisible moderation event to wake long-poll clients
@@ -2463,7 +2463,7 @@ register_rest_route($ns, '/moderate/hide-message', [
     if (empty($msg['recipient_id'])) {
       // Public message (room)
       $wpdb->insert($t['messages'], [
-        'created_at'     => time(),
+        'created_at'     => kkchat_now(),
         'kind'           => 'mod_hide',
         'room'           => $msg['room'],
         'sender_id'      => 0,          // system
@@ -2475,7 +2475,7 @@ register_rest_route($ns, '/moderate/hide-message', [
     } else {
       // Direct message: insert into the same sender/recipient channel so both sides wake up
       $wpdb->insert($t['messages'], [
-        'created_at'     => time(),
+        'created_at'     => kkchat_now(),
         'kind'           => 'mod_hide',
         'room'           => null,
         'sender_id'      => (int)$msg['sender_id'],
@@ -2532,7 +2532,7 @@ register_rest_route($ns, '/moderate/hide-message', [
       $u = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['users']} WHERE id=%d", $uid), ARRAY_A);
       if (!$u) kkchat_json(['ok'=>false,'err'=>'no_user'], 400);
 
-      $now = time();
+      $now = kkchat_now();
       $exp = $now + $minutes*60;
 
       $wpdb->insert($t['blocks'], [
@@ -2570,7 +2570,7 @@ register_rest_route($ns, '/moderate/hide-message', [
       $u = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['users']} WHERE id=%d", $uid), ARRAY_A);
       if (!$u || empty($u['ip'])) kkchat_json(['ok'=>false,'err'=>'no_ip'], 400);
 
-      $now = time();
+      $now = kkchat_now();
       $exp = ($minutes > 0) ? ($now + $minutes*60) : null;
 
       $wpdb->insert($t['blocks'], [

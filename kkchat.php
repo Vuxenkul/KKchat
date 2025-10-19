@@ -15,6 +15,46 @@ if (!defined('ABSPATH')) exit;
 define('KKCHAT_PATH', plugin_dir_path(__FILE__));
 define('KKCHAT_URL',  plugin_dir_url(__FILE__));
 
+/**
+ * Central timezone helpers.
+ */
+function kkchat_timezone(): DateTimeZone {
+  static $tz = null;
+  if ($tz instanceof DateTimeZone) { return $tz; }
+
+  try {
+    $tz = new DateTimeZone('Europe/Stockholm');
+  } catch (Exception $e) {
+    $tz = new DateTimeZone('UTC');
+  }
+
+  return $tz;
+}
+
+function kkchat_now(): int {
+  return (new DateTimeImmutable('now', kkchat_timezone()))->getTimestamp();
+}
+
+function kkchat_format_datetime(int $timestamp, string $format = 'Y-m-d H:i:s'): string {
+  $dt = (new DateTimeImmutable('@' . max(0, $timestamp)))->setTimezone(kkchat_timezone());
+  return $dt->format($format);
+}
+
+function kkchat_parse_datetime(string $value, string $format = 'Y-m-d H:i:s'): ?int {
+  $value = trim($value);
+  if ($value === '') { return null; }
+
+  $dt = DateTimeImmutable::createFromFormat($format, $value, kkchat_timezone());
+  if ($dt === false) { return null; }
+
+  $errors = DateTimeImmutable::getLastErrors();
+  if (!empty($errors['warning_count']) || !empty($errors['error_count'])) {
+    return null;
+  }
+
+  return $dt->getTimestamp();
+}
+
 /* ------------------------------
  * Core helpers (shared across all includes)
  * ------------------------------ */
@@ -250,7 +290,7 @@ function kkchat_require_login(bool $refresh_ttl = true) {
   $ttl = (int) kkchat_user_ttl();
   if ($ttl > 0) {
     $last_active = (int) ($_SESSION['kkchat_last_active_at'] ?? 0);
-    if ($last_active > 0 && (time() - $last_active) > $ttl) {
+    if ($last_active > 0 && (kkchat_now() - $last_active) > $ttl) {
       kkchat_logout_session();
       if (function_exists('kkchat_close_session_if_open')) {
         kkchat_close_session_if_open();
@@ -260,7 +300,7 @@ function kkchat_require_login(bool $refresh_ttl = true) {
   }
 
   if ($refresh_ttl) {
-    $_SESSION['kkchat_last_active_at'] = time();
+    $_SESSION['kkchat_last_active_at'] = kkchat_now();
   }
 }
 function kkchat_user_ttl() { return 600; }
@@ -284,7 +324,7 @@ function kkchat_current_wp_username(): string {
 
 /** Revive or create the active_users row for the current session user and store its id in the session. */
 function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_session_ttl = true): int {
-  $now  = time();
+  $now  = kkchat_now();
   $name = kkchat_current_user_name();
 
   if ($name === '') {
@@ -513,7 +553,7 @@ function kkchat_is_admin_id(int $user_id): bool {
  * Moderation (kicks / IP bans)
  * ------------------------------ */
 function kkchat_moderation_block_for($uid, $name, $wp_username, $ip) {
-  global $wpdb; $t = kkchat_tables(); $now = time();
+  global $wpdb; $t = kkchat_tables(); $now = kkchat_now();
   // Clean expired
   $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET active=0 WHERE active=1 AND expires_at IS NOT NULL AND expires_at <= %d", $now));
 
@@ -687,7 +727,7 @@ function kkchat_block_add(int $target_id, ?string $target_wp_username = null): a
   }
 
   // Registered -> persist in DB
-  global $wpdb; $t = kkchat_tables(); $now = time();
+  global $wpdb; $t = kkchat_tables(); $now = kkchat_now();
 
   // Try update existing row
   $exists = $wpdb->get_row($wpdb->prepare(
@@ -745,7 +785,7 @@ function kkchat_block_remove(int $target_id): array {
     return ['ok'=>true, 'now_blocked'=>false];
   }
 
-  global $wpdb; $t = kkchat_tables(); $now = time();
+  global $wpdb; $t = kkchat_tables(); $now = kkchat_now();
   $wpdb->query($wpdb->prepare(
     "UPDATE {$t['user_blocks']} SET active=0, updated_at=%d WHERE blocker_id=%d AND target_id=%d",
     $now, $blocker_id, $target_id
@@ -877,7 +917,7 @@ if (!function_exists('kkchat_rest_logout')) {
       $p = session_get_cookie_params();
 
       // Pre-7.3 compatible
-      setcookie(session_name(), '', time() - 42000,
+      setcookie(session_name(), '', kkchat_now() - 42000,
         $p['path'] ?: '/',
         $p['domain'] ?: '',
         !empty($p['secure']),
@@ -887,7 +927,7 @@ if (!function_exists('kkchat_rest_logout')) {
       // PHP ≥ 7.3: respect SameSite too
       if (PHP_VERSION_ID >= 70300) {
         $opts = [
-          'expires'  => time() - 42000,
+          'expires'  => kkchat_now() - 42000,
           'path'     => $p['path'] ?: '/',
           'domain'   => $p['domain'] ?: '',
           'secure'   => !empty($p['secure']),
@@ -904,7 +944,7 @@ if (!function_exists('kkchat_rest_logout')) {
     // 4) Proactively expire any app-specific cookies if you set any
     foreach ($_COOKIE as $name => $val) {
       if (stripos($name, 'kkchat_') === 0) {
-        setcookie($name, '', time() - 42000, '/');
+        setcookie($name, '', kkchat_now() - 42000, '/');
       }
     }
 

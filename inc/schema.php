@@ -202,7 +202,7 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
 
   // Schedule cron (for banners)
   if (!wp_next_scheduled('kkchat_cron_tick')) {
-    wp_schedule_event(time() + 30, 'kkchat_minutely', 'kkchat_cron_tick');
+    wp_schedule_event(kkchat_now() + 30, 'kkchat_minutely', 'kkchat_cron_tick');
   }
 
   // Default settings option
@@ -353,7 +353,7 @@ add_filter('cron_schedules', function($s){
 // Self-healing: (re)seed the event if it ever goes missing
 add_action('init', function () {
   if (!wp_next_scheduled('kkchat_cron_tick')) {
-    wp_schedule_event(time() + 60, 'kkchat_minutely', 'kkchat_cron_tick');
+    wp_schedule_event(kkchat_now() + 60, 'kkchat_minutely', 'kkchat_cron_tick');
   }
 });
 
@@ -361,25 +361,7 @@ add_action('init', function () {
  * Cron runner for scheduled banners
  */
 function kkchat_banner_timezone(): DateTimeZone {
-  if (function_exists('wp_timezone')) {
-    return wp_timezone();
-  }
-
-  $tz_string = get_option('timezone_string');
-  if ($tz_string) {
-    try {
-      return new DateTimeZone($tz_string);
-    } catch (Exception $e) {
-      // fall through to offset fallback
-    }
-  }
-
-  $offset = (float) get_option('gmt_offset', 0);
-  $hours  = (int) $offset;
-  $mins   = (int) round(abs($offset - $hours) * 60);
-  $sign   = $offset >= 0 ? '+' : '-';
-  $tz     = sprintf('%s%02d:%02d', $sign, abs($hours), $mins);
-  return new DateTimeZone($tz);
+  return kkchat_timezone();
 }
 
 function kkchat_banner_next_run(array $row, int $after): ?int {
@@ -474,7 +456,7 @@ function kkchat_banner_next_run_window(array $row, int $after, int $interval): ?
 add_action('kkchat_cron_tick', 'kkchat_run_scheduled_banners');
 function kkchat_run_scheduled_banners(){
   global $wpdb; $t = kkchat_tables();
-  $now = time();
+  $now = kkchat_now();
 
   // Fetch due, active banners
   $rows = $wpdb->get_results(

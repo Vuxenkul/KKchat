@@ -90,7 +90,7 @@ function kkchat_handle_logs_ipban() {
     }
   }
 
-  $now = time();
+  $now = kkchat_now();
   $exp = $minutes > 0 ? $now + $minutes * 60 : null;
   $admin = wp_get_current_user()->user_login ?? '';
 
@@ -115,7 +115,7 @@ function kkchat_handle_logs_ipban() {
   if ($exp === null) {
     $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", (int)$wpdb->insert_id));
   }
-  $msg = 'IP '.$ipKey.' blockerad '.($exp ? 'till '.date_i18n('Y-m-d H:i:s', $exp) : 'för alltid').'.';
+  $msg = 'IP '.$ipKey.' blockerad '.($exp ? 'till '.kkchat_format_datetime($exp) : 'för alltid').'.';
   wp_safe_redirect( add_query_arg('kkbanok', rawurlencode($msg), $back) ); exit;
 }
 
@@ -176,7 +176,7 @@ function kkchat_admin_media_page() {
                hidden_by = %d,
                hidden_cause = %s
          WHERE id = %d",
-        time(), get_current_user_id() ?: 0, $cause, $mid
+        kkchat_now(), get_current_user_id() ?: 0, $cause, $mid
       ));
       echo '<div class="updated"><p>Meddelande #'.(int)$mid.' dolt.</p></div>';
     }
@@ -221,11 +221,11 @@ function kkchat_admin_media_page() {
   if ($recipient !== '') { $where[] = "recipient_name LIKE %s"; $params[] = '%'.$wpdb->esc_like($recipient).'%'; }
 
   if ($from !== '') {
-    $ts = strtotime($from.' 00:00:00');
+    $ts = kkchat_parse_datetime($from.' 00:00:00');
     if ($ts) { $where[] = "created_at >= %d"; $params[] = $ts; }
   }
   if ($to !== '') {
-    $ts = strtotime($to.' 23:59:59');
+    $ts = kkchat_parse_datetime($to.' 23:59:59');
     if ($ts) { $where[] = "created_at <= %d"; $params[] = $ts; }
   }
 
@@ -331,7 +331,7 @@ function kkchat_admin_media_page() {
             <?php if (!empty($m->hidden_at)): ?>
               <div class="badge">Dolt</div>
             <?php endif; ?>
-            <div class="kkrow"><strong>#<?php echo (int)$m->id; ?></strong> <span class="muted">• <?php echo esc_html(date_i18n('Y-m-d H:i', (int)$m->created_at)); ?></span></div>
+            <div class="kkrow"><strong>#<?php echo (int)$m->id; ?></strong> <span class="muted">• <?php echo esc_html(kkchat_format_datetime((int)$m->created_at, 'Y-m-d H:i')); ?></span></div>
             <?php if ($m->room): ?><div class="kkrow"><strong>Rum:</strong> <?php echo $h($m->room); ?></div><?php endif; ?>
             <div class="kkrow"><strong>Avs:</strong> <?php echo $h($m->sender_name ?: ('ID '.$m->sender_id)); ?></div>
             <?php if ($m->recipient_id): ?><div class="kkrow"><strong>→</strong> <?php echo $h($m->recipient_name ?: ('ID '.$m->recipient_id)); ?></div><?php endif; ?>
@@ -611,7 +611,7 @@ function kkchat_admin_settings_page() {
   if (!is_array($sync_metrics)) { $sync_metrics = []; }
   $sync_metrics = array_merge($sync_metrics_defaults, $sync_metrics);
   $sync_last_request_at = (int) $sync_metrics['last_request_at'];
-  $sync_last_request_at_display = $sync_last_request_at > 0 ? date_i18n('Y-m-d H:i:s', $sync_last_request_at) : '–';
+  $sync_last_request_at_display = $sync_last_request_at > 0 ? kkchat_format_datetime($sync_last_request_at) : '–';
   $sync_last_duration_ms = number_format_i18n((float) $sync_metrics['last_duration_ms'], 1);
   $sync_avg_duration_ms  = number_format_i18n((float) $sync_metrics['avg_duration_ms'], 1);
   ?>
@@ -894,10 +894,11 @@ if (!function_exists('kkchat_admin_parse_datetime_local')) {
     $value = trim($value);
     if ($value === '') { return null; }
     try {
-      $tz = kkchat_banner_timezone();
-      $dt = DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $value, $tz);
+      $dt = DateTimeImmutable::createFromFormat('Y-m-d\TH:i', $value, kkchat_timezone());
       if (!$dt) { return null; }
-      return $dt->setTimezone(new DateTimeZone('UTC'))->getTimestamp();
+      $errors = DateTimeImmutable::getLastErrors();
+      if (!empty($errors['warning_count']) || !empty($errors['error_count'])) { return null; }
+      return $dt->getTimestamp();
     } catch (Exception $e) {
       return null;
     }
@@ -929,11 +930,7 @@ if (!function_exists('kkchat_admin_weekday_labels')) {
 
 if (!function_exists('kkchat_admin_format_datetime')) {
   function kkchat_admin_format_datetime(int $timestamp, string $format = 'Y-m-d H:i'): string {
-    $tz = kkchat_banner_timezone();
-    if (function_exists('wp_date')) {
-      return wp_date($format, $timestamp, $tz);
-    }
-    return date_i18n($format, $timestamp);
+    return kkchat_format_datetime($timestamp, $format);
   }
 }
 
@@ -1065,7 +1062,7 @@ function kkchat_admin_banners_page(){
 
     $nextRun = null;
     if (!$errors) {
-      $afterTs = time();
+      $afterTs = kkchat_now();
       if ($mode !== 'rolling') {
         $afterTs -= 1;
       }
@@ -1123,7 +1120,7 @@ function kkchat_admin_banners_page(){
     $id = (int)$_GET['kk_run_now'];
     $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$t['banners']} WHERE id=%d", $id), ARRAY_A);
     if ($row && (int)$row['active'] === 1) {
-      $now = time();
+      $now = kkchat_now();
       $roomsSel = array_filter(array_map('kkchat_sanitize_room_slug', explode(',', (string)$row['rooms_csv'])));
       foreach ($roomsSel as $slug) {
         $wpdb->insert($t['messages'], [
@@ -1327,7 +1324,7 @@ function kkchat_admin_moderation_page(){
         if ($exists > 0) {
           echo '<div class="updated"><p>Det finns redan ett aktivt block för IP <code>'.esc_html($ipKey).'</code>.</p></div>';
         } else {
-          $now   = time();
+          $now   = kkchat_now();
           $exp   = $minutes > 0 ? $now + $minutes * 60 : null;
           $admin = wp_get_current_user()->user_login ?? '';
           $ok = $wpdb->insert($t['blocks'], [
@@ -1349,7 +1346,7 @@ function kkchat_admin_moderation_page(){
             if ($exp === null) {
               $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", (int)$wpdb->insert_id));
             }
-            echo '<div class="updated"><p>IP <code>'.esc_html($ipKey).'</code> blockerad '.($exp ? 'till '.esc_html(date_i18n('Y-m-d H:i:s', $exp)) : 'för alltid').'.</p></div>';
+            echo '<div class="updated"><p>IP <code>'.esc_html($ipKey).'</code> blockerad '.($exp ? 'till '.esc_html(kkchat_format_datetime($exp)) : 'för alltid').'.</p></div>';
           }
         }
       }
@@ -1438,8 +1435,8 @@ function kkchat_admin_moderation_page(){
           <td><?php echo esc_html($b->target_ip); ?></td>
           <td><?php echo esc_html($b->cause); ?></td>
           <td><?php echo esc_html($b->created_by); ?></td>
-          <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$b->created_at)); ?></td>
-          <td><?php echo $b->expires_at ? esc_html(date_i18n('Y-m-d H:i:s', (int)$b->expires_at)) : '∞'; ?></td>
+          <td><?php echo esc_html(kkchat_format_datetime((int)$b->created_at)); ?></td>
+          <td><?php echo $b->expires_at ? esc_html(kkchat_format_datetime((int)$b->expires_at)) : '∞'; ?></td>
           <td>
             <?php $unblock_url = wp_nonce_url(add_query_arg('unblock', $b->id, $moderation_base), $nonce_key); ?>
             <a class="button" href="<?php echo esc_url($unblock_url); ?>">Avblockera</a>
@@ -1493,8 +1490,8 @@ function kkchat_admin_moderation_page(){
           <td><?php echo esc_html($b->target_ip); ?></td>
           <td><?php echo esc_html($b->cause); ?></td>
           <td><?php echo esc_html($b->created_by); ?></td>
-          <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$b->created_at)); ?></td>
-          <td><?php echo $b->expires_at ? esc_html(date_i18n('Y-m-d H:i:s', (int)$b->expires_at)) : '∞'; ?></td>
+          <td><?php echo esc_html(kkchat_format_datetime((int)$b->created_at)); ?></td>
+          <td><?php echo $b->expires_at ? esc_html(kkchat_format_datetime((int)$b->expires_at)) : '∞'; ?></td>
           <td><?php echo $b->active ? 'Ja' : 'Nej'; ?></td>
         </tr>
       <?php endforeach; else: ?>
@@ -1561,7 +1558,7 @@ function kkchat_admin_words_page(){
         'enabled'      => 1,
         'notes'        => $notes,
         'created_by'   => wp_get_current_user()->user_login ?? null,
-        'created_at'   => time()
+        'created_at'   => kkchat_now()
       ], ['%s','%s','%s','%s','%d','%d','%s','%s','%d']);
       echo '<div class="updated"><p>Regel sparad.</p></div>';
     }
@@ -1749,7 +1746,7 @@ function kkchat_admin_reports_page() {
       <?php if ($rows): foreach ($rows as $r): ?>
         <tr>
           <td><?php echo (int)$r->id; ?></td>
-          <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$r->created_at)); ?></td>
+          <td><?php echo esc_html(kkchat_format_datetime((int)$r->created_at)); ?></td>
           <td><?php echo esc_html($r->reporter_name); ?> (<?php echo (int)$r->reporter_id; ?>)</td>
           <td><code><?php echo esc_html($r->reporter_ip); ?></code></td>
           <td><?php echo esc_html($r->reported_name); ?> (<?php echo (int)$r->reported_id; ?>)</td>
@@ -1809,7 +1806,7 @@ function kkchat_admin_logs_page() {
                hidden_by = %d,
                hidden_cause = %s
          WHERE id = %d",
-        time(), get_current_user_id() ?: 0, $cause, $mid
+        kkchat_now(), get_current_user_id() ?: 0, $cause, $mid
       ));
       echo '<div class="updated"><p>Meddelande #'.(int)$mid.' dolt.</p></div>';
     }
@@ -1832,7 +1829,7 @@ function kkchat_admin_logs_page() {
   /* ---------- Rensa (purge) ---------- */
   if (isset($_POST['kk_purge_90'])) {
     check_admin_referer('kkchat_logs_purge');
-    $days = 90; $threshold = time() - ($days * 86400);
+    $days = 90; $threshold = kkchat_now() - ($days * 86400);
     $cnt_msgs  = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} WHERE created_at < %d", $threshold));
     $cnt_reads = (int)$wpdb->get_var($wpdb->prepare(
       "SELECT COUNT(*) FROM {$t['reads']} r
@@ -1916,8 +1913,8 @@ function kkchat_admin_logs_page() {
   if ($sender !== '')  { $where[] = "sender_name LIKE %s";     $params[] = '%'.$wpdb->esc_like($sender).'%'; }
   if ($recipient !== '') { $where[] = "recipient_name LIKE %s"; $params[] = '%'.$wpdb->esc_like($recipient).'%'; }
   if ($room !== '')    { $where[] = "(recipient_id IS NULL AND room = %s)"; $params[] = $room; }
-  if ($from !== '')    { $ts = strtotime($from.' 00:00:00'); if ($ts) { $where[] = "created_at >= %d"; $params[] = $ts; } }
-  if ($to   !== '')    { $ts = strtotime($to.' 23:59:59'); if ($ts) { $where[] = "created_at <= %d"; $params[] = $ts; } }
+  if ($from !== '')    { $ts = kkchat_parse_datetime($from.' 00:00:00'); if ($ts) { $where[] = "created_at >= %d"; $params[] = $ts; } }
+  if ($to   !== '')    { $ts = kkchat_parse_datetime($to.' 23:59:59'); if ($ts) { $where[] = "created_at <= %d"; $params[] = $ts; } }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
   $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} $whereSql", ...$params));
@@ -2139,7 +2136,7 @@ function kkchat_admin_logs_page() {
                     <div class="kkconv-msg">
                       <div class="kkconv-meta">
                         <strong><?php echo esc_html($r->sender_name ?: ('#'.$r->sender_id)); ?></strong>
-                        • <?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$r->created_at)); ?>
+                        • <?php echo esc_html(kkchat_format_datetime((int)$r->created_at)); ?>
                         <?php if ($r->recipient_id): ?> • DM<?php else: ?> • Rum: <code><?php echo esc_html($r->room); ?></code><?php endif; ?>
                       </div>
                       <div class="kkchat-msg">
@@ -2189,7 +2186,7 @@ function kkchat_admin_logs_page() {
                 <?php endif; ?>
               </td>
 
-              <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$m->created_at)); ?></td>
+              <td><?php echo esc_html(kkchat_format_datetime((int)$m->created_at)); ?></td>
               <td><?php echo esc_html($m->kind); ?></td>
               <td>
                 <?php
@@ -2247,7 +2244,7 @@ function kkchat_admin_logs_page() {
               <td>
                 <?php if (!empty($m->hidden_at)): ?>
                   <span class="badge" style="background:#fbeaea;border:1px solid #e3a1a1;padding:2px 6px;border-radius:4px">Dolt</span><br>
-                  <small><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$m->hidden_at)); ?></small>
+                  <small><?php echo esc_html(kkchat_format_datetime((int)$m->hidden_at)); ?></small>
                   <?php if (!empty($m->hidden_cause)): ?>
                     <br><small class="description"><?php echo esc_html($m->hidden_cause); ?></small>
                   <?php endif; ?>
