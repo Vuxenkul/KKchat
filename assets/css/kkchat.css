@@ -440,7 +440,7 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .header {
   position: sticky;
   top: 16px;
-  z-index: 20;
+  z-index: 1020;
   background: linear-gradient(150deg, rgba(17, 20, 32, 0.86) 0%, rgba(12, 14, 24, 0.92) 60%, rgba(10, 13, 21, 0.88) 100%);
   border: 1px solid rgba(122, 136, 196, 0.24);
   border-radius: var(--radius-md);
@@ -532,6 +532,8 @@ html, body { margin: 0; height: 100%; }
   transform: translateY(-1px);
 }
 #kkchat-root .tabs {
+     position: relative;
+  z-index: 5;
   display: flex;
   gap: 10px;
   overflow-x: auto;
