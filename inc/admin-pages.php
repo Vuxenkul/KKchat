@@ -522,6 +522,12 @@ function kkchat_admin_settings_page() {
   if (isset($_POST['kk_save_settings'])) {
     check_admin_referer($nonce_key);
 
+    $sync_enabled            = !empty($_POST['sync_enabled']) ? 1 : 0;
+    $sync_concurrency        = max(1, (int) ($_POST['sync_concurrency'] ?? 1));
+    $sync_breaker_threshold  = max(1, (int) ($_POST['sync_breaker_threshold'] ?? 5));
+    $sync_breaker_window     = max(5, (int) ($_POST['sync_breaker_window'] ?? 60));
+    $sync_breaker_cooldown   = max(10, (int) ($_POST['sync_breaker_cooldown'] ?? 90));
+
     $dupe_window_seconds   = max(1, (int)($_POST['dupe_window_seconds'] ?? 120));
     $dupe_fast_seconds     = max(1, (int)($_POST['dupe_fast_seconds'] ?? 30));
     $dupe_max_repeats      = max(1, (int)($_POST['dupe_max_repeats'] ?? 2));
@@ -542,6 +548,11 @@ function kkchat_admin_settings_page() {
     $poll_medium_interval  = max($poll_hot_interval, $poll_medium_interval);
     $poll_slow_interval    = max($poll_medium_interval, $poll_slow_interval);
 
+    update_option('kkchat_sync_enabled',            $sync_enabled);
+    update_option('kkchat_sync_concurrency',        $sync_concurrency);
+    update_option('kkchat_sync_breaker_threshold',  $sync_breaker_threshold);
+    update_option('kkchat_sync_breaker_window',     $sync_breaker_window);
+    update_option('kkchat_sync_breaker_cooldown',   $sync_breaker_cooldown);
     update_option('kkchat_dupe_window_seconds',   $dupe_window_seconds);
     update_option('kkchat_dupe_fast_seconds',     $dupe_fast_seconds);
     update_option('kkchat_dupe_max_repeats',      $dupe_max_repeats);
@@ -562,6 +573,11 @@ function kkchat_admin_settings_page() {
   }
 
   // Värden
+  $v_sync_enabled            = (int) get_option('kkchat_sync_enabled', 1);
+  $v_sync_concurrency        = max(1, (int) get_option('kkchat_sync_concurrency', 1));
+  $v_sync_breaker_threshold  = (int) get_option('kkchat_sync_breaker_threshold', 5);
+  $v_sync_breaker_window     = (int) get_option('kkchat_sync_breaker_window', 60);
+  $v_sync_breaker_cooldown   = (int) get_option('kkchat_sync_breaker_cooldown', 90);
   $v_dupe_window_seconds   = (int)get_option('kkchat_dupe_window_seconds', 120);
   $v_dupe_fast_seconds     = (int)get_option('kkchat_dupe_fast_seconds', 30);
   $v_dupe_max_repeats      = (int)get_option('kkchat_dupe_max_repeats', 2);
@@ -577,10 +593,86 @@ function kkchat_admin_settings_page() {
   $v_poll_slow_after       = (int)get_option('kkchat_poll_slow_after', 5);
   $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
   $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
+
+  $sync_metrics_defaults = [
+    'total_requests'     => 0,
+    'total_success'      => 0,
+    'rate_limited'       => 0,
+    'disabled_hits'      => 0,
+    'breaker_opens'      => 0,
+    'breaker_denied'     => 0,
+    'concurrency_denied' => 0,
+    'last_duration_ms'   => 0.0,
+    'avg_duration_ms'    => 0.0,
+    'duration_samples'   => 0,
+    'last_request_at'    => 0,
+  ];
+  $sync_metrics = get_option('kkchat_sync_metrics');
+  if (!is_array($sync_metrics)) { $sync_metrics = []; }
+  $sync_metrics = array_merge($sync_metrics_defaults, $sync_metrics);
+  $sync_last_request_at = (int) $sync_metrics['last_request_at'];
+  $sync_last_request_at_display = $sync_last_request_at > 0 ? date_i18n('Y-m-d H:i:s', $sync_last_request_at) : '–';
+  $sync_last_duration_ms = number_format_i18n((float) $sync_metrics['last_duration_ms'], 1);
+  $sync_avg_duration_ms  = number_format_i18n((float) $sync_metrics['avg_duration_ms'], 1);
   ?>
   <div class="wrap">
     <h1>KKchat – Inställningar</h1>
+    <h2>Synk-status</h2>
+    <table class="widefat striped">
+      <tbody>
+        <tr><th>Totala förfrågningar</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['total_requests'])); ?></td></tr>
+        <tr><th>Lyckade svar</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['total_success'])); ?></td></tr>
+        <tr><th>Rate limit-svar</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['rate_limited'])); ?></td></tr>
+        <tr><th>Kill switch-träffar</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['disabled_hits'])); ?></td></tr>
+        <tr><th>Breaker öppnades</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['breaker_opens'])); ?></td></tr>
+        <tr><th>Breaker nekade</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['breaker_denied'])); ?></td></tr>
+        <tr><th>Avvisade p.g.a. samtidighet</th><td><?php echo esc_html(number_format_i18n((int) $sync_metrics['concurrency_denied'])); ?></td></tr>
+        <tr><th>Senaste svarstid (ms)</th><td><?php echo esc_html($sync_last_duration_ms); ?></td></tr>
+        <tr><th>Snitt (ms)</th><td><?php echo esc_html($sync_avg_duration_ms); ?></td></tr>
+        <tr><th>Senaste förfrågan</th><td><?php echo esc_html($sync_last_request_at_display); ?></td></tr>
+      </tbody>
+    </table>
+    <p class="description">Mätvärdena nollställs vid databasrensning eller om alternativet tas bort manuellt.</p>
     <form method="post"><?php wp_nonce_field($nonce_key); ?>
+      <h2>Synk-skydd</h2>
+      <table class="form-table">
+        <tr>
+          <th><label for="sync_enabled">Aktivera sync-endpoint</label></th>
+          <td>
+            <label><input type="checkbox" id="sync_enabled" name="sync_enabled" value="1" <?php checked($v_sync_enabled, 1); ?>> Tillåt /sync</label>
+            <p class="description">Avmarkera för att omedelbart stänga av synk-routen vid incidenter.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="sync_concurrency">Max samtidiga synkar</label></th>
+          <td>
+            <input id="sync_concurrency" name="sync_concurrency" type="number" class="small-text" min="1" step="1" value="<?php echo (int) $v_sync_concurrency; ?>">
+            <p class="description">Tillåt så här många samtidiga byggen av synk-payload. Fler försök får svar med "try again".</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="sync_breaker_threshold">Breaker-tröskel</label></th>
+          <td>
+            <input id="sync_breaker_threshold" name="sync_breaker_threshold" type="number" class="small-text" min="1" step="1" value="<?php echo (int) $v_sync_breaker_threshold; ?>">
+            <p class="description">Antal misslyckanden inom fönstret innan synken stängs av temporärt.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="sync_breaker_window">Breaker-fönster (s)</label></th>
+          <td>
+            <input id="sync_breaker_window" name="sync_breaker_window" type="number" class="small-text" min="5" step="5" value="<?php echo (int) $v_sync_breaker_window; ?>">
+            <p class="description">Tid (sekunder) vi räknar misslyckanden innan räknaren nollas.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="sync_breaker_cooldown">Breaker-cooldown (s)</label></th>
+          <td>
+            <input id="sync_breaker_cooldown" name="sync_breaker_cooldown" type="number" class="small-text" min="10" step="5" value="<?php echo (int) $v_sync_breaker_cooldown; ?>">
+            <p class="description">Hur länge (sekunder) synken hålls avstängd när breakern löser ut.</p>
+          </td>
+        </tr>
+      </table>
+      <h2>Antispam</h2>
       <table class="form-table">
         <tr>
           <th><label for="min_interval_seconds">Minsta intervall</label></th>
