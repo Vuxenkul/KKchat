@@ -40,6 +40,50 @@ function kkchat_tables(){
   ];
 }
 
+function kkchat_wp_timezone_string(): string {
+  if (function_exists('wp_timezone_string')) {
+    $tz = (string) wp_timezone_string();
+    if ($tz !== '') {
+      return $tz;
+    }
+  }
+
+  $tz_string = (string) get_option('timezone_string');
+  if ($tz_string !== '') {
+    return $tz_string;
+  }
+
+  $offset = (float) get_option('gmt_offset', 0);
+  if ($offset === 0.0) {
+    return 'UTC';
+  }
+
+  $sign      = ($offset < 0) ? '-' : '+';
+  $absOffset = abs($offset);
+  $hours     = (int) floor($absOffset);
+  $minutes   = (int) round(($absOffset - $hours) * 60);
+
+  if ($minutes === 60) {
+    $hours  += 1;
+    $minutes = 0;
+  }
+
+  return sprintf('UTC%s%02d:%02d', $sign, $hours, $minutes);
+}
+
+function kkchat_wp_timezone_offset_seconds(): int {
+  if (function_exists('wp_timezone')) {
+    $tz = wp_timezone();
+    if ($tz instanceof DateTimeZone) {
+      $now = new DateTimeImmutable('now', $tz);
+      return (int) $now->getOffset();
+    }
+  }
+
+  $offset = (float) get_option('gmt_offset', 0);
+  return (int) round($offset * HOUR_IN_SECONDS);
+}
+
 
 function kkchat_ensure_users_table() {
   global $wpdb; $t = kkchat_tables();

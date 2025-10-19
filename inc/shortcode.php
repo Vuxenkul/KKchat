@@ -443,6 +443,148 @@ f.addEventListener('submit', async (ev)=>{
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
   const POLL_SETTINGS = Object.freeze(<?= wp_json_encode($poll_settings) ?>);
+  const TIME_LOCALE = 'sv-SE';
+  const WP_TIMEZONE = <?= wp_json_encode(kkchat_wp_timezone_string()) ?>;
+  const WP_TIMEZONE_OFFSET = <?= (int) kkchat_wp_timezone_offset_seconds() ?>;
+
+  const TIME_FORMATTER = (() => {
+    try {
+      return new Intl.DateTimeFormat(TIME_LOCALE, {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: WP_TIMEZONE && typeof WP_TIMEZONE === 'string' && WP_TIMEZONE !== ''
+          ? WP_TIMEZONE
+          : undefined,
+      });
+    } catch (_) {
+      return null;
+    }
+  })();
+
+  const DATETIME_FORMATTER = (() => {
+    try {
+      return new Intl.DateTimeFormat(TIME_LOCALE, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: WP_TIMEZONE && typeof WP_TIMEZONE === 'string' && WP_TIMEZONE !== ''
+          ? WP_TIMEZONE
+          : undefined,
+      });
+    } catch (_) {
+      return null;
+    }
+  })();
+
+  function ensureDate(value) {
+    if (value instanceof Date) {
+      return value;
+    }
+
+    const ts = Number(value);
+    if (!Number.isFinite(ts) || ts <= 0) {
+      return null;
+    }
+
+    const date = new Date(ts * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  function formatTime(value) {
+    const date = ensureDate(value);
+    if (!date) {
+      return '';
+    }
+
+    if (TIME_FORMATTER) {
+      try {
+        return TIME_FORMATTER.format(date);
+      } catch (_) {}
+    }
+
+    try {
+      return date.toLocaleTimeString(TIME_LOCALE, {
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: WP_TIMEZONE && typeof WP_TIMEZONE === 'string' && WP_TIMEZONE !== ''
+          ? WP_TIMEZONE
+          : undefined,
+      });
+    } catch (_) {}
+
+    const offsetSeconds = Number(WP_TIMEZONE_OFFSET);
+    if (Number.isFinite(offsetSeconds)) {
+      const adjusted = new Date(date.getTime() + offsetSeconds * 1000);
+      try {
+        return adjusted.toLocaleTimeString(TIME_LOCALE, {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'UTC',
+        });
+      } catch (_) {}
+    }
+
+    try {
+      return date.toLocaleTimeString(TIME_LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false });
+    } catch (_) {}
+
+    return '';
+  }
+
+  function formatDateTime(value) {
+    const date = ensureDate(value);
+    if (!date) {
+      return '';
+    }
+
+    if (DATETIME_FORMATTER) {
+      try {
+        return DATETIME_FORMATTER.format(date);
+      } catch (_) {}
+    }
+
+    try {
+      return date.toLocaleString(TIME_LOCALE, {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        timeZone: WP_TIMEZONE && typeof WP_TIMEZONE === 'string' && WP_TIMEZONE !== ''
+          ? WP_TIMEZONE
+          : undefined,
+      });
+    } catch (_) {}
+
+    const offsetSeconds = Number(WP_TIMEZONE_OFFSET);
+    if (Number.isFinite(offsetSeconds)) {
+      const adjusted = new Date(date.getTime() + offsetSeconds * 1000);
+      try {
+        return adjusted.toLocaleString(TIME_LOCALE, {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+          timeZone: 'UTC',
+        });
+      } catch (_) {}
+    }
+
+    try {
+      return date.toLocaleString(TIME_LOCALE);
+    } catch (_) {}
+
+    return '';
+  }
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -2051,7 +2193,7 @@ async function doLogout(){
   const mid = Number(m.id);
   const sid = Number(m.sender_id||0);
   const who = m.sender_name || 'Okänd';
-  const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+  const when = formatTime(m.time || 0);
   const roleClass = isAdminById?.(sid) ? ' admin' : '';
   rememberName(sid, m.sender_name);
   const gender = genderById(sid);
@@ -2362,7 +2504,7 @@ function renderList(el, items){
       rememberName(m.sender_id, m.sender_name);
       const gender = genderById(m.sender_id);
 
-      const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+      const when = formatTime(m.time || 0);
       const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
       let bubbleHTML = '';
@@ -2762,9 +2904,7 @@ function normalizeUnreadMap(map) {
   if (!text) text = '…';
 
   const ts = Number(info.time);
-  const timeLabel = Number.isFinite(ts) && ts > 0
-    ? new Date(ts * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const timeLabel = Number.isFinite(ts) && ts > 0 ? formatTime(ts) : '';
 
   const ctxPart = ctx ? `${esc(ctx)}: ` : '';
   const timePart = timeLabel ? ` <span class="last-msg-time">${esc(timeLabel)}</span>` : '';
@@ -4605,7 +4745,7 @@ function appendPendingMessage(text){
   }
 
   const now = new Date();
-  const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const when = formatTime(now);
   const who = typeof ME_NM !== 'undefined' ? ME_NM || '' : '';
   const gender = (typeof genderById === 'function' && typeof ME_ID !== 'undefined')
     ? genderById(ME_ID)
@@ -4660,9 +4800,9 @@ function finalizePendingMessage(pending, payload){
     const bubbleMeta = pending.querySelector('.bubble-meta-text');
     const serverTime = Number(payload?.time ?? 0);
     if (bubbleMeta && Number.isFinite(serverTime) && serverTime > 0) {
-      const when = new Date(serverTime * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+      const when = formatTime(serverTime);
       const parts = bubbleMeta.innerHTML.split('<br>');
-      if (parts.length === 2) {
+      if (when && parts.length === 2) {
         parts[1] = esc(when);
         bubbleMeta.innerHTML = parts.join('<br>');
       }
@@ -5182,7 +5322,8 @@ jumpBtn.addEventListener('click', ()=>{
   logPanel?.addEventListener('click', (e)=>{ if (e.target === logPanel) closeLogs(); });
 
   function fmtWhen(ts){
-    try{ return new Date(ts*1000).toLocaleString('sv-SE'); }catch(_){ return String(ts); }
+    const formatted = formatDateTime(ts);
+    return formatted || String(ts);
   }
     function playReportOnce(){
     try{
