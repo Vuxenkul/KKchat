@@ -702,6 +702,49 @@ const camFlip   = document.getElementById('kk-camFlip');
 
   const h = {'X-WP-Nonce': REST_NONCE};
 
+  const API_ABSOLUTE = (() => {
+    try {
+      const u = new URL(API, window.location.href);
+      return u.href.replace(/\/$/, '');
+    } catch (_) {
+      return String(API || '');
+    }
+  })();
+
+  function shouldLogApiRequest(url) {
+    if (!url) return false;
+    try {
+      const absolute = new URL(url, window.location.href).href;
+      return absolute.startsWith(API_ABSOLUTE);
+    } catch (_) {
+      return String(url).startsWith(API);
+    }
+  }
+
+  function formatApiLogTarget(url) {
+    if (!url) return '';
+    try {
+      const absolute = new URL(url, window.location.href).href;
+      if (absolute.startsWith(API_ABSOLUTE)) {
+        const suffix = absolute.slice(API_ABSOLUTE.length);
+        return suffix ? suffix.replace(/^\//, '') : '/';
+      }
+      return absolute;
+    } catch (_) {
+      return String(url);
+    }
+  }
+
+  function logDbActivity(message, extra){
+    if (extra !== undefined) {
+      try {
+        console.info(`KKchat: ${message}`, extra);
+        return;
+      } catch (_) {}
+    }
+    console.info(`KKchat: ${message}`);
+  }
+
   let redirectingToLogin = false;
   async function maybeRedirectToLogin(response){
     if (!response || redirectingToLogin) return;
@@ -734,9 +777,33 @@ const camFlip   = document.getElementById('kk-camFlip');
   if (typeof window.fetch === 'function' && !window.__kk_fetch_patched) {
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (...args) => {
-      const response = await originalFetch(...args);
-      maybeRedirectToLogin(response).catch(()=>{});
-      return response;
+      const [input, init] = args;
+      const method = String((init && init.method) || (typeof input === 'object' && input?.method) || 'GET').toUpperCase();
+      const targetUrl = typeof input === 'string' ? input : (input && input.url) || '';
+      const shouldLog = shouldLogApiRequest(targetUrl);
+      const logTarget = shouldLog ? formatApiLogTarget(targetUrl) : '';
+      const startedAt = shouldLog ? Date.now() : 0;
+
+      if (shouldLog) {
+        const verb = method === 'GET' ? 'DB read' : 'DB write';
+        logDbActivity(`${verb} starting via ${method} ${logTarget || targetUrl}`);
+      }
+
+      try {
+        const response = await originalFetch(...args);
+        if (shouldLog) {
+          const elapsed = Date.now() - startedAt;
+          logDbActivity(`DB ${method === 'GET' ? 'read' : 'write'} completed from ${method} ${logTarget || targetUrl} (status ${response?.status ?? 'n/a'} in ${elapsed}ms)`);
+        }
+        maybeRedirectToLogin(response).catch(()=>{});
+        return response;
+      } catch (err) {
+        if (shouldLog) {
+          const elapsed = Date.now() - startedAt;
+          console.error(`KKchat: DB ${method === 'GET' ? 'read' : 'write'} failed from ${method} ${logTarget || targetUrl} after ${elapsed}ms`, err);
+        }
+        throw err;
+      }
     };
     window.__kk_fetch_patched = true;
   }
@@ -761,6 +828,7 @@ async function markDMSeen(peerId, lastId) {
   const mid  = Number(lastId);
   if (!peer || !mid) return;
   try {
+    logDbActivity(`marking DM read up to message ${mid} for peer ${peer}`);
     const fd = new FormData();
     fd.append('csrf_token', CSRF);
     fd.append('dm_peer', String(peer));
@@ -781,6 +849,7 @@ async function markRoomSeen(slug, lastId) {
   const mid  = Number(lastId);
   if (!room || !mid) return;
   try {
+    logDbActivity(`marking public room "${room}" read through message ${mid}`);
     const fd = new FormData();
     fd.append('csrf_token', CSRF);
     fd.append('room_slug', room);
@@ -1639,6 +1708,7 @@ async function performPoll(forceCold = false, options = {}){
   }
 
   const url = `${API}/sync?${params.toString()}`;
+  logDbActivity(`starting sync poll${forceCold ? ' (force cold start)' : ''} for key ${key}`);
 
   abortActivePoll();
   const controller = new AbortController();
@@ -1659,6 +1729,7 @@ async function performPoll(forceCold = false, options = {}){
         if (retryHeader != null) {
           POLL_RETRY_HINT.set(key, retryHeader * 1000);
         }
+        logDbActivity(`sync poll returned no changes (${resp.status})`);
         scheduleStreamReconnect(retryHeader != null ? retryHeader * 1000 : undefined);
         return;
       }
@@ -1670,6 +1741,7 @@ async function performPoll(forceCold = false, options = {}){
         } else {
           scheduleStreamReconnect(15000);
         }
+        logDbActivity('sync poll throttled (HTTP 429)');
         return;
       }
 
@@ -1714,6 +1786,8 @@ async function performPoll(forceCold = false, options = {}){
         POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
       }
 
+      const msgCount = Array.isArray(payload?.messages) ? payload.messages.length : 0;
+      logDbActivity(`sync poll completed with status ${resp.status}${msgCount ? ` and ${msgCount} messages` : ''}`);
       broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
     } catch (err) {
       if (err?.name === 'AbortError') {
@@ -1722,7 +1796,7 @@ async function performPoll(forceCold = false, options = {}){
       if (requestSerial !== POLL_REQUEST_SERIAL) {
         return;
       }
-      console.warn('sync poll failed', err);
+      console.warn('KKchat: sync poll failed', err);
       const fallback = Math.max(8000, (POLL_RETRY_HINT.get(key) || 8000) * 1.5);
       POLL_RETRY_HINT.set(key, fallback);
     } finally {
@@ -5027,7 +5101,12 @@ jumpBtn.addEventListener('click', ()=>{
 
 (function(){
   async function touch(){
-    try { await fetch(API + '/ping', { credentials:'include', headers:h }); } catch(_){}
+    try {
+      logDbActivity('sending activity ping');
+      await fetch(API + '/ping', { credentials:'include', headers:h });
+    } catch(_) {
+      console.warn('KKchat: activity ping failed');
+    }
   }
 
   touch();
@@ -5366,10 +5445,12 @@ window.addEventListener('beforeunload', () => {
 
 function scheduleKeepAlive() {
   const delay = PING_BASE_MS + Math.floor(Math.random() * PING_JITTER);
+  logDbActivity(`scheduling keep-alive ping in ${delay}ms`);
   keepAliveTimer = setTimeout(pingOnce, delay);
 }
 
 async function pingOnce() {
+  logDbActivity('sending keep-alive ping');
   try {
     const r  = await fetch(`${PING_URL}?ts=${Date.now()}`, {
       method: 'GET',
@@ -5378,6 +5459,8 @@ async function pingOnce() {
       keepalive: true,
     });
     const js = await r.json().catch(()=>null);
+
+    logDbActivity(`keep-alive ping responded with status ${r?.status ?? 'n/a'}`);
 
     if (js && IS_ADMIN) {
       const openCnt = Number(js.reports_open || 0);
@@ -5398,6 +5481,7 @@ async function pingOnce() {
     }
   } catch (_) {
     // ignore transient network errors
+    console.warn('KKchat: keep-alive ping failed');
   } finally {
     scheduleKeepAlive();
   }
