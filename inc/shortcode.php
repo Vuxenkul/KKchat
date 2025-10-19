@@ -60,7 +60,9 @@ add_shortcode('kkchat', function () {
     $mention_audio = esc_url($plugin_root_url . 'assets/mention.mp3');
         $report_audio  = esc_url($plugin_root_url . 'assets/report.mp3'); // NEW file
 
-    
+  $wp_timezone_string = kkchat_timezone_string();
+
+
   wp_enqueue_style('kkchat');
   ob_start(); ?>
 
@@ -443,6 +445,12 @@ f.addEventListener('submit', async (ev)=>{
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode(esc_url($plugin_root_url . 'assets/genders/')) ?>;
   const POLL_SETTINGS = Object.freeze(<?= wp_json_encode($poll_settings) ?>);
+  const WP_TIMEZONE = "<?= esc_js($wp_timezone_string) ?>";
+  const TIME_LOCALE = 'sv-SE';
+  const TIME_OPTIONS = { hour: '2-digit', minute: '2-digit' };
+  if (WP_TIMEZONE) { TIME_OPTIONS.timeZone = WP_TIMEZONE; }
+  const DATETIME_OPTIONS = {};
+  if (WP_TIMEZONE) { DATETIME_OPTIONS.timeZone = WP_TIMEZONE; }
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -2051,7 +2059,7 @@ async function doLogout(){
   const mid = Number(m.id);
   const sid = Number(m.sender_id||0);
   const who = m.sender_name || 'Okänd';
-  const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+  const when = new Date((m.time||0)*1000).toLocaleTimeString(TIME_LOCALE, TIME_OPTIONS);
   const roleClass = isAdminById?.(sid) ? ' admin' : '';
   rememberName(sid, m.sender_name);
   const gender = genderById(sid);
@@ -2362,7 +2370,7 @@ function renderList(el, items){
       rememberName(m.sender_id, m.sender_name);
       const gender = genderById(m.sender_id);
 
-      const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
+      const when = new Date((m.time||0)*1000).toLocaleTimeString(TIME_LOCALE, TIME_OPTIONS);
       const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
       let bubbleHTML = '';
@@ -2763,7 +2771,7 @@ function normalizeUnreadMap(map) {
 
   const ts = Number(info.time);
   const timeLabel = Number.isFinite(ts) && ts > 0
-    ? new Date(ts * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' })
+    ? new Date(ts * 1000).toLocaleTimeString(TIME_LOCALE, TIME_OPTIONS)
     : '';
 
   const ctxPart = ctx ? `${esc(ctx)}: ` : '';
@@ -4605,7 +4613,7 @@ function appendPendingMessage(text){
   }
 
   const now = new Date();
-  const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const when = now.toLocaleTimeString(TIME_LOCALE, TIME_OPTIONS);
   const who = typeof ME_NM !== 'undefined' ? ME_NM || '' : '';
   const gender = (typeof genderById === 'function' && typeof ME_ID !== 'undefined')
     ? genderById(ME_ID)
@@ -4660,7 +4668,7 @@ function finalizePendingMessage(pending, payload){
     const bubbleMeta = pending.querySelector('.bubble-meta-text');
     const serverTime = Number(payload?.time ?? 0);
     if (bubbleMeta && Number.isFinite(serverTime) && serverTime > 0) {
-      const when = new Date(serverTime * 1000).toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+      const when = new Date(serverTime * 1000).toLocaleTimeString(TIME_LOCALE, TIME_OPTIONS);
       const parts = bubbleMeta.innerHTML.split('<br>');
       if (parts.length === 2) {
         parts[1] = esc(when);
@@ -5182,7 +5190,7 @@ jumpBtn.addEventListener('click', ()=>{
   logPanel?.addEventListener('click', (e)=>{ if (e.target === logPanel) closeLogs(); });
 
   function fmtWhen(ts){
-    try{ return new Date(ts*1000).toLocaleString('sv-SE'); }catch(_){ return String(ts); }
+    try{ return new Date(ts*1000).toLocaleString(TIME_LOCALE, DATETIME_OPTIONS); }catch(_){ return String(ts); }
   }
     function playReportOnce(){
     try{

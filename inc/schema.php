@@ -361,25 +361,7 @@ add_action('init', function () {
  * Cron runner for scheduled banners
  */
 function kkchat_banner_timezone(): DateTimeZone {
-  if (function_exists('wp_timezone')) {
-    return wp_timezone();
-  }
-
-  $tz_string = get_option('timezone_string');
-  if ($tz_string) {
-    try {
-      return new DateTimeZone($tz_string);
-    } catch (Exception $e) {
-      // fall through to offset fallback
-    }
-  }
-
-  $offset = (float) get_option('gmt_offset', 0);
-  $hours  = (int) $offset;
-  $mins   = (int) round(abs($offset - $hours) * 60);
-  $sign   = $offset >= 0 ? '+' : '-';
-  $tz     = sprintf('%s%02d:%02d', $sign, abs($hours), $mins);
-  return new DateTimeZone($tz);
+  return kkchat_timezone();
 }
 
 function kkchat_banner_next_run(array $row, int $after): ?int {

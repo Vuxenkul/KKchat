@@ -22,6 +22,46 @@ function kkchat_watch_reset_after(): int {
   return (int) apply_filters('kkchat_watch_reset_after', 60);
 }
 
+function kkchat_timezone_string(): string {
+  if (function_exists('wp_timezone_string')) {
+    $tz = wp_timezone_string();
+    if (!empty($tz)) {
+      return $tz;
+    }
+  }
+
+  $tz_option = get_option('timezone_string');
+  if (!empty($tz_option)) {
+    return (string) $tz_option;
+  }
+
+  $offset = (float) get_option('gmt_offset', 0);
+  if ($offset !== 0.0) {
+    $seconds = (int) round($offset * HOUR_IN_SECONDS);
+    $guess   = timezone_name_from_abbr('', $seconds, 0);
+    if (!empty($guess) && stripos($guess, 'etc/gmt') !== 0) {
+      return (string) $guess;
+    }
+  }
+
+  return 'Europe/Stockholm';
+}
+
+function kkchat_timezone(): DateTimeZone {
+  static $tz = null;
+  if ($tz instanceof DateTimeZone) {
+    return $tz;
+  }
+
+  try {
+    $tz = new DateTimeZone(kkchat_timezone_string());
+  } catch (Exception $e) {
+    $tz = new DateTimeZone('Europe/Stockholm');
+  }
+
+  return $tz;
+}
+
 function kkchat_tables(){
   global $wpdb;
   $p = $wpdb->prefix.'kkchat_';
