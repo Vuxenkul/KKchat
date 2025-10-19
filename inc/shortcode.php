@@ -980,7 +980,7 @@ function trackIncomingMessage(msg, mentionHits) {
 
 let USERS = [];
 let UNREAD_PER = {};
-const LAST_MESSAGE_CACHE = new Map();
+const LAST_MESSAGE_CACHE = new Map(); // userId -> last message summary
 let DM_UNREAD_TOTAL = 0;
 let ROOM_UNREAD = {};
 
@@ -2783,7 +2783,6 @@ function markVisible(listEl){
 
 
 
-const LAST_MESSAGE_CACHE = new Map(); // userId -> last message summary
 let DM_UNREAD_TOTAL = 0;
 
   function sortUsersForList(){
