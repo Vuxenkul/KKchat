@@ -926,6 +926,8 @@ let PREFETCH_BUSY = false;
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
+const POLL_PENDING_JOBS = new Map();
+const POLL_JOB_TIMERS = new Map();
 
 const MULTITAB_ACTIVE_KEY = 'kkchat:active-tab:v1';
 const MULTITAB_HEARTBEAT_MS = 5000;
@@ -1166,6 +1168,158 @@ function pollContextKey(state){
   return state.kind === 'dm' ? `dm:${state.to}` : `room:${state.room}`;
 }
 
+function buildJobPollUrl(job){
+  if (!job || typeof job !== 'object') return '';
+  if (job.poll) return String(job.poll);
+  const id = Number(job.id);
+  const token = job.token != null ? String(job.token) : '';
+  if (Number.isFinite(id) && id > 0 && token) {
+    const params = new URLSearchParams({ token });
+    return `${API}/sync/jobs/${id}?${params.toString()}`;
+  }
+  return '';
+}
+
+function clearPendingJob(key){
+  if (!key) return;
+  if (POLL_JOB_TIMERS.has(key)) {
+    clearTimeout(POLL_JOB_TIMERS.get(key));
+    POLL_JOB_TIMERS.delete(key);
+  }
+  POLL_PENDING_JOBS.delete(key);
+}
+
+function scheduleJobPoll(key, entry, delayMs){
+  if (!key || !entry) return;
+  if (POLL_JOB_TIMERS.has(key)) {
+    clearTimeout(POLL_JOB_TIMERS.get(key));
+    POLL_JOB_TIMERS.delete(key);
+  }
+  const wait = Math.max(250, Number.isFinite(delayMs) ? Number(delayMs) : 2000);
+  const timer = setTimeout(() => {
+    POLL_JOB_TIMERS.delete(key);
+    pollPendingJob(key).catch(err => {
+      console.warn('sync job poll failed', err);
+    });
+  }, wait);
+  POLL_JOB_TIMERS.set(key, timer);
+  POLL_PENDING_JOBS.set(key, entry);
+}
+
+async function pollPendingJob(key){
+  const entry = POLL_PENDING_JOBS.get(key);
+  if (!entry) return;
+
+  if (!POLL_IS_LEADER) {
+    clearPendingJob(key);
+    return;
+  }
+
+  const state = desiredStreamState();
+  if (!state || pollContextKey(state) !== key) {
+    clearPendingJob(key);
+    scheduleStreamReconnect();
+    return;
+  }
+
+  const job = entry.job || {};
+  const pollUrl = buildJobPollUrl(job);
+  if (!pollUrl) {
+    clearPendingJob(key);
+    scheduleStreamReconnect();
+    return;
+  }
+
+  const headers = new Headers(h);
+  headers.set('Accept', 'application/json');
+  headers.set('Cache-Control', 'no-cache');
+
+  try {
+    const resp = await fetch(pollUrl, { credentials: 'include', headers });
+    const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
+
+    if (resp.status === 202) {
+      const data = await resp.json().catch(() => null);
+      const nextJob = data?.job || {};
+      entry.job = {
+        id: nextJob.id ?? job.id,
+        token: nextJob.token || job.token,
+        poll: nextJob.poll || job.poll,
+      };
+      if (!entry.job.poll) {
+        clearPendingJob(key);
+        if (retryHeader != null) {
+          POLL_RETRY_HINT.set(key, retryHeader * 1000);
+          scheduleStreamReconnect(retryHeader * 1000);
+        } else {
+          scheduleStreamReconnect();
+        }
+        return;
+      }
+      const waitMs = retryHeader != null ? retryHeader * 1000 : 2000;
+      scheduleJobPoll(key, entry, waitMs);
+      return;
+    }
+
+    if (resp.status === 204 || resp.status === 304) {
+      clearPendingJob(key);
+      if (retryHeader != null) {
+        POLL_RETRY_HINT.set(key, retryHeader * 1000);
+        scheduleStreamReconnect(retryHeader * 1000);
+      } else {
+        scheduleStreamReconnect();
+      }
+      return;
+    }
+
+    if (resp.status === 429) {
+      const waitMs = retryHeader != null ? retryHeader * 1000 : 15000;
+      POLL_RETRY_HINT.set(key, waitMs);
+      scheduleJobPoll(key, entry, waitMs);
+      return;
+    }
+
+    if (!resp.ok) {
+      clearPendingJob(key);
+      if (retryHeader != null) {
+        const waitMs = retryHeader * 1000;
+        POLL_RETRY_HINT.set(key, waitMs);
+        scheduleStreamReconnect(waitMs);
+      } else {
+        const fallback = Math.max(12000, (POLL_RETRY_HINT.get(key) || 8000) * 1.5);
+        POLL_RETRY_HINT.set(key, fallback);
+        scheduleStreamReconnect(fallback);
+      }
+      return;
+    }
+
+    let payload;
+    try {
+      payload = await resp.json();
+    } catch (_) {
+      payload = null;
+    }
+
+    const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
+    const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
+
+    if (!payload || typeof payload !== 'object') {
+      clearPendingJob(key);
+      scheduleStreamReconnect(retryMs != null ? retryMs : undefined);
+      return;
+    }
+
+    clearPendingJob(key);
+      processSyncPayload(payload, state, key, resp, retryMs);
+    scheduleStreamReconnect(retryMs != null ? retryMs : undefined);
+  } catch (err) {
+    const fallback = Math.max(8000, (POLL_RETRY_HINT.get(key) || 8000) * 1.5);
+    POLL_RETRY_HINT.set(key, fallback);
+    scheduleJobPoll(key, entry, fallback);
+    throw err;
+  }
+}
+
 function abortActivePoll(){
   if (!POLL_ABORT_CONTROLLER) return;
   try {
@@ -1186,7 +1340,9 @@ function scheduleStreamReconnect(delay){
   const state = desiredStreamState();
   if (!state) return;
   if (!POLL_IS_LEADER || POLL_SUSPENDED) return;
-const previousWait = Number(POLL_LAST_SCHEDULED_MS) || 0;
+  const key = pollContextKey(state);
+  if (POLL_PENDING_JOBS.has(key)) return;
+  const previousWait = Number(POLL_LAST_SCHEDULED_MS) || 0;
   if (POLL_TIMER) {
     clearTimeout(POLL_TIMER);
     POLL_TIMER = null;
@@ -1601,6 +1757,42 @@ function handlePollMessage(msg){
   }
 }
 
+function processSyncPayload(payload, state, key, resp, retryMs){
+  if (retryMs != null && Number.isFinite(retryMs)) {
+    POLL_RETRY_HINT.set(key, retryMs);
+  }
+
+  if (resp?.headers) {
+    const headerEtag = resp.headers.get('ETag');
+    if (headerEtag) {
+      POLL_ETAGS.set(key, headerEtag);
+    }
+  }
+
+  if (payload && Number.isFinite(+payload.now)) {
+    LAST_SERVER_NOW = +payload.now;
+  } else {
+    LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
+  }
+
+  handleStreamSync(payload, state);
+  updateListLastFromPayload(payload, state);
+
+  let hadMessages = false;
+  if (Array.isArray(payload?.events)) {
+    hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
+  } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
+    hadMessages = true;
+  }
+
+  if (hadMessages) {
+    POLL_LAST_EVENT_AT = Date.now();
+    POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
+  }
+
+  broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
+}
+
 async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
   const previousPromise = POLL_INFLIGHT_PROMISE;
@@ -1627,6 +1819,11 @@ async function performPoll(forceCold = false, options = {}){
     params.set('since', '-1');
     params.set('limit', String(FIRST_LOAD_LIMIT));
     POLL_ETAGS.delete(key);
+  }
+
+  if (POLL_PENDING_JOBS.has(key)) {
+    scheduleJobPoll(key, POLL_PENDING_JOBS.get(key), 0);
+    return;
   }
 
   const headers = new Headers(h);
@@ -1673,6 +1870,28 @@ async function performPoll(forceCold = false, options = {}){
         return;
       }
 
+      if (resp.status === 202) {
+        const data = await resp.json().catch(() => null);
+        const job = data?.job || {};
+        const entry = {
+          job: {
+            id: job.id,
+            token: job.token,
+            poll: job.poll || buildJobPollUrl(job),
+          },
+        };
+        if (!entry.job.poll) {
+          console.warn('sync job missing poll url');
+          return;
+        }
+        const waitMs = retryHeader != null ? retryHeader * 1000 : 2000;
+        scheduleJobPoll(key, entry, waitMs);
+        if (retryHeader != null) {
+          POLL_RETRY_HINT.set(key, retryHeader * 1000);
+        }
+        return;
+      }
+
       if (!resp.ok) {
         throw new Error(`sync ${resp.status}`);
       }
@@ -1684,37 +1903,7 @@ async function performPoll(forceCold = false, options = {}){
 
       const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
       const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
-      if (retryMs != null) {
-        POLL_RETRY_HINT.set(key, retryMs);
-      }
-
-      const headerEtag = resp.headers.get('ETag');
-      if (headerEtag) {
-        POLL_ETAGS.set(key, headerEtag);
-      }
-
-      if (payload && Number.isFinite(+payload.now)) {
-        LAST_SERVER_NOW = +payload.now;
-      } else {
-        LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
-      }
-
-      handleStreamSync(payload, state);
-      updateListLastFromPayload(payload, state);
-
-      let hadMessages = false;
-      if (Array.isArray(payload?.events)) {
-        hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
-      } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
-        hadMessages = true;
-      }
-
-      if (hadMessages) {
-        POLL_LAST_EVENT_AT = Date.now();
-        POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
-      }
-
-      broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
+      processSyncPayload(payload, state, key, resp, retryMs);
     } catch (err) {
       if (err?.name === 'AbortError') {
         return;
@@ -1731,7 +1920,9 @@ async function performPoll(forceCold = false, options = {}){
       }
       POLL_BUSY = false;
       if (requestSerial === POLL_REQUEST_SERIAL) {
-        scheduleStreamReconnect();
+        if (!POLL_PENDING_JOBS.has(key)) {
+          scheduleStreamReconnect();
+        }
       }
     }
   })();
