@@ -22,6 +22,7 @@ function kkchat_activate() {
     'kkchat_min_interval_seconds'  => 3,
     'kkchat_dupe_autokick_minutes' => 1,
     'kkchat_dedupe_window'         => 10,
+    'kkchat_session_epoch'         => time(),
   ] as $k => $def) {
     if (get_option($k) === false) add_option($k, $def);
   }

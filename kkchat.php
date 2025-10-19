@@ -223,6 +223,37 @@ function kkchat_sanitize_room_slug(string $s): string {
 /* ------------------------------
  * Auth/session helpers
  * ------------------------------ */
+/** Current epoch required for chat sessions (bumped to force global logout). */
+function kkchat_get_session_epoch(): int {
+  $epoch = (int) get_option('kkchat_session_epoch', 1);
+  if ($epoch < 1) { $epoch = 1; }
+  return $epoch;
+}
+
+/** Increment and persist the epoch used to validate sessions. */
+function kkchat_bump_session_epoch(): int {
+  $current = kkchat_get_session_epoch();
+  if ($current >= PHP_INT_MAX - 1) { $current = 0; }
+  $next = $current + 1;
+  update_option('kkchat_session_epoch', $next, false);
+  return $next;
+}
+
+/** Force logout of all chat users by bumping epoch + clearing presence rows. */
+function kkchat_logout_everyone_now(): array {
+  kkchat_wpdb_reconnect_if_needed();
+  global $wpdb; $t = kkchat_tables();
+
+  $epoch = kkchat_bump_session_epoch();
+  $removed = $wpdb->query("DELETE FROM {$t['users']}");
+  if ($removed === false) { $removed = 0; }
+
+  return [
+    'epoch'   => $epoch,
+    'removed' => (int) $removed,
+  ];
+}
+
 function kkchat_logout_session(bool $regenerate_id = true): void {
   global $wpdb; $t = kkchat_tables();
 
@@ -244,6 +275,16 @@ function kkchat_logout_session(bool $regenerate_id = true): void {
 
 function kkchat_require_login(bool $refresh_ttl = true) {
   if (!isset($_SESSION['kkchat_user_id'], $_SESSION['kkchat_user_name'])) {
+    kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
+  }
+
+  $expectedEpoch = kkchat_get_session_epoch();
+  $sessEpoch     = (int) ($_SESSION['kkchat_session_epoch'] ?? 0);
+  if ($sessEpoch !== $expectedEpoch) {
+    kkchat_logout_session();
+    if (function_exists('kkchat_close_session_if_open')) {
+      kkchat_close_session_if_open();
+    }
     kkchat_json(['ok'=>false, 'err'=>'Not logged in'], 403);
   }
 

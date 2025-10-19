@@ -151,6 +151,218 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_sync_is_disabled')) {
+    function kkchat_sync_is_disabled(): bool {
+      return (int) get_option('kkchat_sync_enabled', 1) !== 1;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_get')) {
+    function kkchat_sync_metrics_get(): array {
+      $defaults = [
+        'total_requests'      => 0,
+        'total_success'       => 0,
+        'rate_limited'        => 0,
+        'disabled_hits'       => 0,
+        'breaker_opens'       => 0,
+        'breaker_denied'      => 0,
+        'concurrency_denied'  => 0,
+        'last_duration_ms'    => 0.0,
+        'avg_duration_ms'     => 0.0,
+        'duration_samples'    => 0,
+        'last_request_at'     => 0,
+      ];
+
+      $stored = get_option('kkchat_sync_metrics');
+      if (!is_array($stored)) { $stored = []; }
+
+      return array_merge($defaults, $stored);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_store')) {
+    function kkchat_sync_metrics_store(array $metrics): void {
+      update_option('kkchat_sync_metrics', $metrics, false);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_note_duration')) {
+    function kkchat_sync_metrics_note_duration(float $durationMs): void {
+      $metrics = kkchat_sync_metrics_get();
+      $metrics['last_duration_ms'] = $durationMs;
+      $metrics['duration_samples'] = (int) $metrics['duration_samples'] + 1;
+      $samples = max(1, (int) $metrics['duration_samples']);
+      $prevAvg = (float) $metrics['avg_duration_ms'];
+      $metrics['avg_duration_ms'] = $prevAvg + (($durationMs - $prevAvg) / $samples);
+      kkchat_sync_metrics_store($metrics);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_metrics_bump')) {
+    function kkchat_sync_metrics_bump(string $field, int $delta = 1): void {
+      $metrics = kkchat_sync_metrics_get();
+      if (!array_key_exists($field, $metrics)) {
+        $metrics[$field] = 0;
+      }
+      $metrics[$field] = (int) $metrics[$field] + $delta;
+      $metrics['last_request_at'] = time();
+      kkchat_sync_metrics_store($metrics);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_concurrency_limit')) {
+    function kkchat_sync_concurrency_limit(): int {
+      $limit = (int) apply_filters('kkchat_sync_concurrency_limit', (int) get_option('kkchat_sync_concurrency', 1));
+      return max(1, $limit);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_acquire_slot')) {
+    function kkchat_sync_acquire_slot(): ?string {
+      $limit = kkchat_sync_concurrency_limit();
+      $key   = 'kkchat_sync_inflight';
+      $ttl   = max(10, (int) apply_filters('kkchat_sync_slot_ttl', 20));
+      $now   = microtime(true);
+      $slots = get_transient($key);
+      if (!is_array($slots)) { $slots = []; }
+
+      foreach ($slots as $token => $started) {
+        if (!is_float($started) && !is_int($started)) { unset($slots[$token]); continue; }
+        if ($started + $ttl < $now) { unset($slots[$token]); }
+      }
+
+      if (count($slots) >= $limit) {
+        set_transient($key, $slots, $ttl);
+        return null;
+      }
+
+      $token = wp_generate_uuid4();
+      $slots[$token] = $now;
+      set_transient($key, $slots, $ttl);
+      return $token;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_release_slot')) {
+    function kkchat_sync_release_slot(?string $token): void {
+      if ($token === null) { return; }
+      $key   = 'kkchat_sync_inflight';
+      $ttl   = max(10, (int) apply_filters('kkchat_sync_slot_ttl', 20));
+      $slots = get_transient($key);
+      if (!is_array($slots)) { return; }
+      if (isset($slots[$token])) { unset($slots[$token]); }
+      set_transient($key, $slots, $ttl);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_breaker_config')) {
+    function kkchat_sync_breaker_config(): array {
+      $threshold = (int) apply_filters('kkchat_sync_breaker_threshold', get_option('kkchat_sync_breaker_threshold', 5));
+      $window    = (int) apply_filters('kkchat_sync_breaker_window', get_option('kkchat_sync_breaker_window', 60));
+      $cooldown  = (int) apply_filters('kkchat_sync_breaker_cooldown', get_option('kkchat_sync_breaker_cooldown', 90));
+      return [
+        'threshold' => max(1, $threshold),
+        'window'    => max(5, $window),
+        'cooldown'  => max(10, $cooldown),
+      ];
+    }
+  }
+
+  if (!function_exists('kkchat_sync_breaker_state')) {
+    function kkchat_sync_breaker_state(): array {
+      $state = get_transient('kkchat_sync_breaker_state');
+      if (!is_array($state)) {
+        $state = ['failures'=>0,'first_failure'=>0,'open_until'=>0];
+      }
+      return $state;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_breaker_store')) {
+    function kkchat_sync_breaker_store(array $state): void {
+      set_transient('kkchat_sync_breaker_state', $state, 2 * 60 * 60);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_breaker_is_open')) {
+    function kkchat_sync_breaker_is_open(?int &$retryAfter = null): bool {
+      $state = kkchat_sync_breaker_state();
+      $now   = time();
+      if (!empty($state['open_until']) && $state['open_until'] > $now) {
+        $retryAfter = (int) max(1, $state['open_until'] - $now);
+        return true;
+      }
+      if (!empty($state['open_until']) && $state['open_until'] <= $now) {
+        $state['open_until'] = 0;
+        $state['failures'] = 0;
+        $state['first_failure'] = 0;
+        kkchat_sync_breaker_store($state);
+      }
+      return false;
+    }
+  }
+
+  if (!function_exists('kkchat_sync_breaker_note_failure')) {
+    function kkchat_sync_breaker_note_failure(): void {
+      $cfg   = kkchat_sync_breaker_config();
+      $state = kkchat_sync_breaker_state();
+      $now   = time();
+
+      if ($state['first_failure'] === 0 || ($now - (int) $state['first_failure']) > $cfg['window']) {
+        $state['first_failure'] = $now;
+        $state['failures'] = 1;
+      } else {
+        $state['failures'] = (int) $state['failures'] + 1;
+      }
+
+      if ($state['failures'] >= $cfg['threshold']) {
+        $state['open_until'] = $now + $cfg['cooldown'];
+        kkchat_sync_metrics_bump('breaker_opens');
+      }
+
+      kkchat_sync_breaker_store($state);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_breaker_note_success')) {
+    function kkchat_sync_breaker_note_success(): void {
+      $state = kkchat_sync_breaker_state();
+      if ($state['failures'] !== 0 || $state['first_failure'] !== 0 || $state['open_until'] !== 0) {
+        $state['failures'] = 0;
+        $state['first_failure'] = 0;
+        $state['open_until'] = 0;
+        kkchat_sync_breaker_store($state);
+      }
+    }
+  }
+
+  if (!function_exists('kkchat_sync_queue_housekeeping')) {
+    function kkchat_sync_queue_housekeeping(): void {
+      if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_single_event')) { return; }
+      if (wp_next_scheduled('kkchat_sync_housekeeping')) { return; }
+      wp_schedule_single_event(time() + 2, 'kkchat_sync_housekeeping');
+    }
+  }
+
+  if (!function_exists('kkchat_sync_run_housekeeping')) {
+    function kkchat_sync_run_housekeeping(): void {
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+      $now = time();
+      $wpdb->query($wpdb->prepare(
+        "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
+        $now,
+        kkchat_user_ttl()
+      ));
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['users']}\n            SET watch_flag = 0, watch_flag_at = NULL\n          WHERE watch_flag = 1\n            AND watch_flag_at IS NOT NULL\n            AND %d - watch_flag_at > %d",
+        $now,
+        kkchat_watch_reset_after()
+      ));
+    }
+  }
+  add_action('kkchat_sync_housekeeping', 'kkchat_sync_run_housekeeping');
+
   if (!function_exists('kkchat_sync_build_payload')) {
     function kkchat_sync_build_payload(array $ctx): array {
       global $wpdb; $t = kkchat_tables();
@@ -168,19 +380,7 @@ add_action('rest_api_init', function () {
       $since_pub = (int) ($ctx['since_pub'] ?? 0);
       $is_admin_viewer = !empty($ctx['is_admin_viewer']);
 
-      $wpdb->query($wpdb->prepare(
-        "DELETE FROM {$t['users']}
-          WHERE %d - last_seen > %d",
-        $now, kkchat_user_ttl()
-      ));
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET watch_flag = 0, watch_flag_at = NULL
-          WHERE watch_flag = 1
-            AND watch_flag_at IS NOT NULL
-            AND %d - watch_flag_at > %d",
-        $now, kkchat_watch_reset_after()
-      ));
+      kkchat_sync_queue_housekeeping();
       $admin_names = kkchat_admin_usernames();
       $presence    = [];
       if ($is_admin_viewer) {
@@ -741,6 +941,7 @@ add_action('rest_api_init', function () {
       $_SESSION['kkchat_gender']         = $gender;
       $_SESSION['kkchat_is_guest']       = $via_wp ? 0 : 1;
       $_SESSION['kkchat_seen_at_public'] = time();
+      $_SESSION['kkchat_session_epoch']  = kkchat_get_session_epoch();
       kkchat_touch_active_user();
 
       if ($via_wp) {
@@ -979,16 +1180,72 @@ function kk_computeMentionBumps(PDO $db, array $authUser, array $perRoom, array 
 register_rest_route($ns, '/sync', [
   'methods'  => 'GET',
   'callback' => function (WP_REST_Request $req) {
+    kkchat_sync_metrics_bump('total_requests');
+    $disableRetry = (int) apply_filters('kkchat_sync_disabled_retry', 120);
+    if (kkchat_sync_is_disabled()) {
+      $resp = new WP_REST_Response(['err' => 'sync_disabled'], 503);
+      if ($disableRetry > 0) { $resp->header('Retry-After', (string) $disableRetry); }
+      kkchat_sync_metrics_bump('disabled_hits');
+      return $resp;
+    }
+
+    $breakerRetry = null;
+    if (kkchat_sync_breaker_is_open($breakerRetry)) {
+      $resp = new WP_REST_Response(['err' => 'sync_overloaded'], 503);
+      if ($breakerRetry !== null && $breakerRetry > 0) {
+        $resp->header('Retry-After', (string) $breakerRetry);
+      }
+      kkchat_sync_metrics_bump('breaker_denied');
+      return $resp;
+    }
+
     $ctx = kkchat_sync_build_context($req);
 
     $penalty = kkchat_sync_rate_guard((int) ($ctx['me'] ?? 0));
     if ($penalty > 0) {
       $resp = new WP_REST_Response(['err' => 'rate_limited'], 429);
       $resp->header('Retry-After', (string) $penalty);
+      kkchat_sync_metrics_bump('rate_limited');
       return $resp;
     }
 
-    $payload = kkchat_sync_build_payload($ctx);
+    $slotToken = kkchat_sync_acquire_slot();
+    if ($slotToken === null) {
+      $retryBusy = (int) apply_filters('kkchat_sync_busy_retry', 8);
+      $resp = new WP_REST_Response(['err' => 'sync_busy'], 429);
+      if ($retryBusy > 0) { $resp->header('Retry-After', (string) $retryBusy); }
+      kkchat_sync_metrics_bump('concurrency_denied');
+      return $resp;
+    }
+
+    $startedAt = microtime(true);
+    try {
+      $payload = kkchat_sync_build_payload($ctx);
+    } catch (\Throwable $th) {
+      kkchat_sync_breaker_note_failure();
+      $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $th);
+      $resp = new WP_REST_Response(['err' => 'sync_unavailable'], 503);
+      if ($cooldown > 0) { $resp->header('Retry-After', (string) $cooldown); }
+      if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('KKchat sync failure: ' . $th->getMessage());
+      }
+      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
+      return $resp;
+    } finally {
+      kkchat_sync_release_slot($slotToken);
+    }
+
+    if (is_wp_error($payload)) {
+      kkchat_sync_breaker_note_failure();
+      $cooldown = (int) apply_filters('kkchat_sync_failure_retry', 30, $payload);
+      $resp = new WP_REST_Response(['err' => 'sync_unavailable'], 503);
+      if ($cooldown > 0) { $resp->header('Retry-After', (string) $cooldown); }
+      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
+      return $resp;
+    }
+
+    kkchat_sync_breaker_note_success();
+
     $since   = (int) ($ctx['since'] ?? -1);
     $cursor  = kkchat_sync_max_cursor($payload, $since);
     $hasChanges = ($since < 0) ? true : ($cursor > $since);
@@ -1013,12 +1270,16 @@ register_rest_route($ns, '/sync', [
     if (!$hasChanges && $etag !== '' && $ifNoneMatch !== '' && $ifNoneMatch === $etag) {
       $resp = new WP_REST_Response(null, 304);
       foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
+      kkchat_sync_metrics_bump('total_success');
+      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
       return $resp;
     }
 
     if (!$hasChanges) {
       $resp = new WP_REST_Response(null, 204);
       foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
+      kkchat_sync_metrics_bump('total_success');
+      kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
       return $resp;
     }
 
@@ -1039,11 +1300,31 @@ register_rest_route($ns, '/sync', [
     }
 
     $resp = new WP_REST_Response($data, 200);
+    kkchat_sync_metrics_bump('total_success');
+    kkchat_sync_metrics_note_duration((microtime(true) - $startedAt) * 1000);
     foreach ($headers as $hk => $hv) { $resp->header($hk, $hv); }
     return $resp;
   },
   'permission_callback' => '__return_true',
 ]);
+
+  $legacy_gone = function () {
+    $resp = new WP_REST_Response(['err' => 'gone'], 410);
+    $resp->header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+    return $resp;
+  };
+
+  register_rest_route($ns, '/poll', [
+    'methods'  => 'GET',
+    'callback' => $legacy_gone,
+    'permission_callback' => '__return_true',
+  ]);
+
+  register_rest_route($ns, '/sync-old', [
+    'methods'  => 'GET',
+    'callback' => $legacy_gone,
+    'permission_callback' => '__return_true',
+  ]);
 
 register_rest_route($ns, '/users', [
   'methods'  => 'GET',
