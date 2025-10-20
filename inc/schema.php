@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '9');
+  define('KKCHAT_DB_VERSION', '10');
 }
 
 /**
@@ -40,6 +40,10 @@ function kkchat_activate() {
     `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
     `content_hash` CHAR(40) NULL,
     `content` TEXT NOT NULL,
+    `reply_to_id` BIGINT UNSIGNED NULL,
+    `reply_to_sender_id` INT UNSIGNED NULL,
+    `reply_to_sender_name` VARCHAR(64) NULL,
+    `reply_to_excerpt` VARCHAR(255) NULL,
     `hidden_at` INT UNSIGNED NULL,
     `hidden_by` INT UNSIGNED NULL,
     `hidden_cause` VARCHAR(255) NULL,
@@ -54,7 +58,8 @@ function kkchat_activate() {
     KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`),
     KEY `idx_hidden_at` (`hidden_at`),
     KEY `idx_room_hidden_id` (`room`,`hidden_at`,`id`),
-    KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`)
+    KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`),
+    KEY `idx_reply_to` (`reply_to_id`)
   ) $charset;";
 
 $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
@@ -261,6 +266,18 @@ function kkchat_maybe_migrate(){
     if (!kkchat_column_exists($t['messages'], 'hidden_cause')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `hidden_cause` VARCHAR(255) NULL AFTER `hidden_by`");
     }
+    if (!kkchat_column_exists($t['messages'], 'reply_to_id')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `reply_to_id` BIGINT UNSIGNED NULL AFTER `content`");
+    }
+    if (!kkchat_column_exists($t['messages'], 'reply_to_sender_id')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `reply_to_sender_id` INT UNSIGNED NULL AFTER `reply_to_id`");
+    }
+    if (!kkchat_column_exists($t['messages'], 'reply_to_sender_name')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `reply_to_sender_name` VARCHAR(64) NULL AFTER `reply_to_sender_id`");
+    }
+    if (!kkchat_column_exists($t['messages'], 'reply_to_excerpt')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `reply_to_excerpt` VARCHAR(255) NULL AFTER `reply_to_sender_name`");
+    }
 
     // Index helpers
     $has_index = function($name) use ($wpdb, $t){
@@ -290,6 +307,9 @@ function kkchat_maybe_migrate(){
     }
     if (!$has_index('idx_recipient_sender_id')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`)");
+    }
+    if (!$has_index('idx_reply_to')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_reply_to` (`reply_to_id`)");
     }
   }
 

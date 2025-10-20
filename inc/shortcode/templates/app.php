@@ -113,6 +113,20 @@
             <button id="kk-jumpBottom" class="fab" type="button" aria-label="Hoppa till botten"><span class="material-symbols-rounded" aria-hidden="true">arrow_downward</span></button>
             <form id="kk-pubForm" class="inputbar">
               <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($session_csrf) ?>">
+              <input type="hidden" name="reply_to_id" id="kk-replyTo" value="">
+              <input type="hidden" name="reply_excerpt" id="kk-replyExcerpt" value="">
+              <div class="reply-banner" id="kk-replyBanner" hidden>
+                <div class="reply-banner__body">
+                  <span class="material-symbols-rounded" aria-hidden="true">reply</span>
+                  <div class="reply-banner__text">
+                    <strong id="kk-replyBannerName"></strong>
+                    <span id="kk-replyBannerExcerpt"></span>
+                  </div>
+                </div>
+                <button type="button" class="reply-banner__close" id="kk-replyCancel" aria-label="Avbryt svar">
+                  <span class="material-symbols-rounded" aria-hidden="true">close</span>
+                </button>
+              </div>
               <div class="input-actions" data-attach-root>
                 <button
                   type="button"
@@ -252,6 +266,12 @@
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
   const pubForm = $('#kk-pubForm');
+  const replyToInput = document.getElementById('kk-replyTo');
+  const replyExcerptInput = document.getElementById('kk-replyExcerpt');
+  const replyBanner = document.getElementById('kk-replyBanner');
+  const replyBannerName = document.getElementById('kk-replyBannerName');
+  const replyBannerExcerpt = document.getElementById('kk-replyBannerExcerpt');
+  const replyCancel = document.getElementById('kk-replyCancel');
   const notif   = $('#kk-notifSound');
   const toast   = $('#kk-toast');
   const jumpBtn = $('#kk-jumpBottom');
@@ -275,6 +295,10 @@
     const cls = filled ? `${MATERIAL_ICON_CLASS} icon-fill` : MATERIAL_ICON_CLASS;
     return `<span class="${cls}" aria-hidden="true">${name}</span>`;
   }
+
+  const MESSAGE_INDEX = new Map();
+  const MESSAGE_INDEX_LIMIT = 800;
+  let COMPOSER_REPLY = null;
 
   multiTabUseHere?.addEventListener('click', (ev)=>{
     ev.preventDefault();
@@ -1860,8 +1884,13 @@ async function doLogout(){
   let BLOCKED = new Set();
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
   
-  function msgToHTML(m){
+function msgToHTML(m){
   const mid = Number(m.id);
+  if (!Number.isFinite(mid)) return '';
+
+  rememberMessageMeta(m);
+
+  const kind = String(m.kind || 'chat');
   const sid = Number(m.sender_id||0);
   const who = m.sender_name || 'Okänd';
   const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
@@ -1869,21 +1898,51 @@ async function doLogout(){
   rememberName(sid, m.sender_name);
   const gender = genderById(sid);
   const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
-  if ((m.kind||'chat') === 'banner'){
-    return `<li class="item banner" data-id="${mid}"><div class="banner-bubble">${esc(String(m.content||''))}</div></li>`;
+
+  const attrs = [
+    `class="item ${sid===ME_ID?'me':'them'}${roleClass}"`,
+    `data-id="${mid}"`,
+    `data-sid="${sid}"`,
+    `data-sname="${escAttr(who)}"`,
+    `data-kind="${escAttr(kind)}"`
+  ];
+
+  if (kind === 'banner'){
+    const content = String(m.content||'');
+    return `<li ${attrs.join(' ')} data-body="${escAttr(content)}"><div class="banner-bubble">${esc(content)}</div></li>`;
   }
-  if ((m.kind||'chat') === 'image'){
+
+  const canReply = sid > 0 && sid !== Number(ME_ID);
+  const replyTargetId = Number(m.reply_to_id || 0) > 0 ? Number(m.reply_to_id) : null;
+  let replySenderName = m.reply_to_sender_name || null;
+  let replyExcerpt = m.reply_to_excerpt || null;
+  if (replyTargetId) {
+    const preview = messagePreviewById(replyTargetId);
+    if (preview) {
+      if (!replySenderName && preview.sender_name) replySenderName = preview.sender_name;
+      if ((!replyExcerpt || replyExcerpt === '') && preview.excerpt) replyExcerpt = preview.excerpt;
+    }
+  }
+
+  const replyPreviewHTML = replyTargetId ? replyPreviewMarkup(replyTargetId, replySenderName, replyExcerpt) : '';
+  const replyButtonHTML = canReply ? `<button type="button" class="bubble-reply-btn" data-reply-source="${mid}" aria-label="Svara"><span class="${MATERIAL_ICON_CLASS}" aria-hidden="true">reply</span></button>` : '';
+
+  if (kind === 'image'){
     const u = String(m.content||'').trim();
     const alt = `Bild från ${sid === ME_ID ? 'dig' : who}`;
-    return `<li class="item ${sid===ME_ID?'me':'them'}${roleClass}" data-id="${mid}" data-sid="${sid}" data-sname="${escAttr(who)}">
-      <div class="bubble img"><img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
+    return `<li ${attrs.join(' ')} data-body="${escAttr('[Bild]')}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}>
+      <div class="bubble img">${replyButtonHTML}${replyPreviewHTML}<img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
       ${metaHTML}
     </li>`;
   }
+
   const txt = String(m.content||'');
   const isMention = textMentionsName?.(txt, ME_NM) && sid !== ME_ID;
-  return `<li class="item ${sid===ME_ID?'me':'them'}${roleClass}" data-id="${mid}" data-sid="${sid}" data-sname="${escAttr(who)}">
-    <div class="bubble${isMention?' mention':''}">${esc(txt)}</div>
+  const mentionClass = isMention ? ' mention' : '';
+  const mentionAttr = isMention ? ' data-mention="1"' : '';
+
+  return `<li ${attrs.join(' ')} data-body="${escAttr(txt)}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}${mentionAttr}>
+    <div class="bubble${mentionClass}">${replyButtonHTML}${replyPreviewHTML}<div class="bubble-text">${esc(txt)}</div></div>
     ${metaHTML}
   </li>`;
 }
@@ -1956,6 +2015,8 @@ function applyCache(key){
     // 🔧 prune immediately so layout stays cheap
     pruneList(pubList, 180);
 
+    hydrateMessageIndexFromList(pubList);
+
     // 🔁 re-stash the trimmed HTML so the cache doesn't bloat
     ROOM_CACHE.set(key, {
       last: Number(cached.last) || -1,
@@ -1977,6 +2038,7 @@ function applyCache(key){
   }
   pubList.innerHTML = '';
   pubList.dataset.last = '-1';
+  hydrateMessageIndexFromList(pubList);
   return false;
 }
 
@@ -2058,6 +2120,204 @@ function applyCache(key){
   }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function truncateText(str, limit = 160){
+    const arr = Array.from(String(str || ''));
+    if (arr.length <= limit) return arr.join('');
+    return arr.slice(0, limit).join('').trimEnd() + '…';
+  }
+
+  function messageExcerptFromContent(text, kind){
+    const normalizedKind = String(kind || 'chat').toLowerCase();
+    if (normalizedKind === 'image') return '[Bild]';
+    const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) return '';
+    return truncateText(cleaned, 160);
+  }
+
+  function rememberMessageMeta(m){
+    if (!m || typeof m !== 'object') return null;
+    const mid = Number(m.id ?? m.message_id ?? m.mid ?? 0);
+    if (!Number.isFinite(mid) || mid <= 0) return null;
+    const kind = String(m.kind || 'chat');
+    const senderIdRaw = Number(m.sender_id ?? m.user_id ?? m.author_id ?? 0);
+    const senderId = Number.isFinite(senderIdRaw) && senderIdRaw > 0 ? senderIdRaw : null;
+    const senderName = m.sender_name != null && m.sender_name !== '' ? String(m.sender_name) : null;
+    const excerptSource = m.excerpt ?? m.content ?? m.text ?? m.body ?? '';
+    const excerpt = messageExcerptFromContent(excerptSource, kind);
+
+    const entry = {
+      id: mid,
+      kind,
+      sender_id: senderId,
+      sender_name: senderName,
+      excerpt,
+    };
+
+    if (m.reply_to_id != null) {
+      const rid = Number(m.reply_to_id);
+      entry.reply_to_id = Number.isFinite(rid) && rid > 0 ? rid : null;
+    }
+    if (m.reply_to_sender_id != null) {
+      const rsid = Number(m.reply_to_sender_id);
+      entry.reply_to_sender_id = Number.isFinite(rsid) && rsid > 0 ? rsid : null;
+    }
+    if (m.reply_to_sender_name != null && m.reply_to_sender_name !== '') {
+      entry.reply_to_sender_name = String(m.reply_to_sender_name);
+    }
+    if (m.reply_to_excerpt != null && m.reply_to_excerpt !== '') {
+      entry.reply_to_excerpt = String(m.reply_to_excerpt);
+    }
+
+    MESSAGE_INDEX.set(mid, entry);
+    while (MESSAGE_INDEX.size > MESSAGE_INDEX_LIMIT) {
+      const next = MESSAGE_INDEX.keys().next();
+      if (next && !next.done) {
+        MESSAGE_INDEX.delete(next.value);
+      } else {
+        break;
+      }
+    }
+
+    return entry;
+  }
+
+  function forgetMessageById(id){
+    const mid = Number(id);
+    if (!Number.isFinite(mid) || mid <= 0) return;
+    MESSAGE_INDEX.delete(mid);
+  }
+
+  function messagePreviewById(id){
+    const mid = Number(id);
+    if (!Number.isFinite(mid) || mid <= 0) return null;
+    const cached = MESSAGE_INDEX.get(mid);
+    if (cached) return cached;
+
+    const li = pubList ? pubList.querySelector(`li.item[data-id="${mid}"]`) : null;
+    if (li) {
+      const kind = li.dataset.kind || (li.querySelector('.bubble.img') ? 'image' : 'chat');
+      const senderId = Number(li.dataset.sid || 0) || null;
+      const senderName = li.dataset.sname || null;
+      const body = li.dataset.body || '';
+      const entry = rememberMessageMeta({
+        id: mid,
+        kind,
+        sender_id: senderId,
+        sender_name: senderName,
+        content: body,
+        reply_to_id: li.dataset.replyId ? Number(li.dataset.replyId) : null,
+        reply_to_sender_name: li.dataset.replyName || null,
+        reply_to_excerpt: li.dataset.replyExcerpt || null,
+      });
+      if (entry) return entry;
+    }
+    return null;
+  }
+
+  function hydrateMessageIndexFromList(container){
+    if (!container) return;
+    container.querySelectorAll('li.item').forEach(li => {
+      const mid = Number(li.dataset.id || 0);
+      if (!Number.isFinite(mid) || mid <= 0) return;
+      const kind = li.dataset.kind || (li.querySelector('.bubble.img') ? 'image' : 'chat');
+      const senderId = Number(li.dataset.sid || 0) || null;
+      const senderName = li.dataset.sname || null;
+      const body = li.dataset.body || '';
+      rememberMessageMeta({
+        id: mid,
+        kind,
+        sender_id: senderId,
+        sender_name: senderName,
+        content: body,
+        reply_to_id: li.dataset.replyId ? Number(li.dataset.replyId) : null,
+        reply_to_sender_name: li.dataset.replyName || null,
+        reply_to_excerpt: li.dataset.replyExcerpt || null,
+      });
+    });
+  }
+
+  function replyPreviewMarkup(targetId, senderName, excerpt){
+    const tid = Number(targetId);
+    if (!Number.isFinite(tid) || tid <= 0) return '';
+    const safeName = senderName ? esc(String(senderName)) : 'Okänd';
+    const safeExcerpt = excerpt ? esc(String(excerpt)) : '';
+    const excerptHtml = safeExcerpt !== '' ? `<span class="bubble-reply-preview-text">${safeExcerpt}</span>` : '';
+    return `<button type="button" class="bubble-reply-preview" data-reply-jump="${tid}"><span class="bubble-reply-preview-name">${safeName}</span>${excerptHtml}</button>`;
+  }
+
+  function setComposerReply(targetId){
+    const mid = Number(targetId);
+    if (!Number.isFinite(mid) || mid <= 0) return;
+    const info = messagePreviewById(mid);
+    if (!info) {
+      showToast('Meddelandet är inte tillgängligt ännu.');
+      return;
+    }
+
+    const name = info.sender_name || 'Okänd';
+    const excerpt = info.excerpt || '';
+
+    COMPOSER_REPLY = {
+      id: info.id,
+      name,
+      excerpt,
+    };
+
+    if (replyToInput) replyToInput.value = String(info.id);
+    if (replyExcerptInput) replyExcerptInput.value = excerpt;
+
+    if (replyBanner) replyBanner.hidden = false;
+    if (replyBannerName) replyBannerName.textContent = name;
+    if (replyBannerExcerpt) {
+      replyBannerExcerpt.textContent = excerpt;
+      if (excerpt) {
+        replyBannerExcerpt.removeAttribute('hidden');
+      } else {
+        replyBannerExcerpt.setAttribute('hidden', '');
+      }
+    }
+
+    try {
+      const textarea = pubForm?.querySelector('textarea');
+      textarea?.focus();
+    } catch (_) {}
+  }
+
+  function clearComposerReply(){
+    COMPOSER_REPLY = null;
+    if (replyToInput) replyToInput.value = '';
+    if (replyExcerptInput) replyExcerptInput.value = '';
+    if (replyBanner) replyBanner.hidden = true;
+    if (replyBannerName) replyBannerName.textContent = '';
+    if (replyBannerExcerpt) {
+      replyBannerExcerpt.textContent = '';
+      replyBannerExcerpt.setAttribute('hidden', '');
+    }
+  }
+
+  function focusReplyTarget(targetId){
+    const mid = Number(targetId);
+    if (!Number.isFinite(mid) || mid <= 0) return false;
+    const container = pubList;
+    if (!container) return false;
+    const li = container.querySelector(`li.item[data-id="${mid}"]`);
+    if (!li) return false;
+
+    const top = li.offsetTop - 36;
+    try {
+      container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    } catch (_) {
+      container.scrollTop = Math.max(0, top);
+    }
+
+    li.classList.add('reply-highlight');
+    setTimeout(() => {
+      if (li.isConnected) li.classList.remove('reply-highlight');
+    }, 1600);
+
+    return true;
+  }
   function initials(n){ return (n||'').trim().split(' ').filter(Boolean).map(s=>s[0]||'').join('').slice(0,2).toUpperCase(); }
 
    function atBottom(el){
@@ -2121,6 +2381,7 @@ function renderList(el, items){
   let maxId = lastSeen;
 
   const wasAtBottom = atBottom(el);
+  const meIdNum = Number(ME_ID);
 
   const frag = document.createDocumentFragment();
   let mentionAdded   = false;
@@ -2141,6 +2402,7 @@ function renderList(el, items){
           const el = document.querySelector(`li.item[data-id="${Number(data.id)}"]`);
           if (el) {
             el.remove();
+            forgetMessageById(Number(data.id));
             try {
               ROOM_CACHE.set(activeCacheKey(), {
                 last: +pubList.dataset.last || -1,
@@ -2155,6 +2417,8 @@ function renderList(el, items){
       return; // don't render mod events as chat bubbles
     }
 
+    rememberMessageMeta(m);
+
     const fromId = Number(m.sender_id || 0);
     if (fromId && isBlocked(fromId)) return;          // hide blocked users
     if (mid <= lastSeen) return;                      // already rendered
@@ -2163,10 +2427,13 @@ function renderList(el, items){
     li.dataset.id    = String(mid);
     li.dataset.sid   = String(m.sender_id || 0);
     li.dataset.sname = m.sender_name || '';
+    li.dataset.kind  = kind || 'chat';
 
     if ((m.kind||'chat') === 'banner'){
       li.className = 'item banner';
-      li.innerHTML = `<div class="banner-bubble">${esc(String(m.content || ''))}</div>`;
+      const text = String(m.content || '');
+      li.dataset.body = text;
+      li.innerHTML = `<div class="banner-bubble">${esc(text)}</div>`;
     } else {
       const roleClass = isAdminById(m.sender_id) ? ' admin' : '';
       li.className = 'item ' + (m.sender_id===ME_ID? 'me':'them') + roleClass;
@@ -2179,19 +2446,85 @@ function renderList(el, items){
       const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
       let bubbleHTML = '';
-      if ((m.kind||'chat') === 'image') {
-        const u   = String(m.content||'').trim();
+      const isImage = (m.kind||'chat') === 'image';
+      const rawContent = String(m.content || '');
+      const senderNum = Number(m.sender_id);
+      const canReply = senderNum > 0 && senderNum !== meIdNum;
+      li.dataset.body = isImage ? '[Bild]' : rawContent;
+
+      const replyTargetId = Number(m.reply_to_id || 0) > 0 ? Number(m.reply_to_id) : null;
+      let replySenderName = m.reply_to_sender_name || null;
+      let replyExcerpt = m.reply_to_excerpt || null;
+      let replyParentSenderId = null;
+      const replyParentHint = Number(m.reply_to_sender_id || 0);
+      if (Number.isFinite(replyParentHint) && replyParentHint > 0) {
+        replyParentSenderId = replyParentHint;
+      }
+      let replyPreview = null;
+      if (replyTargetId) {
+        replyPreview = messagePreviewById(replyTargetId);
+        if (replyPreview) {
+          if (!replySenderName && replyPreview.sender_name) replySenderName = replyPreview.sender_name;
+          if ((!replyExcerpt || replyExcerpt === '') && replyPreview.excerpt) replyExcerpt = replyPreview.excerpt;
+          if (!replyParentSenderId) {
+            const previewSenderId = Number(replyPreview.sender_id || replyPreview.user_id || replyPreview.author_id || 0);
+            if (Number.isFinite(previewSenderId) && previewSenderId > 0) {
+              replyParentSenderId = previewSenderId;
+            }
+          }
+        }
+        li.dataset.replyId = String(replyTargetId);
+        li.dataset.replyName = replySenderName || '';
+        li.dataset.replyExcerpt = replyExcerpt || '';
+      } else {
+        delete li.dataset.replyId;
+        delete li.dataset.replyName;
+        delete li.dataset.replyExcerpt;
+      }
+
+      if (replyTargetId) {
+        rememberMessageMeta({
+          id: mid,
+          kind: m.kind,
+          sender_id: m.sender_id,
+          sender_name: m.sender_name,
+          content: rawContent,
+          reply_to_id: replyTargetId,
+          reply_to_sender_name: replySenderName,
+          reply_to_excerpt: replyExcerpt,
+        });
+      }
+
+      let repliesToMe = false;
+      if (replyTargetId && senderNum !== meIdNum) {
+        if (Number.isFinite(replyParentSenderId) && replyParentSenderId > 0) {
+          repliesToMe = replyParentSenderId === meIdNum;
+        } else if (replySenderName && typeof ME_NM === 'string' && ME_NM !== '') {
+          repliesToMe = replySenderName === ME_NM;
+        }
+      }
+
+      const replyPreviewHTML = replyTargetId ? replyPreviewMarkup(replyTargetId, replySenderName, replyExcerpt) : '';
+      const replyButtonHTML = canReply ? `<button type="button" class="bubble-reply-btn" data-reply-source="${mid}" aria-label="Svara"><span class="${MATERIAL_ICON_CLASS}" aria-hidden="true">reply</span></button>` : '';
+
+      if (isImage) {
+        const u   = rawContent.trim();
         const alt = `Bild från ${m.sender_id === ME_ID ? 'dig' : who}`;
-        // inside the image branch
-        bubbleHTML = `<div class="bubble img">
+        bubbleHTML = `<div class="bubble img">${replyButtonHTML}${replyPreviewHTML}
           <img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async">
         </div>`;
+        if (repliesToMe) {
+          mentionAdded = true;
+        }
       } else {
-        const txt = String(m.content||'');
+        const txt = rawContent;
         const isMentionToMe = textMentionsName(txt, ME_NM) && m.sender_id !== ME_ID;
-        bubbleHTML = `<div class="bubble${isMentionToMe ? ' mention' : ''}">${esc(txt)}</div>`;
+        const mentionClass = isMentionToMe ? ' mention' : '';
+        bubbleHTML = `<div class="bubble${mentionClass}">${replyButtonHTML}${replyPreviewHTML}<div class="bubble-text">${esc(txt)}</div></div>`;
         if (isMentionToMe) {
           li.dataset.mention = '1';
+        }
+        if (isMentionToMe || repliesToMe) {
           mentionAdded = true;
         }
       }
@@ -3337,9 +3670,30 @@ document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && msgSheet.h
 
 pubList.addEventListener('click', (e)=>{
 
+  const replyBtn = e.target.closest('.bubble-reply-btn');
+  if (replyBtn) {
+    e.preventDefault();
+    const li = replyBtn.closest('li.item');
+    const target = li ? Number(li.dataset.id || replyBtn.dataset.replySource) : Number(replyBtn.dataset.replySource);
+    if (Number.isFinite(target) && target > 0) {
+      setComposerReply(target);
+    }
+    return;
+  }
+
+  const replyPreview = e.target.closest('.bubble-reply-preview');
+  if (replyPreview) {
+    e.preventDefault();
+    const targetId = Number(replyPreview.dataset.replyJump);
+    if (!focusReplyTarget(targetId)) {
+      showToast('Originalmeddelandet är inte i historiken ännu.');
+    }
+    return;
+  }
+
   if (e.target.closest('img.imgmsg')) return;
 
-  const bubble = e.target.closest('.bubble'); 
+  const bubble = e.target.closest('.bubble');
   if (!bubble) return;
 
   const li    = bubble.closest('li.item');
@@ -3902,7 +4256,12 @@ roomsListEl?.addEventListener('click', async (e) => {
     const items = el.querySelectorAll('li.item');
     if (items.length > max){
       const removeCount = items.length - max;
-      for (let i = 0; i < removeCount; i++) items[i].remove();
+      for (let i = 0; i < removeCount; i++) {
+        const item = items[i];
+        const id = Number(item?.dataset?.id || 0);
+        if (Number.isFinite(id) && id > 0) forgetMessageById(id);
+        item.remove();
+      }
     }
   }
 function safeAutoScroll(container, renderUpdates) {
@@ -4371,7 +4730,11 @@ async function takeWebcamPhoto(){
     const url = await uploadImage(file);
 
     const ok = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) {
+      await pollActive();
+      showToast('Bild skickad');
+      clearComposerReply();
+    }
   } catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   } finally {
@@ -4416,6 +4779,26 @@ function appendPendingMessage(text){
   if (typeof ME_NM !== 'undefined') {
     li.dataset.sname = ME_NM || '';
   }
+  li.dataset.kind = 'chat';
+  li.dataset.body = text;
+
+  const reply = COMPOSER_REPLY && Number.isFinite(Number(COMPOSER_REPLY.id))
+    ? {
+        id: Number(COMPOSER_REPLY.id),
+        name: COMPOSER_REPLY.name || '',
+        excerpt: COMPOSER_REPLY.excerpt || ''
+      }
+    : null;
+
+  if (reply && reply.id > 0) {
+    li.dataset.replyId = String(reply.id);
+    li.dataset.replyName = reply.name || '';
+    li.dataset.replyExcerpt = reply.excerpt || '';
+  } else {
+    delete li.dataset.replyId;
+    delete li.dataset.replyName;
+    delete li.dataset.replyExcerpt;
+  }
 
   const now = new Date();
   const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
@@ -4430,9 +4813,11 @@ function appendPendingMessage(text){
     ? ''
     : esc(who);
 
+  const replyPreviewHTML = reply ? replyPreviewMarkup(reply.id, reply.name, reply.excerpt) : '';
+
   li.innerHTML = `
     <button type="button" class="retry-btn" data-retry title="Försök igen" aria-label="Försök skicka igen">↻</button>
-    <div class="bubble">${esc(text)}</div>
+    <div class="bubble">${replyPreviewHTML}<div class="bubble-text">${esc(text)}</div></div>
     <div class="bubble-meta small">${genderMarkup}<span class="bubble-meta-text">${nameMarkup}<br>${esc(when)}</span></div>
   `;
 
@@ -4469,6 +4854,50 @@ function finalizePendingMessage(pending, payload){
     if (!Number.isFinite(currentLast) || mid > currentLast) {
       pubList.dataset.last = String(mid);
     }
+
+    let replyId = null;
+    let replyName = '';
+    let replyExcerpt = '';
+
+    if (payload && typeof payload === 'object') {
+      replyId = Number(payload.reply_to_id || 0) > 0 ? Number(payload.reply_to_id) : null;
+      replyName = payload.reply_to_sender_name || '';
+      replyExcerpt = payload.reply_to_excerpt || '';
+      const bubble = pending.querySelector('.bubble');
+      if (replyId) {
+        pending.dataset.replyId = String(replyId);
+        pending.dataset.replyName = replyName || '';
+        pending.dataset.replyExcerpt = replyExcerpt || '';
+        if (bubble) {
+          const existing = bubble.querySelector('.bubble-reply-preview');
+          const markup = replyPreviewMarkup(replyId, replyName, replyExcerpt);
+          if (existing) {
+            existing.outerHTML = markup;
+          } else {
+            bubble.insertAdjacentHTML('afterbegin', markup);
+          }
+        }
+      } else {
+        delete pending.dataset.replyId;
+        delete pending.dataset.replyName;
+        delete pending.dataset.replyExcerpt;
+        if (bubble) {
+          const existing = bubble.querySelector('.bubble-reply-preview');
+          existing?.remove();
+        }
+      }
+    }
+
+    rememberMessageMeta({
+      id: mid,
+      kind: pending.dataset.kind || 'chat',
+      sender_id: Number(pending.dataset.sid || ME_ID || 0),
+      sender_name: pending.dataset.sname || '',
+      content: pending.dataset.body || '',
+      reply_to_id: replyId,
+      reply_to_sender_name: replyName,
+      reply_to_excerpt: replyExcerpt,
+    });
 
     const bubbleMeta = pending.querySelector('.bubble-meta-text');
     const serverTime = Number(payload?.time ?? 0);
@@ -4530,6 +4959,7 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
           console.info(`KKchat: duplicate message detected on attempt ${attempt}; removing pending bubble.`);
           pending.remove();
           showToast('Spam - Ditt meddelande avvisades.');
+          clearComposerReply();
           return true;
         }
 
@@ -4538,6 +4968,7 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
         }
 
         finalizePendingMessage(pending, js);
+        clearComposerReply();
         await pollActive();
         console.info(`KKchat: message posted successfully on attempt ${attempt}.`);
         return true;
@@ -4569,6 +5000,11 @@ async function sendMessageWithRetry(pending, entries, { resetOnSuccess = false }
 
   return false;
 }
+
+replyCancel?.addEventListener('click', (e)=>{
+  e.preventDefault();
+  clearComposerReply();
+});
 
 pubForm.addEventListener('submit', async (e)=>{
   e.preventDefault();
@@ -4759,6 +5195,10 @@ async function uploadImage(file){
     fd.append('csrf_token', CSRF);
     fd.append('kind', 'image');
     fd.append('image_url', url);
+    if (COMPOSER_REPLY && Number.isFinite(Number(COMPOSER_REPLY.id))) {
+      fd.append('reply_to_id', String(COMPOSER_REPLY.id));
+      fd.append('reply_excerpt', COMPOSER_REPLY.excerpt || '');
+    }
     if (currentDM) fd.append('recipient_id', String(currentDM));
     else fd.append('room', currentRoom);
     const r  = await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
@@ -4783,7 +5223,11 @@ pubImgInp?.addEventListener('change', async ()=>{
     showToast('Laddar bild…');
     const url = await uploadImage(small);
     const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) {
+      await pollActive();
+      showToast('Bild skickad');
+      clearComposerReply();
+    }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -4817,7 +5261,11 @@ pubCamInp?.addEventListener('change', async ()=>{
     showToast('Laddar bild…');
     const url = await uploadImage(small);
     const ok  = await sendImageMessage(url);
-    if (ok) { await pollActive(); showToast('Bild skickad'); }
+    if (ok) {
+      await pollActive();
+      showToast('Bild skickad');
+      clearComposerReply();
+    }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }

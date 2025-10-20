@@ -1,6 +1,34 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+if (!function_exists('kkchat_reply_excerpt_from_message')) {
+  function kkchat_reply_excerpt_from_message(string $content, string $kind): string {
+    $kind = strtolower(trim($kind));
+    if ($kind === 'image') {
+      return '[Bild]';
+    }
+
+    $text = wp_strip_all_tags($content);
+    $text = preg_replace('/\s+/u', ' ', (string) $text);
+    $text = trim((string) $text);
+    if ($text === '') {
+      return '';
+    }
+
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+      if (mb_strlen($text) > 160) {
+        $text = rtrim(mb_substr($text, 0, 160)) . '…';
+      }
+    } else {
+      if (strlen($text) > 160) {
+        $text = rtrim(substr($text, 0, 160)) . '…';
+      }
+    }
+
+    return $text;
+  }
+}
+
   register_rest_route($ns, '/message', [
     'methods'  => 'POST',
     'callback' => function (WP_REST_Request $req) {
@@ -153,6 +181,83 @@ if (!defined('ABSPATH')) exit;
       $now = time();
       $sender_ip = kkchat_client_ip();
 
+      $reply_to_id          = null;
+      $reply_to_sender_id   = null;
+      $reply_to_sender_name = null;
+      $reply_to_excerpt     = '';
+
+      $replyRaw = $req->get_param('reply_to_id');
+      if ($replyRaw !== null && $replyRaw !== '') {
+        $candidate = (int) $replyRaw;
+        if ($candidate > 0) {
+          $parent = $wpdb->get_row(
+            $wpdb->prepare(
+              "SELECT id, sender_id, sender_name, recipient_id, room, kind, content, hidden_at"
+              . " FROM {$t['messages']} WHERE id = %d",
+              $candidate
+            ),
+            ARRAY_A
+          );
+
+          if (!$parent || !empty($parent['hidden_at'])) {
+            kkchat_json(['ok' => false, 'err' => 'bad_reply_target'], 400);
+          }
+
+          $parentRoom     = isset($parent['room']) ? kkchat_sanitize_room_slug((string) $parent['room']) : '';
+          $parentSenderId = isset($parent['sender_id']) ? (int) $parent['sender_id'] : 0;
+          $parentRecipId  = isset($parent['recipient_id']) ? (int) $parent['recipient_id'] : null;
+
+          if ($recipient !== null) {
+            // DM reply: ensure same peer relationship
+            $valid = (
+              ($parentSenderId === $me_id && $parentRecipId === $recipient) ||
+              ($parentSenderId === $recipient && $parentRecipId === $me_id)
+            );
+
+            if (!$valid) {
+              kkchat_json(['ok' => false, 'err' => 'bad_reply_target'], 400);
+            }
+          } else {
+            // Room reply: ensure message lives in same room and isn't a DM
+            if ($parentRecipId !== null) {
+              kkchat_json(['ok' => false, 'err' => 'bad_reply_target'], 400);
+            }
+            if ($parentRoom === '') {
+              $parentRoom = 'general';
+            }
+            if ($parentRoom !== $room) {
+              kkchat_json(['ok' => false, 'err' => 'bad_reply_target'], 400);
+            }
+          }
+
+          $reply_to_id          = $candidate;
+          $reply_to_sender_id   = $parentSenderId > 0 ? $parentSenderId : null;
+          $reply_to_sender_name = trim((string) ($parent['sender_name'] ?? '')) ?: null;
+          if ($reply_to_sender_name !== null) {
+            $reply_to_sender_name = sanitize_text_field($reply_to_sender_name);
+            $reply_to_sender_name = trim($reply_to_sender_name);
+            if ($reply_to_sender_name === '') {
+              $reply_to_sender_name = null;
+            }
+          }
+          if ($reply_to_sender_name !== null) {
+            if (function_exists('mb_substr')) {
+              $reply_to_sender_name = mb_substr($reply_to_sender_name, 0, 64);
+            } else {
+              $reply_to_sender_name = substr($reply_to_sender_name, 0, 64);
+            }
+          }
+          $reply_to_excerpt     = kkchat_reply_excerpt_from_message((string) ($parent['content'] ?? ''), (string) ($parent['kind'] ?? 'chat'));
+          if ($reply_to_excerpt !== '') {
+            if (function_exists('mb_substr')) {
+              $reply_to_excerpt = mb_substr($reply_to_excerpt, 0, 255);
+            } else {
+              $reply_to_excerpt = substr($reply_to_excerpt, 0, 255);
+            }
+          }
+        }
+      }
+
       // Prepare content + dedupe basis
       if ($kind === 'image') {
         $content = esc_url_raw($image_url);
@@ -226,6 +331,24 @@ if (!defined('ABSPATH')) exit;
       ];
       $format = ['%d','%d','%s','%s','%s','%s','%s'];
 
+      if ($reply_to_id !== null) {
+        $data['reply_to_id'] = $reply_to_id;
+        $format[] = '%d';
+
+        if ($reply_to_sender_id !== null) {
+          $data['reply_to_sender_id'] = $reply_to_sender_id;
+          $format[] = '%d';
+        }
+        if ($reply_to_sender_name !== null) {
+          $data['reply_to_sender_name'] = $reply_to_sender_name;
+          $format[] = '%s';
+        }
+        if ($reply_to_excerpt !== '') {
+          $data['reply_to_excerpt'] = $reply_to_excerpt;
+          $format[] = '%s';
+        }
+      }
+
       if ($recipient !== null) {
         $data['recipient_id']   = $recipient;
         $data['recipient_name'] = $recipient_name;
@@ -247,7 +370,15 @@ if (!defined('ABSPATH')) exit;
 
       kkchat_admin_presence_cache_flush();
 
-      kkchat_json(['ok'=>true,'id'=>$mid]);
+      kkchat_json([
+        'ok'                   => true,
+        'id'                   => $mid,
+        'time'                 => $now,
+        'reply_to_id'          => $reply_to_id,
+        'reply_to_sender_id'   => $reply_to_sender_id,
+        'reply_to_sender_name' => $reply_to_sender_name,
+        'reply_to_excerpt'     => $reply_to_excerpt !== '' ? $reply_to_excerpt : null,
+      ]);
 
     },
     'permission_callback' => '__return_true',
