@@ -111,10 +111,7 @@
           <div class="msgwrap">
             <ul id="kk-pubList" class="list" data-last="-1"></ul>
             <button id="kk-jumpBottom" class="fab" type="button" aria-label="Hoppa till botten"><span class="material-symbols-rounded" aria-hidden="true">arrow_downward</span></button>
-            <form id="kk-pubForm" class="inputbar">
-              <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($session_csrf) ?>">
-              <input type="hidden" name="reply_to_id" id="kk-replyTo" value="">
-              <input type="hidden" name="reply_excerpt" id="kk-replyExcerpt" value="">
+            <div class="inputbar" id="kk-composer">
               <div class="reply-banner" id="kk-replyBanner" hidden>
                 <div class="reply-banner__body">
                   <span class="material-symbols-rounded" aria-hidden="true">reply</span>
@@ -127,32 +124,37 @@
                   <span class="material-symbols-rounded" aria-hidden="true">close</span>
                 </button>
               </div>
-              <div class="input-actions" data-attach-root>
-                <button
-                  type="button"
-                  class="iconbtn input-actions-toggle"
-                  id="kk-attachToggle"
-                  data-attach-toggle
-                  title="Fler alternativ"
-                  aria-haspopup="menu"
-                  aria-expanded="false"
-                ><span class="material-symbols-rounded" aria-hidden="true">add</span></button>
-                <div class="input-actions-menu" data-attach-menu hidden role="menu" aria-hidden="true">
-                  <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">image</span> Ladda upp bild</button>
-                  <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">photo_camera</span> Öppna kamera</button>
-                  <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">alternate_email</span> Nämn någon</button>
+              <form id="kk-pubForm" class="inputbar__form">
+                <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($session_csrf) ?>">
+                <input type="hidden" name="reply_to_id" id="kk-replyTo" value="">
+                <input type="hidden" name="reply_excerpt" id="kk-replyExcerpt" value="">
+                <div class="input-actions" data-attach-root>
+                  <button
+                    type="button"
+                    class="iconbtn input-actions-toggle"
+                    id="kk-attachToggle"
+                    data-attach-toggle
+                    title="Fler alternativ"
+                    aria-haspopup="menu"
+                    aria-expanded="false"
+                  ><span class="material-symbols-rounded" aria-hidden="true">add</span></button>
+                  <div class="input-actions-menu" data-attach-menu hidden role="menu" aria-hidden="true">
+                    <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">image</span> Ladda upp bild</button>
+                    <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">photo_camera</span> Öppna kamera</button>
+                    <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">alternate_email</span> Nämn någon</button>
+                  </div>
                 </div>
-              </div>
 
-              <!-- Hidden inputs (one for upload picker, one that hints camera on mobile) -->
-              <input type="file" accept="image/*" id="kk-pubImg" style="display:none">
-              <input type="file" accept="image/*" capture="environment" id="kk-pubCam" style="display:none">
+                <!-- Hidden inputs (one for upload picker, one that hints camera on mobile) -->
+                <input type="file" accept="image/*" id="kk-pubImg" style="display:none">
+                <input type="file" accept="image/*" capture="environment" id="kk-pubCam" style="display:none">
 
-              <textarea name="content" placeholder="Skriv ett meddelande…" autocomplete="off"></textarea>
-              <button aria-label="Skicka meddelande"><span class="material-symbols-rounded" aria-hidden="true">send</span><span class="sr-only">Skicka</span></button>
-              <div id="kk-mentionBox" class="mentionbox" role="listbox" aria-label="Mention suggestions"></div>
+                <textarea name="content" placeholder="Skriv ett meddelande…" autocomplete="off"></textarea>
+                <button aria-label="Skicka meddelande"><span class="material-symbols-rounded" aria-hidden="true">send</span><span class="sr-only">Skicka</span></button>
+                <div id="kk-mentionBox" class="mentionbox" role="listbox" aria-label="Mention suggestions"></div>
 
               </form>
+            </div>
           </div>
         </section>
         <!-- (Old vDM view removed; DMs now use the same view as rooms) -->
@@ -294,6 +296,22 @@
   function iconMarkup(name, { filled = false } = {}) {
     const cls = filled ? `${MATERIAL_ICON_CLASS} icon-fill` : MATERIAL_ICON_CLASS;
     return `<span class="${cls}" aria-hidden="true">${name}</span>`;
+  }
+
+  function dispatchComposerChange(){
+    try {
+      document.dispatchEvent(new CustomEvent('kkchat:composer-change'));
+    } catch (_) {
+      if (typeof document.createEvent === 'function') {
+        try {
+          const ev = document.createEvent('CustomEvent');
+          if (ev && typeof ev.initCustomEvent === 'function') {
+            ev.initCustomEvent('kkchat:composer-change', false, false, undefined);
+            document.dispatchEvent(ev);
+          }
+        } catch (_) {}
+      }
+    }
   }
 
   const MESSAGE_INDEX = new Map();
@@ -2278,6 +2296,8 @@ function applyCache(key){
       }
     }
 
+    dispatchComposerChange();
+
     try {
       const textarea = pubForm?.querySelector('textarea');
       textarea?.focus();
@@ -2294,6 +2314,8 @@ function applyCache(key){
       replyBannerExcerpt.textContent = '';
       replyBannerExcerpt.setAttribute('hidden', '');
     }
+
+    dispatchComposerChange();
   }
 
   function focusReplyTarget(targetId){
@@ -5935,23 +5957,29 @@ init();
 
 <script>
 (function(){
-  const root    = document.getElementById('kkchat-root');
-  const list    = root?.querySelector('.list');
-  const inputBar= root?.querySelector('.inputbar');
-  const vv      = window.visualViewport;
+  const root     = document.getElementById('kkchat-root');
+  const list     = root?.querySelector('.list');
+  const inputBar = root?.querySelector('.inputbar');
+  const vv       = window.visualViewport;
+
+  function getKeyboardOffset(){
+    if (!vv) return 0;
+    return Math.max(0, (window.innerHeight - vv.height - vv.offsetTop));
+  }
 
   function applyKbOffset(){
-    if (!vv || !root || !inputBar) return;
-    const kbOffset = Math.max(0, (window.innerHeight - vv.height - vv.offsetTop));
+    if (!root || !inputBar) return;
+    const kbOffset = getKeyboardOffset();
     document.documentElement.style.setProperty('--kb-offset', kbOffset + 'px');
+    const composerHeight = inputBar.offsetHeight || 0;
+    document.documentElement.style.setProperty('--composer-height', composerHeight + 'px');
     if (kbOffset > 0) {
       document.documentElement.classList.add('kb-open');
     } else {
       document.documentElement.classList.remove('kb-open');
     }
     if (list) {
-
-      list.style.paddingBottom = `calc(80px + env(safe-area-inset-bottom) + ${kbOffset}px)`;
+      list.style.paddingBottom = '';
     }
   }
   if (vv){
@@ -5966,6 +5994,9 @@ init();
         applyKbOffset();
       }, 50);
     }
+  });
+  document.addEventListener('kkchat:composer-change', ()=>{
+    requestAnimationFrame(applyKbOffset);
   });
   applyKbOffset();
 
