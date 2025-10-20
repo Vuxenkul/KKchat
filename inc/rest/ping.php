@@ -24,7 +24,7 @@ register_rest_route($ns, '/ping', [
     $now = time();
 
     // Clear expired watch flags
-    $wpdb->query(
+    $cleared = (int) $wpdb->query(
       $wpdb->prepare(
         "UPDATE {$t['users']}
             SET watch_flag = 0, watch_flag_at = NULL
@@ -36,9 +36,13 @@ register_rest_route($ns, '/ping', [
       )
     );
 
+    if ($cleared > 0) {
+      kkchat_admin_presence_cache_flush();
+    }
+
     // (Optional) light, probabilistic purge of very stale presences
     if (mt_rand(1, 20) === 1) {
-      $wpdb->query(
+      $deleted = (int) $wpdb->query(
         $wpdb->prepare(
           "DELETE FROM {$t['users']}
             WHERE %d - last_seen > %d",
@@ -46,6 +50,9 @@ register_rest_route($ns, '/ping', [
           kkchat_user_ttl()
         )
       );
+      if ($deleted > 0) {
+        kkchat_admin_presence_cache_flush();
+      }
     }
 
     // --- Admin-only: open report count + rising-edge anchor (cheap) ---
