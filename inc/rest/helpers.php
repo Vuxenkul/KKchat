@@ -725,7 +725,7 @@ if (!defined('ABSPATH')) exit;
         'latest'  => $unreadLatest,
       ];
       $msgs = [];
-      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
       if ($onlyPub) {
         if ($since < 0) {
           $rows = $wpdb->get_results(
@@ -828,16 +828,20 @@ if (!defined('ABSPATH')) exit;
           foreach ($rows as $r) {
             $mid = (int) $r['id'];
             $msgs[] = [
-              'id'             => $mid,
-              'time'           => (int) $r['created_at'],
-              'kind'           => $r['kind'] ?: 'chat',
-              'room'           => $r['room'] ?: null,
-              'sender_id'      => (int) $r['sender_id'],
-              'sender_name'    => (string) $r['sender_name'],
-              'recipient_id'   => isset($r['recipient_id']) ? (int) $r['recipient_id'] : null,
-              'recipient_name' => $r['recipient_name'] ?: null,
-              'content'        => $r['content'],
-              'read_by'        => isset($read_map[$mid]) ? array_values(array_map('intval', $read_map[$mid])) : [],
+              'id'                   => $mid,
+              'time'                 => (int) $r['created_at'],
+              'kind'                 => $r['kind'] ?: 'chat',
+              'room'                 => $r['room'] ?: null,
+              'sender_id'            => (int) $r['sender_id'],
+              'sender_name'          => (string) $r['sender_name'],
+              'recipient_id'         => isset($r['recipient_id']) ? (int) $r['recipient_id'] : null,
+              'recipient_name'       => $r['recipient_name'] ?: null,
+              'content'              => $r['content'],
+              'reply_to_id'          => isset($r['reply_to_id']) ? (int) $r['reply_to_id'] : null,
+              'reply_to_sender_id'   => isset($r['reply_to_sender_id']) ? (int) $r['reply_to_sender_id'] : null,
+              'reply_to_sender_name' => $r['reply_to_sender_name'] ?: null,
+              'reply_to_excerpt'     => $r['reply_to_excerpt'] ?: null,
+              'read_by'              => isset($read_map[$mid]) ? array_values(array_map('intval', $read_map[$mid])) : [],
             ];
           }
         }

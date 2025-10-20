@@ -42,7 +42,8 @@ register_rest_route($ns, '/admin/user-messages', [
     $sql = "SELECT id,created_at,kind,room,
                    sender_id,sender_name,sender_ip,
                    recipient_id,recipient_name,recipient_ip,
-                   content
+                   content,
+                   reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt
               FROM {$t['messages']}
               $whereSql
           ORDER BY id DESC
@@ -63,6 +64,10 @@ register_rest_route($ns, '/admin/user-messages', [
         'recipient_name' => $m['recipient_name'] ?: null,
         'recipient_ip'   => $m['recipient_ip'] ?: null,
         'content'        => $m['content'],
+        'reply_to_id'          => isset($m['reply_to_id']) ? (int)$m['reply_to_id'] : null,
+        'reply_to_sender_id'   => isset($m['reply_to_sender_id']) ? (int)$m['reply_to_sender_id'] : null,
+        'reply_to_sender_name' => $m['reply_to_sender_name'] ?: null,
+        'reply_to_excerpt'     => $m['reply_to_excerpt'] ?: null,
       ];
     }, $rows);
 
