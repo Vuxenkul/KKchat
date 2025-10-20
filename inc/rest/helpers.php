@@ -100,6 +100,195 @@ if (!defined('ABSPATH')) exit;
     }
   }
 
+  if (!function_exists('kkchat_admin_presence_normalize_opts')) {
+    function kkchat_admin_presence_normalize_opts(array $opts = []): array {
+      $defaults = [
+        'active_window'   => max(30, (int) apply_filters('kkchat_presence_active_sec', 60)),
+        'limit'           => max(50, (int) apply_filters('kkchat_presence_limit', 1200)),
+        'order_column'    => 'name_lc',
+        'order_direction' => 'ASC',
+      ];
+
+      $cfg = array_merge($defaults, $opts);
+
+      $cfg['active_window'] = max(0, (int) ($cfg['active_window'] ?? 0));
+      $cfg['limit']         = max(0, (int) ($cfg['limit'] ?? 0));
+
+      $allowedColumns = ['name_lc', 'name', 'last_seen'];
+      if (!in_array($cfg['order_column'], $allowedColumns, true)) {
+        $cfg['order_column'] = 'name_lc';
+      }
+
+      $dir = strtoupper((string) ($cfg['order_direction'] ?? 'ASC'));
+      $cfg['order_direction'] = in_array($dir, ['ASC', 'DESC'], true) ? $dir : 'ASC';
+
+      return $cfg;
+    }
+  }
+
+  if (!function_exists('kkchat_admin_presence_cache_key')) {
+    function kkchat_admin_presence_cache_key(array $cfg, int $bucket): string {
+      $direction = strtolower($cfg['order_direction'] ?? 'asc');
+      return sprintf(
+        'presence_admin:%d:%d:%s:%s:%d',
+        (int) ($cfg['active_window'] ?? 0),
+        (int) ($cfg['limit'] ?? 0),
+        (string) ($cfg['order_column'] ?? 'name_lc'),
+        $direction,
+        $bucket
+      );
+    }
+  }
+
+  if (!function_exists('kkchat_admin_presence_cache_flush')) {
+    function kkchat_admin_presence_cache_flush(?array $opts = null): void {
+      if (!function_exists('wp_cache_delete')) { return; }
+
+      $ttl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+      if ($ttl <= 0) { return; }
+
+      $bucketSize = max(1, $ttl);
+      $now = time();
+      $buckets = array_unique([
+        (int) floor($now / $bucketSize),
+        (int) floor(($now - 1) / $bucketSize),
+      ]);
+
+      $variants = [];
+      if ($opts === null) {
+        $variants = [
+          kkchat_admin_presence_normalize_opts([]),
+          kkchat_admin_presence_normalize_opts([
+            'active_window' => 0,
+            'limit'         => 0,
+            'order_column'  => 'name',
+          ]),
+        ];
+        $variants = apply_filters('kkchat_admin_presence_cache_flush_variants', $variants);
+      } else {
+        $variants = [kkchat_admin_presence_normalize_opts($opts)];
+      }
+
+      foreach ($variants as $cfg) {
+        foreach ($buckets as $bucket) {
+          wp_cache_delete(kkchat_admin_presence_cache_key($cfg, $bucket), 'kkchat');
+        }
+      }
+    }
+  }
+
+  if (!function_exists('kkchat_admin_presence_snapshot')) {
+    /**
+     * Admin-only presence payload (includes latest-message metadata).
+     * Results are cached briefly to smooth repeated sync polls.
+     *
+     * Filters:
+     *   - kkchat_admin_presence_cache_ttl: seconds to retain the cached snapshot (default 2s).
+     *   - kkchat_admin_presence_cache_flush_variants: adjust cache-flush variants when busting.
+     */
+    function kkchat_admin_presence_snapshot(int $now, array $admin_names, array $opts = []): array {
+      kkchat_wpdb_reconnect_if_needed();
+      global $wpdb; $t = kkchat_tables();
+
+      $cfg = kkchat_admin_presence_normalize_opts($opts);
+
+      $cacheTtl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+      $cacheKey = null;
+      if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
+        $bucketSize = max(1, $cacheTtl);
+        $cacheKey   = kkchat_admin_presence_cache_key($cfg, (int) floor($now / $bucketSize));
+        $cached     = wp_cache_get($cacheKey, 'kkchat');
+        if (is_array($cached)) {
+          return $cached;
+        }
+      }
+
+      $sql = "SELECT u.id,
+                     u.name,
+                     u.gender,
+                     u.watch_flag,
+                     u.wp_username,
+                     u.last_seen,
+                     lm.last_content,
+                     lm.last_room,
+                     lm.last_recipient_id,
+                     lm.last_recipient_name,
+                     lm.last_kind,
+                     lm.last_created_at
+                FROM {$t['users']} u
+           LEFT JOIN (
+                 SELECT m.sender_id,
+                        SUBSTRING(m.content, 1, 200) AS last_content,
+                        m.room AS last_room,
+                        m.recipient_id AS last_recipient_id,
+                        m.recipient_name AS last_recipient_name,
+                        m.kind AS last_kind,
+                        m.created_at AS last_created_at
+                   FROM {$t['messages']} m
+             INNER JOIN (
+                       SELECT sender_id, MAX(id) AS last_id
+                         FROM {$t['messages']}
+                        WHERE hidden_at IS NULL
+                     GROUP BY sender_id
+                     ) latest
+                     ON latest.sender_id = m.sender_id AND latest.last_id = m.id
+                  WHERE m.hidden_at IS NULL
+               ) lm ON lm.sender_id = u.id";
+
+      $clauses = [];
+      if ($cfg['active_window'] > 0) {
+        $clauses[] = $wpdb->prepare('%d - u.last_seen <= %d', $now, $cfg['active_window']);
+      }
+      if ($clauses) {
+        $sql .= ' WHERE ' . implode(' AND ', $clauses);
+      }
+
+      $sql .= sprintf(' ORDER BY u.%s %s', $cfg['order_column'], $cfg['order_direction']);
+
+      if ($cfg['limit'] > 0) {
+        $sql .= $wpdb->prepare(' LIMIT %d', $cfg['limit']);
+      }
+
+      $rows = $wpdb->get_results($sql, ARRAY_A) ?: [];
+      $out  = [];
+
+      foreach ($rows as $r) {
+        $lastMsg = null;
+        if (
+          isset($r['last_content']) ||
+          isset($r['last_room']) ||
+          isset($r['last_recipient_id']) ||
+          isset($r['last_kind'])
+        ) {
+          $lastMsg = [
+            'text'           => (string) ($r['last_content'] ?? ''),
+            'room'           => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
+            'to'             => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
+            'recipient_name' => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
+            'kind'           => (string) ($r['last_kind'] ?? 'chat'),
+            'time'           => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+          ];
+        }
+
+        $out[] = [
+          'id'           => (int) ($r['id'] ?? 0),
+          'name'         => (string) ($r['name'] ?? ''),
+          'gender'       => (string) ($r['gender'] ?? ''),
+          'flagged'      => !empty($r['watch_flag']) ? 1 : 0,
+          'is_admin'     => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+          'last_seen'    => (int) ($r['last_seen'] ?? 0),
+          'last_message' => $lastMsg,
+        ];
+      }
+
+      if ($cacheTtl > 0 && $cacheKey && function_exists('wp_cache_set')) {
+        wp_cache_set($cacheKey, $out, 'kkchat', $cacheTtl);
+      }
+
+      return $out;
+    }
+  }
+
   if (!function_exists('kkchat_sync_build_context')) {
     function kkchat_sync_build_context(WP_REST_Request $req): array {
       kkchat_require_login(false);
@@ -388,16 +577,20 @@ if (!defined('ABSPATH')) exit;
       kkchat_wpdb_reconnect_if_needed();
       global $wpdb; $t = kkchat_tables();
       $now = time();
-      $wpdb->query($wpdb->prepare(
+      $deleted = (int) $wpdb->query($wpdb->prepare(
         "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
         $now,
         kkchat_user_ttl()
       ));
-      $wpdb->query($wpdb->prepare(
+      $cleared = (int) $wpdb->query($wpdb->prepare(
         "UPDATE {$t['users']}\n            SET watch_flag = 0, watch_flag_at = NULL\n          WHERE watch_flag = 1\n            AND watch_flag_at IS NOT NULL\n            AND %d - watch_flag_at > %d",
         $now,
         kkchat_watch_reset_after()
       ));
+
+      if ($deleted > 0 || $cleared > 0) {
+        kkchat_admin_presence_cache_flush();
+      }
     }
   }
   add_action('kkchat_sync_housekeeping', 'kkchat_sync_run_housekeeping');
@@ -421,79 +614,8 @@ if (!defined('ABSPATH')) exit;
 
       kkchat_sync_queue_housekeeping();
       $admin_names = kkchat_admin_usernames();
-      $presence    = [];
       if ($is_admin_viewer) {
-        $presence_rows = $wpdb->get_results(
-          $wpdb->prepare(
-            "SELECT u.id,
-                    u.name,
-                    u.gender,
-                    u.watch_flag,
-                    u.wp_username,
-                    u.last_seen,
-                    lm.last_content,
-                    lm.last_room,
-                    lm.last_recipient_id,
-                    lm.last_recipient_name,
-                    lm.last_kind,
-                    lm.last_created_at
-               FROM {$t['users']} u
-          LEFT JOIN (
-                SELECT m.sender_id,
-                       SUBSTRING(m.content, 1, 200) AS last_content,
-                       m.room AS last_room,
-                       m.recipient_id AS last_recipient_id,
-                       m.recipient_name AS last_recipient_name,
-                       m.kind AS last_kind,
-                       m.created_at AS last_created_at
-                  FROM {$t['messages']} m
-            INNER JOIN (
-                      SELECT sender_id, MAX(id) AS last_id
-                        FROM {$t['messages']}
-                       WHERE hidden_at IS NULL
-                    GROUP BY sender_id
-                    ) latest
-                    ON latest.sender_id = m.sender_id AND latest.last_id = m.id
-                 WHERE m.hidden_at IS NULL
-              ) lm ON lm.sender_id = u.id
-              WHERE %d - u.last_seen <= %d
-              ORDER BY u.name_lc ASC
-              LIMIT %d",
-            $now,
-            max(30, (int) apply_filters('kkchat_presence_active_sec', 60)),
-            max(50, (int) apply_filters('kkchat_presence_limit', 1200))
-          ),
-          ARRAY_A
-        ) ?: [];
-
-        foreach ($presence_rows as $r) {
-          $lastMsg = null;
-          if (
-            isset($r['last_content']) ||
-            isset($r['last_room']) ||
-            isset($r['last_recipient_id']) ||
-            isset($r['last_kind'])
-          ) {
-            $lastMsg = [
-              'text'            => (string) ($r['last_content'] ?? ''),
-              'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
-              'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
-              'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
-              'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-              'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
-            ];
-          }
-
-          $presence[] = [
-            'id'            => (int) ($r['id'] ?? 0),
-            'name'          => (string) ($r['name'] ?? ''),
-            'gender'        => (string) ($r['gender'] ?? ''),
-            'flagged'       => !empty($r['watch_flag']) ? 1 : 0,
-            'is_admin'      => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-            'last_seen'     => (int) ($r['last_seen'] ?? 0),
-            'last_message'  => $lastMsg,
-          ];
-        }
+        $presence = kkchat_admin_presence_snapshot($now, $admin_names);
       } else {
         $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
         $presence = kkchat_public_presence_snapshot($now, $publicPresenceWindow, $admin_names, [

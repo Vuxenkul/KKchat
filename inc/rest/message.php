@@ -59,7 +59,10 @@ if (!defined('ABSPATH')) exit;
           if ($r['kind']==='forbid' && !$hit_forbid) $hit_forbid = $r;
         }
         if ($hit_watch){
-          $wpdb->update($t['users'], ['watch_flag'=>1,'watch_flag_at'=>time()], ['id'=>$me_id], ['%d','%d'], ['%d']);
+          $affected = $wpdb->update($t['users'], ['watch_flag'=>1,'watch_flag_at'=>time()], ['id'=>$me_id], ['%d','%d'], ['%d']);
+          if ((int) $affected > 0) {
+            kkchat_admin_presence_cache_flush();
+          }
         }
         if ($hit_forbid){
           $now = time();
@@ -242,7 +245,9 @@ if (!defined('ABSPATH')) exit;
 
       $mid = (int)$wpdb->insert_id;
 
-    kkchat_json(['ok'=>true,'id'=>$mid]);
+      kkchat_admin_presence_cache_flush();
+
+      kkchat_json(['ok'=>true,'id'=>$mid]);
 
     },
     'permission_callback' => '__return_true',

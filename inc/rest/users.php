@@ -31,7 +31,7 @@ register_rest_route($ns, '/users', [
     kkchat_close_session_if_open();
 
     // Housekeeping: purge stale presences
-    $wpdb->query(
+    $deleted = (int) $wpdb->query(
       $wpdb->prepare(
         "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
         $now,
@@ -40,7 +40,7 @@ register_rest_route($ns, '/users', [
     );
 
     // Auto-clear watchlist highlights after N seconds
-    $wpdb->query(
+    $cleared = (int) $wpdb->query(
       $wpdb->prepare(
         "UPDATE {$t['users']}\n            SET watch_flag = 0, watch_flag_at = NULL\n          WHERE watch_flag = 1\n            AND watch_flag_at IS NOT NULL\n            AND %d - watch_flag_at > %d",
         $now,
@@ -48,42 +48,17 @@ register_rest_route($ns, '/users', [
       )
     );
 
+    if ($deleted > 0 || $cleared > 0) {
+      kkchat_admin_presence_cache_flush();
+    }
+
     if ($is_admin_viewer) {
-      $rows = $wpdb->get_results(
-        "SELECT u.id,\n                u.name,\n                u.gender,\n                u.watch_flag,\n                u.wp_username,\n                u.last_seen,\n                lm.last_content,\n                lm.last_room,\n                lm.last_recipient_id,\n                lm.last_recipient_name,\n                lm.last_kind,\n                lm.last_created_at\n           FROM {$t['users']} u\n      LEFT JOIN (\n            SELECT m.sender_id,\n                   SUBSTRING(m.content, 1, 200) AS last_content,\n                   m.room AS last_room,\n                   m.recipient_id AS last_recipient_id,\n                   m.recipient_name AS last_recipient_name,\n                   m.kind AS last_kind,\n                   m.created_at AS last_created_at\n              FROM {$t['messages']} m\n        INNER JOIN (\n                  SELECT sender_id, MAX(id) AS last_id\n                    FROM {$t['messages']}\n                   WHERE hidden_at IS NULL\n                GROUP BY sender_id\n                ) latest\n                ON latest.sender_id = m.sender_id AND latest.last_id = m.id\n             WHERE m.hidden_at IS NULL\n          ) lm ON lm.sender_id = u.id\n       ORDER BY u.name ASC",
-        ARRAY_A
-      );
-
-      $out = [];
-      foreach ($rows ?? [] as $r) {
-        $lastMsg = null;
-        if (
-          isset($r['last_content']) ||
-          isset($r['last_room']) ||
-          isset($r['last_recipient_id']) ||
-          isset($r['last_kind'])
-        ) {
-          $lastMsg = [
-            'text'            => (string) ($r['last_content'] ?? ''),
-            'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
-            'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
-            'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
-            'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-            'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
-          ];
-        }
-
-        $out[] = [
-          'id'           => (int) $r['id'],
-          'name'         => (string) $r['name'],
-          'gender'       => (string) ($r['gender'] ?? ''),
-          'flagged'      => !empty($r['watch_flag']) ? 1 : 0,
-          'is_admin'     => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-          'last_seen'    => (int) ($r['last_seen'] ?? 0),
-          'last_message' => $lastMsg,
-        ];
-      }
-      return kkchat_json($out);
+      $rows = kkchat_admin_presence_snapshot($now, $admin_names, [
+        'active_window' => 0,
+        'limit'         => 0,
+        'order_column'  => 'name',
+      ]);
+      return kkchat_json($rows);
     }
 
     // NON-ADMIN: minimal fields
