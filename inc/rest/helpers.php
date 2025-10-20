@@ -423,76 +423,106 @@ if (!defined('ABSPATH')) exit;
       $admin_names = kkchat_admin_usernames();
       $presence    = [];
       if ($is_admin_viewer) {
-        $presence_rows = $wpdb->get_results(
-          $wpdb->prepare(
-            "SELECT u.id,
-                    u.name,
-                    u.gender,
-                    u.watch_flag,
-                    u.wp_username,
-                    u.last_seen,
-                    lm.last_content,
-                    lm.last_room,
-                    lm.last_recipient_id,
-                    lm.last_recipient_name,
-                    lm.last_kind,
-                    lm.last_created_at
-               FROM {$t['users']} u
-          LEFT JOIN (
-                SELECT m.sender_id,
-                       SUBSTRING(m.content, 1, 200) AS last_content,
-                       m.room AS last_room,
-                       m.recipient_id AS last_recipient_id,
-                       m.recipient_name AS last_recipient_name,
-                       m.kind AS last_kind,
-                       m.created_at AS last_created_at
-                  FROM {$t['messages']} m
-            INNER JOIN (
-                      SELECT sender_id, MAX(id) AS last_id
-                        FROM {$t['messages']}
-                       WHERE hidden_at IS NULL
-                    GROUP BY sender_id
-                    ) latest
-                    ON latest.sender_id = m.sender_id AND latest.last_id = m.id
-                 WHERE m.hidden_at IS NULL
-              ) lm ON lm.sender_id = u.id
-              WHERE %d - u.last_seen <= %d
-              ORDER BY u.name_lc ASC
-              LIMIT %d",
-            $now,
-            max(30, (int) apply_filters('kkchat_presence_active_sec', 60)),
-            max(50, (int) apply_filters('kkchat_presence_limit', 1200))
-          ),
-          ARRAY_A
-        ) ?: [];
+        $activeWindow  = max(30, (int) apply_filters('kkchat_presence_active_sec', 60));
+        $presenceLimit = max(50, (int) apply_filters('kkchat_presence_limit', 1200));
+        $adminPresenceTtl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+        $presenceCacheKey = null;
+        $presenceCached   = false;
 
-        foreach ($presence_rows as $r) {
-          $lastMsg = null;
-          if (
-            isset($r['last_content']) ||
-            isset($r['last_room']) ||
-            isset($r['last_recipient_id']) ||
-            isset($r['last_kind'])
-          ) {
-            $lastMsg = [
-              'text'            => (string) ($r['last_content'] ?? ''),
-              'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
-              'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
-              'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
-              'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-              'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+        if ($adminPresenceTtl > 0 && function_exists('wp_cache_get')) {
+          $bucket = max(1, $adminPresenceTtl);
+          $seed   = $admin_names;
+          if ($seed) { sort($seed); }
+          $presenceCacheKey = sprintf(
+            'admin_presence:%d:%d:%s:%d',
+            $activeWindow,
+            $presenceLimit,
+            $seed ? md5(implode('|', $seed)) : 'none',
+            (int) floor($now / $bucket)
+          );
+          $cachedPresence = wp_cache_get($presenceCacheKey, 'kkchat');
+          if ($cachedPresence !== false && is_array($cachedPresence)) {
+            $presence = $cachedPresence;
+            $presenceCached = true;
+          }
+        }
+
+        if (!$presenceCached) {
+          $presence_rows = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT u.id,
+                      u.name,
+                      u.gender,
+                      u.watch_flag,
+                      u.wp_username,
+                      u.last_seen,
+                      lm.last_content,
+                      lm.last_room,
+                      lm.last_recipient_id,
+                      lm.last_recipient_name,
+                      lm.last_kind,
+                      lm.last_created_at
+                 FROM {$t['users']} u
+            LEFT JOIN (
+                  SELECT m.sender_id,
+                         SUBSTRING(m.content, 1, 200) AS last_content,
+                         m.room AS last_room,
+                         m.recipient_id AS last_recipient_id,
+                         m.recipient_name AS last_recipient_name,
+                         m.kind AS last_kind,
+                         m.created_at AS last_created_at
+                    FROM {$t['messages']} m
+              INNER JOIN (
+                        SELECT sender_id, MAX(id) AS last_id
+                          FROM {$t['messages']}
+                         WHERE hidden_at IS NULL
+                      GROUP BY sender_id
+                      ) latest
+                      ON latest.sender_id = m.sender_id AND latest.last_id = m.id
+                   WHERE m.hidden_at IS NULL
+                ) lm ON lm.sender_id = u.id
+                WHERE %d - u.last_seen <= %d
+                ORDER BY u.name_lc ASC
+                LIMIT %d",
+              $now,
+              $activeWindow,
+              $presenceLimit
+            ),
+            ARRAY_A
+          ) ?: [];
+
+          foreach ($presence_rows as $r) {
+            $lastMsg = null;
+            if (
+              isset($r['last_content']) ||
+              isset($r['last_room']) ||
+              isset($r['last_recipient_id']) ||
+              isset($r['last_kind'])
+            ) {
+              $lastMsg = [
+                'text'            => (string) ($r['last_content'] ?? ''),
+                'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
+                'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
+                'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
+                'kind'            => (string) ($r['last_kind'] ?? 'chat'),
+                'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+              ];
+            }
+
+            $presence[] = [
+              'id'            => (int) ($r['id'] ?? 0),
+              'name'          => (string) ($r['name'] ?? ''),
+              'gender'        => (string) ($r['gender'] ?? ''),
+              'flagged'       => !empty($r['watch_flag']) ? 1 : 0,
+              'is_admin'      => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
+              'last_seen'     => (int) ($r['last_seen'] ?? 0),
+              'last_message'  => $lastMsg,
             ];
           }
 
-          $presence[] = [
-            'id'            => (int) ($r['id'] ?? 0),
-            'name'          => (string) ($r['name'] ?? ''),
-            'gender'        => (string) ($r['gender'] ?? ''),
-            'flagged'       => !empty($r['watch_flag']) ? 1 : 0,
-            'is_admin'      => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
-            'last_seen'     => (int) ($r['last_seen'] ?? 0),
-            'last_message'  => $lastMsg,
-          ];
+          if ($presenceCacheKey && $adminPresenceTtl > 0 && function_exists('wp_cache_set')) {
+            wp_cache_set($presenceCacheKey, $presence, 'kkchat', $adminPresenceTtl);
+          }
         }
       } else {
         $publicPresenceWindow = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
@@ -511,42 +541,44 @@ if (!defined('ABSPATH')) exit;
       $latestRoomId = 0;
       $roomLastSeen = [];
 
-      $blkPer = '';
-      $paramsPer = [$me];
-      if ($blocked) {
-        $blkPer = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
-        foreach ($blocked as $bid) { $paramsPer[] = (int) $bid; }
-      }
-      $paramsPer[] = $me;
-
-      $sqlPer = "
-        SELECT src.peer_id,
-               src.max_id,
-               COALESCE(ldr.last_msg_id, 0) AS last_seen
-          FROM (
-            SELECT m.sender_id AS peer_id,
-                   MAX(m.id) AS max_id
-              FROM {$t['messages']} m
-             WHERE m.recipient_id = %d
-               AND m.hidden_at IS NULL
-               $blkPer
-             GROUP BY m.sender_id
-          ) src
-          LEFT JOIN {$t['last_dm_reads']} ldr
-            ON ldr.user_id = %d AND ldr.peer_id = src.peer_id";
-      $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
-      foreach ($rowsPer as $r) {
-        $peer      = (int) ($r['peer_id'] ?? 0);
-        $maxId     = (int) ($r['max_id'] ?? 0);
-        $lastSeen  = (int) ($r['last_seen'] ?? 0);
-        if ($peer <= 0) { continue; }
-        if ($maxId > $lastSeen) {
-          $per[$peer] = 1;
-          $totPriv++;
-        } else {
-          $per[$peer] = 0;
+      if (!$onlyPub) {
+        $blkPer = '';
+        $paramsPer = [$me];
+        if ($blocked) {
+          $blkPer = ' AND m.sender_id NOT IN (' . implode(',', array_fill(0, count($blocked), '%d')) . ') ';
+          foreach ($blocked as $bid) { $paramsPer[] = (int) $bid; }
         }
-        $latestPerId = max($latestPerId, $maxId);
+        $paramsPer[] = $me;
+
+        $sqlPer = "
+          SELECT src.peer_id,
+                 src.max_id,
+                 COALESCE(ldr.last_msg_id, 0) AS last_seen
+            FROM (
+              SELECT m.sender_id AS peer_id,
+                     MAX(m.id) AS max_id
+                FROM {$t['messages']} m
+               WHERE m.recipient_id = %d
+                 AND m.hidden_at IS NULL
+                 $blkPer
+               GROUP BY m.sender_id
+            ) src
+            LEFT JOIN {$t['last_dm_reads']} ldr
+              ON ldr.user_id = %d AND ldr.peer_id = src.peer_id";
+        $rowsPer = $wpdb->get_results($wpdb->prepare($sqlPer, ...$paramsPer), ARRAY_A) ?: [];
+        foreach ($rowsPer as $r) {
+          $peer      = (int) ($r['peer_id'] ?? 0);
+          $maxId     = (int) ($r['max_id'] ?? 0);
+          $lastSeen  = (int) ($r['last_seen'] ?? 0);
+          if ($peer <= 0) { continue; }
+          if ($maxId > $lastSeen) {
+            $per[$peer] = 1;
+            $totPriv++;
+          } else {
+            $per[$peer] = 0;
+          }
+          $latestPerId = max($latestPerId, $maxId);
+        }
       }
 
       $blkRoom = '';
