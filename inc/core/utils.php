@@ -15,7 +15,9 @@ function kkchat_tables() {
     $p = $wpdb->prefix . 'kkchat_';
     return [
         'messages'       => $p . 'messages',
+        'dm_messages'    => $p . 'dm_messages',
         'reads'          => $p . 'reads',
+        'dm_reads'       => $p . 'dm_reads',
         'last_reads'     => $p . 'last_reads',
         'last_dm_reads'  => $p . 'last_dm_reads',
         'users'          => $p . 'users',

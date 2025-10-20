@@ -7,11 +7,50 @@ if (!defined('ABSPATH')) exit;
  * ============================================================ */
 
 add_action('admin_post_kkchat_logs_ipban', 'kkchat_handle_logs_ipban');
+if (!function_exists('kkchat_admin_all_messages_union_sql')) {
+  function kkchat_admin_all_messages_union_sql(array $t): string {
+    return sprintf(
+      '(
+        SELECT id, created_at, sender_id, sender_name, sender_ip, recipient_id, recipient_name, recipient_ip, room, kind, content, hidden_at, hidden_by, hidden_cause
+          FROM %1$s
+        UNION ALL
+        SELECT id, created_at, sender_id, sender_name, sender_ip, recipient_id, recipient_name, recipient_ip, NULL AS room, kind, content, hidden_at, hidden_by, hidden_cause
+          FROM %2$s
+      )',
+      $t['messages'],
+      $t['dm_messages']
+    );
+  }
+}
+
+if (!function_exists('kkchat_admin_message_table_for_id')) {
+  function kkchat_admin_message_table_for_id(array $t, int $id): ?string {
+    global $wpdb;
+    $id = (int) $id;
+    if ($id <= 0) { return null; }
+
+    $dm = (int) $wpdb->get_var($wpdb->prepare(
+      "SELECT 1 FROM {$t['dm_messages']} WHERE id = %d LIMIT 1",
+      $id
+    ));
+    if ($dm === 1) { return $t['dm_messages']; }
+
+    $pub = (int) $wpdb->get_var($wpdb->prepare(
+      "SELECT 1 FROM {$t['messages']} WHERE id = %d LIMIT 1",
+      $id
+    ));
+    if ($pub === 1) { return $t['messages']; }
+
+    return null;
+  }
+}
+
 function kkchat_handle_logs_ipban() {
   if ( ! current_user_can('manage_options')) wp_die(__('Åtkomst nekad.', 'kkchat'));
   check_admin_referer('kkchat_logs_ipban');
 
   global $wpdb; $t = kkchat_tables();
+  $allMessagesBase = kkchat_admin_all_messages_union_sql($t);
   $ip      = trim((string)($_POST['ip'] ?? ''));
   $minutes = max(0, (int)($_POST['minutes'] ?? 0));
   $cause   = sanitize_text_field($_POST['cause'] ?? '');
@@ -66,7 +105,7 @@ function kkchat_handle_logs_ipban() {
   if ($target_user_id === null && $target_name === null && $target_wp_username === null) {
     $m = $wpdb->get_row($wpdb->prepare(
       "SELECT sender_id, sender_name
-         FROM {$t['messages']}
+         FROM {$allMessagesBase} allmsg
         WHERE sender_ip=%s OR recipient_ip=%s
         ORDER BY id DESC LIMIT 1",
       $ip, $ip
@@ -153,6 +192,7 @@ add_action('admin_menu', function () {
 function kkchat_admin_media_page() {
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
+  $allMessagesBase = kkchat_admin_all_messages_union_sql($t);
 
   // ------ helpers ------
   $is_image_url = function($url) {
@@ -170,29 +210,42 @@ function kkchat_admin_media_page() {
     $mid   = max(0, (int)($_POST['mid'] ?? 0));
     $cause = sanitize_text_field($_POST['cause'] ?? '');
     if ($mid > 0) {
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['messages']}
-           SET hidden_at = %d,
-               hidden_by = %d,
-               hidden_cause = %s
-         WHERE id = %d",
-        time(), get_current_user_id() ?: 0, $cause, $mid
-      ));
-      echo '<div class="updated"><p>Meddelande #'.(int)$mid.' dolt.</p></div>';
+      $targetTable = kkchat_admin_message_table_for_id($t, $mid);
+      if ($targetTable) {
+        $wpdb->query($wpdb->prepare(
+          "UPDATE {$targetTable}
+             SET hidden_at = %d,
+                 hidden_by = %d,
+                 hidden_cause = %s
+           WHERE id = %d",
+          time(),
+          get_current_user_id() ?: 0,
+          $cause !== '' ? $cause : null,
+          $mid
+        ));
+        echo '<div class="updated"><p>Meddelande #'.(int)$mid.' dolt.</p></div>';
+      } else {
+        echo '<div class="error"><p>Kunde inte hitta meddelandet.</p></div>';
+      }
     }
   }
   if (isset($_POST['kk_unhide']) && check_admin_referer('kkchat_logs_actions')) {
     $mid = max(0, (int)($_POST['mid'] ?? 0));
     if ($mid > 0) {
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['messages']}
-           SET hidden_at = NULL,
-               hidden_by = NULL,
-               hidden_cause = NULL
-         WHERE id = %d",
-        $mid
-      ));
-      echo '<div class="updated"><p>Meddelande #'.(int)$mid.' visat.</p></div>';
+      $targetTable = kkchat_admin_message_table_for_id($t, $mid);
+      if ($targetTable) {
+        $wpdb->query($wpdb->prepare(
+          "UPDATE {$targetTable}
+             SET hidden_at = NULL,
+                 hidden_by = NULL,
+                 hidden_cause = NULL
+           WHERE id = %d",
+          $mid
+        ));
+        echo '<div class="updated"><p>Meddelande #'.(int)$mid.' visat.</p></div>';
+      } else {
+        echo '<div class="error"><p>Kunde inte hitta meddelandet.</p></div>';
+      }
     }
   }
 
@@ -245,7 +298,7 @@ function kkchat_admin_media_page() {
 
   // total count
   $total = (int)$wpdb->get_var($wpdb->prepare(
-    "SELECT COUNT(*) FROM {$t['messages']} $whereSql", ...$params
+    "SELECT COUNT(*) FROM {$allMessagesBase} allmsg $whereSql", ...$params
   ));
 
   // page rows
@@ -253,14 +306,14 @@ function kkchat_admin_media_page() {
                  sender_id,sender_name,sender_ip,
                  recipient_id,recipient_name,recipient_ip,
                  content,hidden_at,hidden_cause
-            FROM {$t['messages']}
+            FROM {$allMessagesBase} allmsg
             $whereSql
         ORDER BY id DESC
            LIMIT %d OFFSET %d";
   $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$per, $offset]))) ?: [];
 
   // rooms for filter dropdown
-  $rooms = $wpdb->get_col("SELECT DISTINCT room FROM {$t['messages']} WHERE room IS NOT NULL AND room<>'' ORDER BY room ASC") ?: [];
+  $rooms = $wpdb->get_col("SELECT DISTINCT room FROM {$allMessagesBase} allmsg WHERE room IS NOT NULL AND room<>'' ORDER BY room ASC") ?: [];
 
   // ------ render ------
   ?>
@@ -1793,6 +1846,7 @@ function kkchat_admin_reports_page() {
 function kkchat_admin_logs_page() {
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
+  $allMessagesBase = kkchat_admin_all_messages_union_sql($t);
 
   /* ---------- Visar ev. redirect-notiser från IP-block ---------- */
   if (!empty($_GET['kkbanok']))  echo '<div class="updated"><p>'.esc_html($_GET['kkbanok']).'</p></div>';
@@ -1803,29 +1857,42 @@ function kkchat_admin_logs_page() {
     $mid   = max(0, (int)($_POST['mid'] ?? 0));
     $cause = sanitize_text_field($_POST['cause'] ?? '');
     if ($mid > 0) {
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['messages']}
-           SET hidden_at = %d,
-               hidden_by = %d,
-               hidden_cause = %s
-         WHERE id = %d",
-        time(), get_current_user_id() ?: 0, $cause, $mid
-      ));
-      echo '<div class="updated"><p>Meddelande #'.(int)$mid.' dolt.</p></div>';
+      $targetTable = kkchat_admin_message_table_for_id($t, $mid);
+      if ($targetTable) {
+        $wpdb->query($wpdb->prepare(
+          "UPDATE {$targetTable}
+             SET hidden_at = %d,
+                 hidden_by = %d,
+                 hidden_cause = %s
+           WHERE id = %d",
+          time(),
+          get_current_user_id() ?: 0,
+          $cause !== '' ? $cause : null,
+          $mid
+        ));
+        echo '<div class="updated"><p>Meddelande #'.(int)$mid.' dolt.</p></div>';
+      } else {
+        echo '<div class="error"><p>Kunde inte hitta meddelandet.</p></div>';
+      }
     }
   }
   if (isset($_POST['kk_unhide']) && check_admin_referer('kkchat_logs_actions')) {
     $mid = max(0, (int)($_POST['mid'] ?? 0));
     if ($mid > 0) {
-      $wpdb->query($wpdb->prepare(
-        "UPDATE {$t['messages']}
-            SET hidden_at = NULL,
-                hidden_by = NULL,
-                hidden_cause = NULL
-          WHERE id = %d",
-        $mid
-      ));
-      echo '<div class="updated"><p>Meddelande #'.(int)$mid.' återställt.</p></div>';
+      $targetTable = kkchat_admin_message_table_for_id($t, $mid);
+      if ($targetTable) {
+        $wpdb->query($wpdb->prepare(
+          "UPDATE {$targetTable}
+             SET hidden_at = NULL,
+                 hidden_by = NULL,
+                 hidden_cause = NULL
+           WHERE id = %d",
+          $mid
+        ));
+        echo '<div class="updated"><p>Meddelande #'.(int)$mid.' återställt.</p></div>';
+      } else {
+        echo '<div class="error"><p>Kunde inte hitta meddelandet.</p></div>';
+      }
     }
   }
 
@@ -1833,14 +1900,20 @@ function kkchat_admin_logs_page() {
   if (isset($_POST['kk_purge_90'])) {
     check_admin_referer('kkchat_logs_purge');
     $days = 90; $threshold = time() - ($days * 86400);
-    $cnt_msgs  = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} WHERE created_at < %d", $threshold));
-    $cnt_reads = (int)$wpdb->get_var($wpdb->prepare(
+    $cnt_msgs  = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$allMessagesBase} allmsg WHERE created_at < %d", $threshold));
+    $cnt_reads_room = (int)$wpdb->get_var($wpdb->prepare(
       "SELECT COUNT(*) FROM {$t['reads']} r
        INNER JOIN {$t['messages']} m ON m.id = r.message_id
        WHERE m.created_at < %d", $threshold
     ));
+    $cnt_reads_dm = (int)$wpdb->get_var($wpdb->prepare(
+      "SELECT COUNT(*) FROM {$t['dm_reads']} r
+       INNER JOIN {$t['dm_messages']} m ON m.id = r.message_id
+       WHERE m.created_at < %d", $threshold
+    ));
+    $cnt_reads = $cnt_reads_room + $cnt_reads_dm;
     $img_urls = $wpdb->get_col($wpdb->prepare(
-      "SELECT DISTINCT content FROM {$t['messages']}
+      "SELECT DISTINCT content FROM {$allMessagesBase} allmsg
        WHERE kind='image' AND created_at < %d", $threshold
     )) ?: [];
     $wpdb->query($wpdb->prepare(
@@ -1848,7 +1921,13 @@ function kkchat_admin_logs_page() {
        INNER JOIN {$t['messages']} m ON m.id = r.message_id
        WHERE m.created_at < %d", $threshold
     ));
+    $wpdb->query($wpdb->prepare(
+      "DELETE r FROM {$t['dm_reads']} r
+       INNER JOIN {$t['dm_messages']} m ON m.id = r.message_id
+       WHERE m.created_at < %d", $threshold
+    ));
     $wpdb->query($wpdb->prepare("DELETE FROM {$t['messages']} WHERE created_at < %d", $threshold));
+    $wpdb->query($wpdb->prepare("DELETE FROM {$t['dm_messages']} WHERE created_at < %d", $threshold));
 
     $cnt_imgs = 0;
     if ($img_urls) {
@@ -1859,7 +1938,7 @@ function kkchat_admin_logs_page() {
       $img_urls = array_values(array_unique(array_filter(array_map('strval', $img_urls))));
       foreach ($img_urls as $url) {
         if (strpos($url, $chatUrlPrefix) !== 0) continue;
-        $still = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} WHERE kind='image' AND content=%s", $url));
+        $still = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$allMessagesBase} allmsg WHERE kind='image' AND content=%s", $url));
         if ($still > 0) continue;
         $rel   = ltrim(substr($url, strlen($baseurl)), '/');
         $fpath = $basedir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
@@ -1920,13 +1999,13 @@ function kkchat_admin_logs_page() {
   if ($to   !== '')    { $ts = strtotime($to.' 23:59:59'); if ($ts) { $where[] = "created_at <= %d"; $params[] = $ts; } }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
-  $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} $whereSql", ...$params));
+  $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$allMessagesBase} allmsg $whereSql", ...$params));
 
   $sql = "SELECT id,created_at,kind,room,
                  sender_id,sender_name,sender_ip,
                  recipient_id,recipient_name,recipient_ip,
                  content, hidden_at, hidden_by, hidden_cause
-          FROM {$t['messages']} $whereSql
+          FROM {$allMessagesBase} allmsg $whereSql
           ORDER BY id DESC
           LIMIT %d OFFSET %d";
   $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$per, $offset])));
@@ -1935,11 +2014,11 @@ function kkchat_admin_logs_page() {
   $ulike = sanitize_text_field($_GET['ulike'] ?? '');
   if ($ulike !== '') {
     $like = '%'.$wpdb->esc_like($ulike).'%';
-    $senders = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT sender_name FROM {$t['messages']} WHERE sender_name LIKE %s ORDER BY sender_name ASC LIMIT 300", $like));
-    $recips  = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT recipient_name FROM {$t['messages']} WHERE recipient_name IS NOT NULL AND recipient_name LIKE %s ORDER BY recipient_name ASC LIMIT 300", $like));
+    $senders = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT sender_name FROM {$allMessagesBase} allmsg WHERE sender_name LIKE %s ORDER BY sender_name ASC LIMIT 300", $like));
+    $recips  = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT recipient_name FROM {$allMessagesBase} allmsg WHERE recipient_name IS NOT NULL AND recipient_name LIKE %s ORDER BY recipient_name ASC LIMIT 300", $like));
   } else {
-    $senders = $wpdb->get_col("SELECT DISTINCT sender_name FROM {$t['messages']} WHERE sender_name <> '' ORDER BY sender_name ASC LIMIT 300");
-    $recips  = $wpdb->get_col("SELECT DISTINCT recipient_name FROM {$t['messages']} WHERE recipient_name IS NOT NULL AND recipient_name <> '' ORDER BY recipient_name ASC LIMIT 300");
+    $senders = $wpdb->get_col("SELECT DISTINCT sender_name FROM {$allMessagesBase} allmsg WHERE sender_name <> '' ORDER BY sender_name ASC LIMIT 300");
+    $recips  = $wpdb->get_col("SELECT DISTINCT recipient_name FROM {$allMessagesBase} allmsg WHERE recipient_name IS NOT NULL AND recipient_name <> '' ORDER BY recipient_name ASC LIMIT 300");
   }
   $usernames = array_values(array_unique(array_merge($senders ?: [], $recips ?: [])));
   natcasesort($usernames);
@@ -1964,7 +2043,7 @@ function kkchat_admin_logs_page() {
   if ($convA > 0 && $convB > 0) {
     $convRows = $wpdb->get_results($wpdb->prepare(
       "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content
-         FROM {$t['messages']}
+         FROM {$allMessagesBase} allmsg
         WHERE (sender_id=%d AND recipient_id=%d)
            OR (sender_id=%d AND recipient_id=%d)
         ORDER BY id ASC

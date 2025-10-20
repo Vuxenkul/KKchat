@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '9');
+  define('KKCHAT_DB_VERSION', '10');
 }
 
 /**
@@ -26,7 +26,7 @@ function kkchat_activate() {
     if (get_option($k) === false) add_option($k, $def);
   }
 
-  // Messages (includes soft-delete columns + helpful composite indexes)
+  // Messages (room scope)
   $sql1 = "CREATE TABLE IF NOT EXISTS `{$t['messages']}` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `created_at` INT UNSIGNED NOT NULL,
@@ -57,14 +57,49 @@ function kkchat_activate() {
     KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`)
   ) $charset;";
 
-$sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
-  `message_id` BIGINT UNSIGNED NOT NULL,
-  `user_id` INT UNSIGNED NOT NULL,
-  `created_at` INT UNSIGNED NOT NULL,
-  PRIMARY KEY (`message_id`,`user_id`),
-  KEY `idx_user` (`user_id`),
-  KEY `idx_created` (`created_at`)
-) $charset;";
+  // Direct messages (no room slug, denormalised sender/recipient columns)
+  $sqlDm = "CREATE TABLE IF NOT EXISTS `{$t['dm_messages']}` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `created_at` INT UNSIGNED NOT NULL,
+    `sender_id` INT UNSIGNED NOT NULL,
+    `sender_name` VARCHAR(64) NOT NULL,
+    `sender_ip` VARCHAR(45) NULL,
+    `recipient_id` INT UNSIGNED NOT NULL,
+    `recipient_name` VARCHAR(64) NULL,
+    `recipient_ip` VARCHAR(45) NULL,
+    `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
+    `content_hash` CHAR(40) NULL,
+    `content` TEXT NOT NULL,
+    `hidden_at` INT UNSIGNED NULL,
+    `hidden_by` INT UNSIGNED NULL,
+    `hidden_cause` VARCHAR(255) NULL,
+    PRIMARY KEY (`id`),
+    KEY `idx_created` (`created_at`),
+    KEY `idx_sender` (`sender_id`),
+    KEY `idx_recipient` (`recipient_id`),
+    KEY `idx_sender_hash` (`sender_id`,`content_hash`,`created_at`),
+    KEY `idx_sender_recipient_id` (`sender_id`,`recipient_id`,`id`),
+    KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`),
+    KEY `idx_hidden_at` (`hidden_at`)
+  ) $charset;";
+
+  $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
+    `message_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` INT UNSIGNED NOT NULL,
+    `created_at` INT UNSIGNED NOT NULL,
+    PRIMARY KEY (`message_id`,`user_id`),
+    KEY `idx_user` (`user_id`),
+    KEY `idx_created` (`created_at`)
+  ) $charset;";
+
+  $sqlDmReads = "CREATE TABLE IF NOT EXISTS `{$t['dm_reads']}` (
+    `message_id` BIGINT UNSIGNED NOT NULL,
+    `user_id` INT UNSIGNED NOT NULL,
+    `created_at` INT UNSIGNED NOT NULL,
+    PRIMARY KEY (`message_id`,`user_id`),
+    KEY `idx_user` (`user_id`),
+    KEY `idx_created` (`created_at`)
+  ) $charset;";
 
 
   $sql3 = "CREATE TABLE IF NOT EXISTS `{$t['users']}` (
@@ -183,7 +218,7 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
   ) $charset;";
 
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-  dbDelta($sql1); dbDelta($sql2); dbDelta($sql3); dbDelta($sql4);
+  dbDelta($sql1); dbDelta($sqlDm); dbDelta($sql2); dbDelta($sqlDmReads); dbDelta($sql3); dbDelta($sql4);
   dbDelta($sql5); dbDelta($sql6); dbDelta($sql7); dbDelta($sql8);
   dbDelta($sql9);
 
@@ -634,6 +669,48 @@ function kkchat_maybe_upgrade_schema() {
     dbDelta($sql1);
   }
 
+  // Direct messages table
+  if (!$table_exists($t['dm_messages'])) {
+    $sqlDm = "CREATE TABLE IF NOT EXISTS `{$t['dm_messages']}` (
+      `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      `created_at` INT UNSIGNED NOT NULL,
+      `sender_id` INT UNSIGNED NOT NULL,
+      `sender_name` VARCHAR(64) NOT NULL,
+      `sender_ip` VARCHAR(45) NULL,
+      `recipient_id` INT UNSIGNED NOT NULL,
+      `recipient_name` VARCHAR(64) NULL,
+      `recipient_ip` VARCHAR(45) NULL,
+      `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
+      `content_hash` CHAR(40) NULL,
+      `content` TEXT NOT NULL,
+      `hidden_at` INT UNSIGNED NULL,
+      `hidden_by` INT UNSIGNED NULL,
+      `hidden_cause` VARCHAR(255) NULL,
+      PRIMARY KEY (`id`),
+      KEY `idx_created` (`created_at`),
+      KEY `idx_sender` (`sender_id`),
+      KEY `idx_recipient` (`recipient_id`),
+      KEY `idx_sender_hash` (`sender_id`,`content_hash`,`created_at`),
+      KEY `idx_sender_recipient_id` (`sender_id`,`recipient_id`,`id`),
+      KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`),
+      KEY `idx_hidden_at` (`hidden_at`)
+    ) $charset;";
+    dbDelta($sqlDm);
+  } else {
+    if (!$has_index($t['dm_messages'], 'idx_sender_recipient_id')) {
+      @ $wpdb->query("ALTER TABLE `{$t['dm_messages']}` ADD KEY `idx_sender_recipient_id` (`sender_id`,`recipient_id`,`id`)");
+    }
+    if (!$has_index($t['dm_messages'], 'idx_recipient_sender_id')) {
+      @ $wpdb->query("ALTER TABLE `{$t['dm_messages']}` ADD KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`)");
+    }
+    if (!$has_index($t['dm_messages'], 'idx_hidden_at')) {
+      @ $wpdb->query("ALTER TABLE `{$t['dm_messages']}` ADD KEY `idx_hidden_at` (`hidden_at`)");
+    }
+    if (!$has_index($t['dm_messages'], 'idx_sender_hash')) {
+      @ $wpdb->query("ALTER TABLE `{$t['dm_messages']}` ADD KEY `idx_sender_hash` (`sender_id`,`content_hash`,`created_at`)");
+    }
+  }
+
   // reads (now includes created_at + idx_created)
   if (!$table_exists($t['reads'])) {
     $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
@@ -656,6 +733,122 @@ function kkchat_maybe_upgrade_schema() {
     }
     if (!$has_index($t['reads'], 'idx_created')) {
       @ $wpdb->query("ALTER TABLE `{$t['reads']}` ADD KEY `idx_created` (`created_at`)");
+    }
+  }
+
+  // dm_reads mirror table
+  if (!$table_exists($t['dm_reads'])) {
+    $sqlDr = "CREATE TABLE IF NOT EXISTS `{$t['dm_reads']}` (
+      `message_id` BIGINT UNSIGNED NOT NULL,
+      `user_id` INT UNSIGNED NOT NULL,
+      `created_at` INT UNSIGNED NOT NULL,
+      PRIMARY KEY (`message_id`,`user_id`),
+      KEY `idx_user` (`user_id`),
+      KEY `idx_created` (`created_at`)
+    ) $charset;";
+    dbDelta($sqlDr);
+  } else {
+    if (!$has_index($t['dm_reads'], 'idx_user')) {
+      @ $wpdb->query("ALTER TABLE `{$t['dm_reads']}` ADD KEY `idx_user` (`user_id`)");
+    }
+    if (!$has_index($t['dm_reads'], 'idx_created')) {
+      @ $wpdb->query("ALTER TABLE `{$t['dm_reads']}` ADD KEY `idx_created` (`created_at`)");
+    }
+  }
+
+  // Move legacy DM rows into the dedicated table on upgrade
+  if ($table_exists($t['messages']) && $table_exists($t['dm_messages'])) {
+    $legacyCount = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$t['messages']} WHERE recipient_id IS NOT NULL");
+    if ($legacyCount > 0) {
+      $batchSize = 500;
+      do {
+        $rows = $wpdb->get_results(
+          $wpdb->prepare(
+            "SELECT * FROM {$t['messages']} WHERE recipient_id IS NOT NULL ORDER BY id ASC LIMIT %d",
+            $batchSize
+          ),
+          ARRAY_A
+        );
+
+        if (!$rows) {
+          break;
+        }
+
+        $ids = [];
+        foreach ($rows as $row) {
+          $id = (int) ($row['id'] ?? 0);
+          if ($id <= 0) { continue; }
+          $ids[] = $id;
+
+          $data = [
+            'id'             => $id,
+            'created_at'     => (int) ($row['created_at'] ?? 0),
+            'sender_id'      => (int) ($row['sender_id'] ?? 0),
+            'sender_name'    => $row['sender_name'] ?? '',
+            'sender_ip'      => $row['sender_ip'] ?? null,
+            'recipient_id'   => (int) ($row['recipient_id'] ?? 0),
+            'recipient_name' => $row['recipient_name'] ?? null,
+            'recipient_ip'   => $row['recipient_ip'] ?? null,
+            'kind'           => $row['kind'] ?? 'chat',
+            'content_hash'   => $row['content_hash'] ?? null,
+            'content'        => $row['content'] ?? '',
+            'hidden_at'      => isset($row['hidden_at']) ? (int) $row['hidden_at'] : null,
+            'hidden_by'      => isset($row['hidden_by']) ? (int) $row['hidden_by'] : null,
+            'hidden_cause'   => $row['hidden_cause'] ?? null,
+          ];
+
+          $formats = ['%d','%d','%d','%s','%s','%d','%s','%s','%s','%s','%s','%d','%d','%s'];
+          $wpdb->replace($t['dm_messages'], $data, $formats);
+        }
+
+        if ($ids) {
+          $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+
+          if ($table_exists($t['dm_reads']) && $table_exists($t['reads'])) {
+            $readRows = $wpdb->get_results(
+              $wpdb->prepare(
+                "SELECT message_id, user_id, created_at FROM {$t['reads']} WHERE message_id IN ($placeholders)",
+                ...$ids
+              ),
+              ARRAY_A
+            ) ?: [];
+
+            foreach ($readRows as $rr) {
+              $wpdb->replace(
+                $t['dm_reads'],
+                [
+                  'message_id' => (int) ($rr['message_id'] ?? 0),
+                  'user_id'    => (int) ($rr['user_id'] ?? 0),
+                  'created_at' => (int) ($rr['created_at'] ?? 0),
+                ],
+                ['%d','%d','%d']
+              );
+            }
+
+            $wpdb->query(
+              $wpdb->prepare(
+                "DELETE FROM {$t['reads']} WHERE message_id IN ($placeholders)",
+                ...$ids
+              )
+            );
+          }
+
+          $wpdb->query(
+            $wpdb->prepare(
+              "DELETE FROM {$t['messages']} WHERE id IN ($placeholders)",
+              ...$ids
+            )
+          );
+        }
+
+        $processed = count($rows);
+      } while ($processed === $batchSize);
+
+      $maxDmId = (int) $wpdb->get_var("SELECT MAX(id) FROM {$t['dm_messages']}");
+      if ($maxDmId > 0) {
+        $nextAuto = $maxDmId + 1;
+        $wpdb->query("ALTER TABLE {$t['dm_messages']} AUTO_INCREMENT = " . (int) $nextAuto);
+      }
     }
   }
 

@@ -108,6 +108,85 @@ add_action('rest_api_init', function () {
     }
   }
 
+  if (!function_exists('kkchat_latest_message_map')) {
+    function kkchat_latest_message_map(): array {
+      global $wpdb; $t = kkchat_tables();
+
+      $map = [];
+
+      $roomRows = $wpdb->get_results(
+        "SELECT m.sender_id,
+                m.id,
+                m.created_at,
+                m.kind,
+                SUBSTRING(m.content, 1, 200) AS content,
+                m.room,
+                NULL AS recipient_id,
+                NULL AS recipient_name
+           FROM {$t['messages']} m
+     INNER JOIN (
+                 SELECT sender_id, MAX(id) AS last_id
+                   FROM {$t['messages']}
+                  WHERE hidden_at IS NULL
+                    AND recipient_id IS NULL
+               GROUP BY sender_id
+               ) latest
+               ON latest.sender_id = m.sender_id AND latest.last_id = m.id
+          WHERE m.hidden_at IS NULL
+            AND m.recipient_id IS NULL",
+        ARRAY_A
+      ) ?: [];
+
+      $dmRows = $wpdb->get_results(
+        "SELECT m.sender_id,
+                m.id,
+                m.created_at,
+                m.kind,
+                SUBSTRING(m.content, 1, 200) AS content,
+                NULL AS room,
+                m.recipient_id,
+                m.recipient_name
+           FROM {$t['dm_messages']} m
+     INNER JOIN (
+                 SELECT sender_id, MAX(id) AS last_id
+                   FROM {$t['dm_messages']}
+                  WHERE hidden_at IS NULL
+               GROUP BY sender_id
+               ) latest
+               ON latest.sender_id = m.sender_id AND latest.last_id = m.id
+          WHERE m.hidden_at IS NULL",
+        ARRAY_A
+      ) ?: [];
+
+      foreach (array_merge($roomRows, $dmRows) as $row) {
+        $sid = (int) ($row['sender_id'] ?? 0);
+        if ($sid <= 0) { continue; }
+
+        $created = (int) ($row['created_at'] ?? 0);
+        $id      = (int) ($row['id'] ?? 0);
+
+        $current = $map[$sid] ?? null;
+        if (
+          $current === null ||
+          $created > ($current['created_at'] ?? 0) ||
+          ($created === ($current['created_at'] ?? 0) && $id > ($current['id'] ?? 0))
+        ) {
+          $map[$sid] = [
+            'id'             => $id,
+            'content'        => (string) ($row['content'] ?? ''),
+            'room'           => isset($row['room']) ? ($row['room'] !== null ? (string) $row['room'] : null) : null,
+            'recipient_id'   => isset($row['recipient_id']) && $row['recipient_id'] !== null ? (int) $row['recipient_id'] : null,
+            'recipient_name' => isset($row['recipient_name']) && $row['recipient_name'] !== null ? (string) $row['recipient_name'] : null,
+            'kind'           => (string) ($row['kind'] ?? 'chat'),
+            'created_at'     => $created,
+          ];
+        }
+      }
+
+      return $map;
+    }
+  }
+
   if (!function_exists('kkchat_sync_build_context')) {
     function kkchat_sync_build_context(WP_REST_Request $req): array {
       kkchat_require_login(false);
@@ -438,32 +517,8 @@ add_action('rest_api_init', function () {
                     u.gender,
                     u.watch_flag,
                     u.wp_username,
-                    u.last_seen,
-                    lm.last_content,
-                    lm.last_room,
-                    lm.last_recipient_id,
-                    lm.last_recipient_name,
-                    lm.last_kind,
-                    lm.last_created_at
+                    u.last_seen
                FROM {$t['users']} u
-          LEFT JOIN (
-                SELECT m.sender_id,
-                       SUBSTRING(m.content, 1, 200) AS last_content,
-                       m.room AS last_room,
-                       m.recipient_id AS last_recipient_id,
-                       m.recipient_name AS last_recipient_name,
-                       m.kind AS last_kind,
-                       m.created_at AS last_created_at
-                  FROM {$t['messages']} m
-            INNER JOIN (
-                      SELECT sender_id, MAX(id) AS last_id
-                        FROM {$t['messages']}
-                       WHERE hidden_at IS NULL
-                    GROUP BY sender_id
-                    ) latest
-                    ON latest.sender_id = m.sender_id AND latest.last_id = m.id
-                 WHERE m.hidden_at IS NULL
-              ) lm ON lm.sender_id = u.id
               WHERE %d - u.last_seen <= %d
               ORDER BY u.name_lc ASC
               LIMIT %d",
@@ -474,26 +529,26 @@ add_action('rest_api_init', function () {
           ARRAY_A
         ) ?: [];
 
+        $latestMap = kkchat_latest_message_map();
+
         foreach ($presence_rows as $r) {
+          $sid = (int) ($r['id'] ?? 0);
+          $lastData = $sid > 0 ? ($latestMap[$sid] ?? null) : null;
           $lastMsg = null;
-          if (
-            isset($r['last_content']) ||
-            isset($r['last_room']) ||
-            isset($r['last_recipient_id']) ||
-            isset($r['last_kind'])
-          ) {
+
+          if ($lastData) {
             $lastMsg = [
-              'text'            => (string) ($r['last_content'] ?? ''),
-              'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
-              'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
-              'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
-              'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-              'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+              'text'           => (string) ($lastData['content'] ?? ''),
+              'room'           => isset($lastData['room']) ? ($lastData['room'] !== null ? (string) $lastData['room'] : null) : null,
+              'to'             => isset($lastData['recipient_id']) ? (int) $lastData['recipient_id'] : null,
+              'recipient_name' => isset($lastData['recipient_name']) ? ($lastData['recipient_name'] !== null ? (string) $lastData['recipient_name'] : null) : null,
+              'kind'           => (string) ($lastData['kind'] ?? 'chat'),
+              'time'           => isset($lastData['created_at']) ? (int) $lastData['created_at'] : null,
             ];
           }
 
           $presence[] = [
-            'id'            => (int) ($r['id'] ?? 0),
+            'id'            => $sid,
             'name'          => (string) ($r['name'] ?? ''),
             'gender'        => (string) ($r['gender'] ?? ''),
             'flagged'       => !empty($r['watch_flag']) ? 1 : 0,
@@ -534,7 +589,7 @@ add_action('rest_api_init', function () {
           FROM (
             SELECT m.sender_id AS peer_id,
                    MAX(m.id) AS max_id
-              FROM {$t['messages']} m
+              FROM {$t['dm_messages']} m
              WHERE m.recipient_id = %d
                AND m.hidden_at IS NULL
                $blkPer
@@ -611,18 +666,21 @@ add_action('rest_api_init', function () {
         'latest'  => $unreadLatest,
       ];
       $msgs = [];
-      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+      $msgColumnsRoom = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+      $msgColumnsDm   = 'id, NULL AS room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+      $usingDm = false;
       if ($onlyPub) {
         if ($since < 0) {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
-               WHERE recipient_id IS NULL
-                 AND room = %s
-                 AND hidden_at IS NULL
-               ORDER BY id DESC
-               LIMIT %d",
-              $room, $limit
+              "SELECT $msgColumnsRoom FROM {$t['messages']}
+                WHERE recipient_id IS NULL
+                  AND room = %s
+                  AND hidden_at IS NULL
+                ORDER BY id DESC
+                LIMIT %d",
+              $room,
+              $limit
             ),
             ARRAY_A
           ) ?: [];
@@ -630,30 +688,37 @@ add_action('rest_api_init', function () {
         } else {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
-               WHERE id > %d
-                 AND recipient_id IS NULL
-                 AND room = %s
-                 AND hidden_at IS NULL
-               ORDER BY id ASC
-               LIMIT %d",
-              $since, $room, $limit
+              "SELECT $msgColumnsRoom FROM {$t['messages']}
+                WHERE id > %d
+                  AND recipient_id IS NULL
+                  AND room = %s
+                  AND hidden_at IS NULL
+                ORDER BY id ASC
+                LIMIT %d",
+              $since,
+              $room,
+              $limit
             ),
             ARRAY_A
           ) ?: [];
         }
       } else {
         if ($peer) {
+          $usingDm = true;
           if ($since < 0) {
             $rows = $wpdb->get_results(
               $wpdb->prepare(
-                "SELECT $msgColumns FROM {$t['messages']}
-                 WHERE hidden_at IS NULL
-                   AND ((sender_id = %d AND recipient_id = %d) OR
-                        (sender_id = %d AND recipient_id = %d))
-                 ORDER BY id DESC
-                 LIMIT %d",
-                $me, $peer, $peer, $me, $limit
+                "SELECT $msgColumnsDm FROM {$t['dm_messages']}
+                  WHERE hidden_at IS NULL
+                    AND ((sender_id = %d AND recipient_id = %d) OR
+                         (sender_id = %d AND recipient_id = %d))
+                  ORDER BY id DESC
+                  LIMIT %d",
+                $me,
+                $peer,
+                $peer,
+                $me,
+                $limit
               ),
               ARRAY_A
             ) ?: [];
@@ -661,28 +726,37 @@ add_action('rest_api_init', function () {
           } else {
             $rows = $wpdb->get_results(
               $wpdb->prepare(
-                "SELECT $msgColumns FROM {$t['messages']}
-                 WHERE id > %d
-                   AND hidden_at IS NULL
-                   AND ((sender_id = %d AND recipient_id = %d) OR
-                        (sender_id = %d AND recipient_id = %d))
-                 ORDER BY id ASC
-                 LIMIT %d",
-                $since, $me, $peer, $peer, $me, $limit
+                "SELECT $msgColumnsDm FROM {$t['dm_messages']}
+                  WHERE id > %d
+                    AND hidden_at IS NULL
+                    AND ((sender_id = %d AND recipient_id = %d) OR
+                         (sender_id = %d AND recipient_id = %d))
+                  ORDER BY id ASC
+                  LIMIT %d",
+                $since,
+                $me,
+                $peer,
+                $peer,
+                $me,
+                $limit
               ),
               ARRAY_A
             ) ?: [];
           }
         } else {
+          $usingDm = true;
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
-               WHERE id > %d
-                 AND (recipient_id = %d OR sender_id = %d)
-                 AND hidden_at IS NULL
-               ORDER BY id ASC
-               LIMIT %d",
-              $since, $me, $me, $limit
+              "SELECT $msgColumnsDm FROM {$t['dm_messages']}
+                WHERE id > %d
+                  AND (recipient_id = %d OR sender_id = %d)
+                  AND hidden_at IS NULL
+                ORDER BY id ASC
+                LIMIT %d",
+              $since,
+              $me,
+              $me,
+              $limit
             ),
             ARRAY_A
           ) ?: [];
@@ -701,8 +775,9 @@ add_action('rest_api_init', function () {
         if (!empty($rows)) {
           $ids = array_map(fn($r) => (int) $r['id'], $rows);
           $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+          $readTable = $usingDm ? $t['dm_reads'] : $t['reads'];
           $read_rows = $wpdb->get_results(
-            $wpdb->prepare("SELECT message_id, user_id FROM {$t['reads']} WHERE message_id IN ($placeholders)", ...$ids),
+            $wpdb->prepare("SELECT message_id, user_id FROM {$readTable} WHERE message_id IN ($placeholders)", ...$ids),
             ARRAY_A
           ) ?: [];
           $read_map = [];
@@ -1430,58 +1505,32 @@ register_rest_route($ns, '/users', [
                 u.gender,
                 u.watch_flag,
                 u.wp_username,
-                u.last_seen,
-                lm.last_content,
-                lm.last_room,
-                lm.last_recipient_id,
-                lm.last_recipient_name,
-                lm.last_kind,
-                lm.last_created_at
+                u.last_seen
            FROM {$t['users']} u
-      LEFT JOIN (
-            SELECT m.sender_id,
-                   SUBSTRING(m.content, 1, 200) AS last_content,
-                   m.room AS last_room,
-                   m.recipient_id AS last_recipient_id,
-                   m.recipient_name AS last_recipient_name,
-                   m.kind AS last_kind,
-                   m.created_at AS last_created_at
-              FROM {$t['messages']} m
-        INNER JOIN (
-                  SELECT sender_id, MAX(id) AS last_id
-                    FROM {$t['messages']}
-                   WHERE hidden_at IS NULL
-                GROUP BY sender_id
-                ) latest
-                ON latest.sender_id = m.sender_id AND latest.last_id = m.id
-             WHERE m.hidden_at IS NULL
-          ) lm ON lm.sender_id = u.id
        ORDER BY u.name ASC",
         ARRAY_A
       );
 
+      $latestMap = kkchat_latest_message_map();
       $out = [];
       foreach ($rows ?? [] as $r) {
+        $sid = (int) ($r['id'] ?? 0);
+        $lastData = $sid > 0 ? ($latestMap[$sid] ?? null) : null;
         $lastMsg = null;
-        if (
-          isset($r['last_content']) ||
-          isset($r['last_room']) ||
-          isset($r['last_recipient_id']) ||
-          isset($r['last_kind'])
-        ) {
+        if ($lastData) {
           $lastMsg = [
-            'text'            => (string) ($r['last_content'] ?? ''),
-            'room'            => ($r['last_room'] ?? '') !== '' ? (string) $r['last_room'] : null,
-            'to'              => isset($r['last_recipient_id']) ? (int) $r['last_recipient_id'] : null,
-            'recipient_name'  => ($r['last_recipient_name'] ?? '') !== '' ? (string) $r['last_recipient_name'] : null,
-            'kind'            => (string) ($r['last_kind'] ?? 'chat'),
-            'time'            => isset($r['last_created_at']) ? (int) $r['last_created_at'] : null,
+            'text'           => (string) ($lastData['content'] ?? ''),
+            'room'           => isset($lastData['room']) ? ($lastData['room'] !== null ? (string) $lastData['room'] : null) : null,
+            'to'             => isset($lastData['recipient_id']) ? (int) $lastData['recipient_id'] : null,
+            'recipient_name' => isset($lastData['recipient_name']) ? ($lastData['recipient_name'] !== null ? (string) $lastData['recipient_name'] : null) : null,
+            'kind'           => (string) ($lastData['kind'] ?? 'chat'),
+            'time'           => isset($lastData['created_at']) ? (int) $lastData['created_at'] : null,
           ];
         }
 
         $out[] = [
-          'id'           => (int) $r['id'],
-          'name'         => (string) $r['name'],
+          'id'           => $sid,
+          'name'         => (string) ($r['name'] ?? ''),
           'gender'       => (string) ($r['gender'] ?? ''),
           'flagged'      => !empty($r['watch_flag']) ? 1 : 0,
           'is_admin'     => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
@@ -1650,14 +1699,15 @@ register_rest_route($ns, '/fetch', [
     $limit = max(1, min($limit, 200));               // 1..500
 
     $blocked = kkchat_blocked_ids($me);
-    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+    $msgColumnsRoom = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
+    $msgColumnsDm   = 'id, NULL AS room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at';
 
     if ($onlyPublic) {
       if ($since < 0) {
         // First load: last N messages in the room (ASC order for display)
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
+            "SELECT $msgColumnsRoom FROM {$t['messages']}
              WHERE recipient_id IS NULL
                AND room = %s
                AND hidden_at IS NULL
@@ -1671,7 +1721,7 @@ register_rest_route($ns, '/fetch', [
       } else {
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
+            "SELECT $msgColumnsRoom FROM {$t['messages']}
              WHERE id > %d
                AND recipient_id IS NULL
                AND room = %s
@@ -1696,7 +1746,7 @@ register_rest_route($ns, '/fetch', [
           // Last N in thread with specific peer
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
+              "SELECT $msgColumnsDm FROM {$t['dm_messages']}
                WHERE hidden_at IS NULL
                  AND ((sender_id = %d AND recipient_id = %d) OR
                       (sender_id = %d AND recipient_id = %d))
@@ -1710,7 +1760,7 @@ register_rest_route($ns, '/fetch', [
         } else {
           $rows = $wpdb->get_results(
             $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
+              "SELECT $msgColumnsDm FROM {$t['dm_messages']}
                WHERE id > %d
                  AND hidden_at IS NULL
                  AND ((sender_id = %d AND recipient_id = %d)
@@ -1726,7 +1776,7 @@ register_rest_route($ns, '/fetch', [
         // Legacy: all DMs to/from me (kept for backward compatibility)
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
+            "SELECT $msgColumnsDm FROM {$t['dm_messages']}
              WHERE id > %d
                AND (recipient_id = %d OR sender_id = %d)
                AND hidden_at IS NULL
@@ -1878,11 +1928,15 @@ register_rest_route($ns, '/fetch', [
       $minGap = max(0, kkchat_min_interval_seconds());
       if ($minGap > 0) {
         $now = time();
-        $recent = (int)$wpdb->get_var($wpdb->prepare(
+        $recentRooms = (int)$wpdb->get_var($wpdb->prepare(
           "SELECT COUNT(*) FROM {$t['messages']} WHERE sender_id = %d AND created_at > %d",
           $me_id, $now - $minGap
         ));
-        if ($recent > 0) {
+        $recentDms = (int)$wpdb->get_var($wpdb->prepare(
+          "SELECT COUNT(*) FROM {$t['dm_messages']} WHERE sender_id = %d AND created_at > %d",
+          $me_id, $now - $minGap
+        ));
+        if (($recentRooms + $recentDms) > 0) {
           kkchat_json(
             ['ok' => false, 'err' => 'too_fast', 'cause' => 'Du skriver för snabbt. Försök igen strax.'],
             429
@@ -1930,12 +1984,20 @@ register_rest_route($ns, '/fetch', [
       $ctx = ($recipient !== null) ? ('dm:' . $recipient) : ('room:' . $room);
       $content_hash = sha1($ctx . '|' . $raw);
       $window = max(1, kkchat_dedupe_window());
-      $dupe_id = (int)$wpdb->get_var($wpdb->prepare(
-        "SELECT id FROM {$t['messages']}
-         WHERE sender_id=%d AND content_hash=%s AND created_at > %d
-         ORDER BY id DESC LIMIT 1",
-        $me_id, $content_hash, $now - max(1,$window)
-      ));
+      $dupeTable = $recipient !== null ? $t['dm_messages'] : $t['messages'];
+      $dupe_id = (int)$wpdb->get_var(
+        $wpdb->prepare(
+          "SELECT id FROM {$dupeTable}
+             WHERE sender_id = %d
+               AND content_hash = %s
+               AND created_at > %d
+           ORDER BY id DESC
+           LIMIT 1",
+          $me_id,
+          $content_hash,
+          $now - max(1, $window)
+        )
+      );
       if ($dupe_id > 0) {
         // Auto-kick repeated duplicate attempts (non-admins)
         if (!kkchat_is_admin()) {
@@ -2000,10 +2062,12 @@ register_rest_route($ns, '/fetch', [
         $format[] = '%s';
       }
 
-      $ok = $wpdb->insert($t['messages'], $data, $format);
+      $targetTable = $recipient !== null ? $t['dm_messages'] : $t['messages'];
+
+      $ok = $wpdb->insert($targetTable, $data, $format);
       if ($ok === false) {
         kkchat_wpdb_reconnect_if_needed();
-        $ok = $wpdb->insert($t['messages'], $data, $format);
+        $ok = $wpdb->insert($targetTable, $data, $format);
       }
       if ($ok === false) kkchat_json(['ok'=>false,'err'=>'db_insert_failed'], 500);
 
@@ -2050,7 +2114,7 @@ register_rest_route($ns, '/reads/mark', [
     if ($dm_peer > 0 && $dm_last_id > 0) {
       $row = $wpdb->get_row(
         $wpdb->prepare(
-          "SELECT sender_id, recipient_id FROM {$t['messages']} WHERE id = %d LIMIT 1",
+          "SELECT sender_id, recipient_id FROM {$t['dm_messages']} WHERE id = %d LIMIT 1",
           $dm_last_id
         ),
         ARRAY_A
@@ -2077,7 +2141,7 @@ register_rest_route($ns, '/reads/mark', [
         $placeholders = implode(',', array_fill(0, count($ids), '%d'));
         $rows = $wpdb->get_results(
           $wpdb->prepare(
-            "SELECT id, sender_id, recipient_id FROM {$t['messages']} WHERE id IN ($placeholders)",
+            "SELECT id, sender_id, recipient_id FROM {$t['dm_messages']} WHERE id IN ($placeholders)",
             ...$ids
           ),
           ARRAY_A
@@ -2440,33 +2504,47 @@ register_rest_route($ns, '/moderate/hide-message', [
     if ($mid <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
 
     // Fetch the message so we know if it's public (room) or a DM (sender/recipient)
+    $isDm = false;
     $msg = $wpdb->get_row($wpdb->prepare(
       "SELECT id, room, sender_id, recipient_id FROM {$t['messages']} WHERE id = %d",
       $mid
     ), ARRAY_A);
+    if (!$msg) {
+      $msg = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, sender_id, recipient_id FROM {$t['dm_messages']} WHERE id = %d",
+        $mid
+      ), ARRAY_A);
+      if ($msg) {
+        $msg['room'] = null;
+        $isDm = true;
+      }
+    }
     if (!$msg) kkchat_json(['ok'=>false,'err'=>'no_message'], 404);
 
     $cause = sanitize_text_field((string)$req->get_param('cause'));
 
-    // Mark as hidden
+    $targetTable = $isDm ? $t['dm_messages'] : $t['messages'];
     $wpdb->query($wpdb->prepare(
-      "UPDATE {$t['messages']}
+      "UPDATE {$targetTable}
           SET hidden_at = %d,
               hidden_by = %d,
               hidden_cause = %s
         WHERE id = %d",
-      time(), get_current_user_id() ?: 0, ($cause !== '' ? $cause : null), $mid
+      time(),
+      get_current_user_id() ?: 0,
+      ($cause !== '' ? $cause : null),
+      $mid
     ));
 
     // Emit an invisible moderation event to wake long-poll clients
     // Clients must ignore kind 'mod_hide' and use its content payload to remove the message.
-    if (empty($msg['recipient_id'])) {
+    if (!$isDm) {
       // Public message (room)
       $wpdb->insert($t['messages'], [
         'created_at'     => time(),
         'kind'           => 'mod_hide',
         'room'           => $msg['room'],
-        'sender_id'      => 0,          // system
+        'sender_id'      => 0,
         'sender_name'    => '',
         'recipient_id'   => null,
         'recipient_name' => null,
@@ -2474,10 +2552,9 @@ register_rest_route($ns, '/moderate/hide-message', [
       ]);
     } else {
       // Direct message: insert into the same sender/recipient channel so both sides wake up
-      $wpdb->insert($t['messages'], [
+      $wpdb->insert($t['dm_messages'], [
         'created_at'     => time(),
         'kind'           => 'mod_hide',
-        'room'           => null,
         'sender_id'      => (int)$msg['sender_id'],
         'sender_name'    => '',
         'recipient_id'   => (int)$msg['recipient_id'],
@@ -2500,21 +2577,30 @@ register_rest_route($ns, '/moderate/hide-message', [
         $mid = (int) $req->get_param('message_id');
         if ($mid <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
     
+        $targetTable = $t['messages'];
         $exists = (int)$wpdb->get_var($wpdb->prepare(
           "SELECT COUNT(*) FROM {$t['messages']} WHERE id = %d", $mid
         ));
-        if ($exists === 0) kkchat_json(['ok'=>false,'err'=>'no_message'], 404);
-    
+        if ($exists === 0) {
+          $existsDm = (int)$wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$t['dm_messages']} WHERE id = %d", $mid
+          ));
+          if ($existsDm === 0) {
+            kkchat_json(['ok'=>false,'err'=>'no_message'], 404);
+          }
+          $targetTable = $t['dm_messages'];
+        }
+
         // Use raw SQL so NULLs are truly NULL (wpdb->update can coerce)
         $wpdb->query($wpdb->prepare(
-          "UPDATE {$t['messages']}
+          "UPDATE {$targetTable}
               SET hidden_at = NULL,
                   hidden_by = NULL,
                   hidden_cause = NULL
             WHERE id = %d",
           $mid
         ));
-    
+
         kkchat_json(['ok'=>true]);
       },
     ]);
