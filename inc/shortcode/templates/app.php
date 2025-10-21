@@ -1629,6 +1629,36 @@ async function performPoll(forceCold = false, options = {}){
       handleStreamSync(payload, state);
       updateListLastFromPayload(payload, state);
 
+      if (forceCold && state?.kind === 'dm') {
+        const targetSeenId = getDmLastSeen(state.to);
+        if (targetSeenId > 0) {
+          const earliest = earliestRenderedMessageId(pubList);
+          if (earliest <= targetSeenId) {
+            DM_BACKFILL_ATTEMPTS.delete(state.to);
+          } else if (!DM_BACKFILL_IN_PROGRESS) {
+            const tries = DM_BACKFILL_ATTEMPTS.get(state.to) || 0;
+            if (tries < 3) {
+              DM_BACKFILL_ATTEMPTS.set(state.to, tries + 1);
+              DM_BACKFILL_IN_PROGRESS = true;
+              try {
+                const ok = await loadHistorySnapshot(state, { untilId: targetSeenId });
+                if (ok) {
+                  markVisible(pubList);
+                  const postEarliest = earliestRenderedMessageId(pubList);
+                  if (postEarliest <= targetSeenId) {
+                    DM_BACKFILL_ATTEMPTS.delete(state.to);
+                  }
+                }
+              } catch (_) {
+                // swallow snapshot errors
+              } finally {
+                DM_BACKFILL_IN_PROGRESS = false;
+              }
+            }
+          }
+        }
+      }
+
       let hadMessages = false;
       if (Array.isArray(payload?.events)) {
         hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
@@ -1719,9 +1749,9 @@ function playNotifOnce() {
     }
     applyBlurClass();
 
-  const ROOM_CACHE = new Map();          
-  const FIRST_LOAD_LIMIT = 20;          
-  const AUTO_OPEN_DM_ON_NEW = false; 
+  const ROOM_CACHE = new Map();
+  const FIRST_LOAD_LIMIT = 40;
+  const AUTO_OPEN_DM_ON_NEW = false;
   const JOIN_KEY = 'kk_joined_rooms_v1';
 
   function clearLocalState(){
@@ -1896,6 +1926,47 @@ async function doLogout(){
   function saveDMActive(set){
     try{ localStorage.setItem(DM_KEY, JSON.stringify([...set])); }catch(_){}
   }
+  const DM_LAST_SEEN_KEY = 'kk_dm_last_seen_v1';
+  function loadDmLastSeen(){
+    try {
+      const raw = localStorage.getItem(DM_LAST_SEEN_KEY) || '{}';
+      const obj = JSON.parse(raw);
+      if (!obj || typeof obj !== 'object') return {};
+      const out = {};
+      for (const [k, v] of Object.entries(obj)) {
+        const peer = Number(k);
+        const mid  = Number(v);
+        if (Number.isFinite(peer) && peer > 0 && Number.isFinite(mid) && mid > 0) {
+          out[peer] = mid;
+        }
+      }
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+  function saveDmLastSeen(map){
+    try { localStorage.setItem(DM_LAST_SEEN_KEY, JSON.stringify(map)); } catch(_) {}
+  }
+  let DM_LAST_SEEN = loadDmLastSeen();
+  function getDmLastSeen(id){
+    const peer = Number(id);
+    if (!Number.isFinite(peer) || peer <= 0) return 0;
+    const mid = Number(DM_LAST_SEEN[peer] || 0);
+    return Number.isFinite(mid) && mid > 0 ? mid : 0;
+  }
+  function rememberDmLastSeen(id, lastId){
+    const peer = Number(id);
+    const mid  = Number(lastId);
+    if (!Number.isFinite(peer) || peer <= 0) return;
+    if (!Number.isFinite(mid) || mid <= 0) return;
+    const prev = Number(DM_LAST_SEEN[peer] || 0);
+    if (mid <= prev) return;
+    DM_LAST_SEEN[peer] = mid;
+    saveDmLastSeen(DM_LAST_SEEN);
+  }
+  const DM_BACKFILL_ATTEMPTS = new Map();
+  let DM_BACKFILL_IN_PROGRESS = false;
   let ACTIVE_DMS = loadDMActive();
   let INITIAL_DM_PREFETCH_DONE = false;
 
@@ -1997,21 +2068,47 @@ async function prefetchRoom(slug){
 
 async function prefetchDM(userId){
   try{
-    const key    = cacheKeyForDM(userId);
-    const cached = ROOM_CACHE.get(key);
-    const since  = cached ? (Number(cached.last) || -1) : -1;
+    const key       = cacheKeyForDM(userId);
+    const cached    = ROOM_CACHE.get(key);
+    const baseline  = cached ? (Number(cached.last) || -1) : -1;
+    const seenHint  = getDmLastSeen(userId);
+    let since       = Math.max(baseline, seenHint, -1);
+    let maxId       = Math.max(baseline, seenHint, -1);
+    const collected = [];
+    const pageLimit = Math.max(FIRST_LOAD_LIMIT, 30);
+    const maxPages  = 6;
 
-    const params = new URLSearchParams({
-      to: String(userId), since: String(since), limit:'10'
-    });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({
+        to: String(userId),
+        since: String(since),
+        limit: String(pageLimit)
+      });
 
-    if (!Array.isArray(items) || items.length === 0) return;
+      const items = await fetchJSON(`${API}/fetch?${params}`);
+      if (!Array.isArray(items) || items.length === 0) {
+        break;
+      }
 
-    let maxId = cached?.last || -1;
-    maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
+      collected.push(...items);
+      const batchMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || mx), maxId);
+      if (batchMax > maxId) {
+        maxId = batchMax;
+      }
 
-    const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
+      if (items.length < pageLimit || batchMax <= since) {
+        break;
+      }
+
+      since = batchMax;
+    }
+
+    if (!collected.length && maxId <= baseline) return;
+
+    const newItems = collected.filter(m => Number(m.id) > baseline);
+    if (!newItems.length && maxId <= baseline) return;
+
+    const addHTML  = msgsToHTML(newItems);
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
     ROOM_CACHE.set(key, { last: maxId, html: combined });
   }catch(_){}
@@ -2114,20 +2211,76 @@ function applyCache(key){
     return r.json();
   }
 
-  async function loadHistorySnapshot(state){
+  function dmMessagesForPeer(items, peerId){
+    const pid = Number(peerId);
+    if (!Array.isArray(items) || !Number.isFinite(pid) || pid <= 0) return [];
+    return items.filter(m => {
+      if (!m || typeof m !== 'object') return false;
+      const sid = Number(m.sender_id ?? m.user_id ?? 0);
+      const rid = m.recipient_id == null ? null : Number(m.recipient_id);
+      return (sid === ME_ID && rid === pid) || (sid === pid && rid === ME_ID);
+    });
+  }
+
+  async function loadHistorySnapshot(state, options = {}){
+    const opts = options || {};
+    const maxLimit = Math.min(200, Math.max(FIRST_LOAD_LIMIT, Number(opts.maxLimit) || 200));
+    let limit = Math.min(maxLimit, Math.max(FIRST_LOAD_LIMIT, Number(opts.initialLimit) || FIRST_LOAD_LIMIT));
+    const targetIdRaw = Number(opts.untilId);
+    const targetId = Number.isFinite(targetIdRaw) && targetIdRaw > 0 ? targetIdRaw : null;
+    const maxPages = Math.max(1, Number(opts.maxPages) || Math.ceil(maxLimit / FIRST_LOAD_LIMIT) + 1);
+
     try {
       const target = state || desiredStreamState();
       if (!target) return false;
 
-      const params = new URLSearchParams({ limit: String(FIRST_LOAD_LIMIT), since: '-1' });
-      if (target.kind === 'dm') {
-        params.set('to', String(target.to));
-      } else {
-        params.set('public', '1');
-        params.set('room', target.room);
+      let items = [];
+      for (let page = 0; page < maxPages; page++) {
+        const params = new URLSearchParams({ limit: String(limit), since: '-1' });
+        if (target.kind === 'dm') {
+          params.set('to', String(target.to));
+        } else {
+          params.set('public', '1');
+          params.set('room', target.room);
+        }
+
+        const batch = await fetchJSON(`${API}/fetch?${params.toString()}`);
+        if (!Array.isArray(batch) || !batch.length) {
+          items = [];
+          break;
+        }
+
+        items = batch;
+
+        if (!targetId) {
+          break;
+        }
+
+        const relevant = target.kind === 'dm' ? dmMessagesForPeer(batch, target.to) : batch;
+        if (!relevant.length) {
+          break;
+        }
+
+        const minId = relevant.reduce((mn, m) => {
+          const mid = Number(m?.id);
+          return Number.isFinite(mid) && mid > 0 ? Math.min(mn, mid) : mn;
+        }, Infinity);
+
+        if (minId <= targetId) {
+          break;
+        }
+
+        if (batch.length < limit || limit >= maxLimit) {
+          break;
+        }
+
+        const next = Math.min(maxLimit, limit + FIRST_LOAD_LIMIT);
+        if (next <= limit) {
+          break;
+        }
+        limit = next;
       }
 
-      const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
       if (!Array.isArray(items) || !items.length) return false;
 
       handleStreamSync({ messages: items }, target);
@@ -2727,7 +2880,9 @@ const queueMark = (() => {
     } else {
       if (maxId > 0) {
         const last = pendingDM?.lastId ?? 0;
-        pendingDM = { peer: currentDM, lastId: Math.max(last, maxId) };
+        const nextLast = Math.max(last, maxId);
+        pendingDM = { peer: currentDM, lastId: nextLast };
+        rememberDmLastSeen(currentDM, nextLast);
       }
       if (isInteractive()) {
         UNREAD_PER[currentDM] = 0;
@@ -2759,6 +2914,18 @@ function markVisible(listEl){
     }
   });
   if (ids.length) queueMark(ids);
+}
+
+function earliestRenderedMessageId(el){
+  if (!el) return -1;
+  let min = Infinity;
+  el.querySelectorAll('li.item[data-id]').forEach(li => {
+    const mid = Number(li.dataset.id);
+    if (Number.isFinite(mid) && mid > 0 && mid < min) {
+      min = mid;
+    }
+  });
+  return min === Infinity ? -1 : min;
 }
 
 
@@ -4518,7 +4685,10 @@ async function openDM(id) {
 
   // 👉 Set state FIRST so renderers know which tab is active
   currentDM = Number(id);
+  DM_BACKFILL_ATTEMPTS.delete(currentDM);
+  DM_BACKFILL_IN_PROGRESS = false;
   LAST_OPEN_DM = currentDM;
+  const targetSeenId = getDmLastSeen(currentDM);
   UNREAD_PER[currentDM] = 0;
 
   // Recompute total DM unread so the left badge updates immediately
@@ -4555,16 +4725,24 @@ async function openDM(id) {
   showView('vPublic');
 
   let snapshotPromise = null;
-  if (cacheHit) {
-    markVisible(pubList);
+  const earliestRendered = earliestRenderedMessageId(pubList);
+  const needsBackfill = targetSeenId > 0 && (earliestRendered <= 0 || earliestRendered > targetSeenId);
+  if (!cacheHit || needsBackfill) {
+    const snapshotOptions = needsBackfill && targetSeenId > 0
+      ? { untilId: targetSeenId }
+      : {};
+    snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM }, snapshotOptions);
   } else {
-    snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
+    markVisible(pubList);
   }
 
   const syncPromise = pollActive(true).catch(()=>{});
   openStream();
   if (snapshotPromise) {
-    await snapshotPromise.catch(()=>{});
+    const loaded = await snapshotPromise.catch(()=>false);
+    if (loaded) {
+      markVisible(pubList);
+    }
   }
   await syncPromise;
 
