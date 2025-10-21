@@ -1163,9 +1163,24 @@ function queuePrefetchRoom(slug){
   enqueuePrefetch('room', room);
 }
 
-function queuePrefetchDM(userId){
+const PREFETCH_DM_HINTS = new Map();
+
+function queuePrefetchDM(userId, latestId = null){
   const id = Number(userId);
   if (!Number.isFinite(id) || id <= 0) return;
+  if (latestId != null) {
+    const latest = Number(latestId) || 0;
+    if (latest > 0) {
+      const prev = PREFETCH_DM_HINTS.get(id) || 0;
+      if (latest <= prev) {
+        // Already queued/fetched for this or a newer message.
+        return;
+      }
+      PREFETCH_DM_HINTS.set(id, latest);
+    } else {
+      PREFETCH_DM_HINTS.delete(id);
+    }
+  }
   enqueuePrefetch('dm', id);
 }
 
@@ -1262,9 +1277,18 @@ async function ensurePrefetchedRoom(slug){
   return ensurePrefetched('room', room);
 }
 
-async function ensurePrefetchedDM(userId){
+async function ensurePrefetchedDM(userId, latestId = null){
   const id = Number(userId);
   if (!Number.isFinite(id) || id <= 0) return false;
+  if (latestId != null) {
+    const latest = Number(latestId) || 0;
+    if (latest > 0) {
+      const prev = PREFETCH_DM_HINTS.get(id) || 0;
+      if (latest > prev) {
+        queuePrefetchDM(id, latest);
+      }
+    }
+  }
   return ensurePrefetched('dm', id);
 }
 
@@ -2771,6 +2795,8 @@ const queueMark = (() => {
       }
       if (isInteractive()) {
         UNREAD_PER[currentDM] = 0;
+        UNREAD_LATEST_PER[currentDM] = 0;
+        PREFETCH_DM_HINTS.delete(Number(currentDM));
         renderDMSidebar();
         renderRoomTabs();
         updateLeftCounts?.();
@@ -2804,6 +2830,7 @@ function markVisible(listEl){
 
 
   let USERS=[]; let UNREAD_PER={};
+  let UNREAD_LATEST_PER = {};
 const LAST_MESSAGE_CACHE = new Map(); // userId -> last message summary
   let lastPubCounts = 0, lastDMCounts = 0;
   let DM_UNREAD_TOTAL = 0;
@@ -2816,6 +2843,31 @@ function normalizeUnreadMap(map) {
   if (map && typeof map === 'object') {
     for (const [key, value] of Object.entries(map)) {
       out[key] = value ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function normalizeUnreadLatestMap(map) {
+  const out = {};
+  if (map && typeof map === 'object') {
+    for (const [key, value] of Object.entries(map)) {
+      let latest = value;
+      if (value && typeof value === 'object' && 'latest' in value) {
+        latest = value.latest;
+      }
+      const num = Number(latest);
+      out[key] = Number.isFinite(num) && num > 0 ? num : 0;
+    }
+  }
+  return out;
+}
+
+function unreadFlagsFromLatest(map) {
+  const out = {};
+  if (map && typeof map === 'object') {
+    for (const [key, latest] of Object.entries(map)) {
+      out[key] = Number(latest) > 0 ? 1 : 0;
     }
   }
   return out;
@@ -2851,10 +2903,10 @@ function normalizeUnreadMap(map) {
       if (!peers.length) return;
       INITIAL_DM_PREFETCH_DONE = true;
       try {
-        peers.forEach(id => queuePrefetchDM(id));
+        peers.forEach(id => queuePrefetchDM(id, UNREAD_LATEST_PER[id] || 0));
       } catch(_) {}
       try {
-        await Promise.all(peers.map(id => ensurePrefetchedDM(id)));
+        await Promise.all(peers.map(id => ensurePrefetchedDM(id, UNREAD_LATEST_PER[id] || 0)));
       } catch (err) {
         INITIAL_DM_PREFETCH_DONE = false;
         console.warn('initial DM prefetch failed', err);
@@ -3101,6 +3153,8 @@ userListEl.addEventListener('click', async (e)=>{
         }
 
         UNREAD_PER[id] = 0;
+        UNREAD_LATEST_PER[id] = 0;
+        PREFETCH_DM_HINTS.delete(Number(id));
         if (isBlocked(id)) { ACTIVE_DMS.delete(id); saveDMActive(ACTIVE_DMS); }
         renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
         showToast(js.now_blocked ? 'Användare blockerad' : 'Användare avblockerad');
@@ -3355,6 +3409,31 @@ function kkAnyPassiveMentionBump(js){
 
 
 function applySyncPayload(js){
+  const ME = Number(ME_ID);
+  const dmLatestHints = new Map();
+  const noteDmLatest = (msg) => {
+    if (!msg || typeof msg !== 'object') return;
+    const midRaw = msg.id ?? msg.message_id ?? msg.ID;
+    const mid = Number(midRaw);
+    if (!Number.isFinite(mid) || mid <= 0) return;
+    const senderRaw = msg.sender_id ?? msg.user_id ?? msg.author_id ?? msg.from_id;
+    const sender = Number(senderRaw);
+    if (!Number.isFinite(sender) || sender <= 0 || sender === ME) return;
+    if (typeof isBlocked === 'function' && isBlocked(sender)) return;
+    const recipientRaw = msg.recipient_id ?? msg.to_id ?? msg.target_id ?? msg.dm_peer;
+    const recipient = recipientRaw == null ? null : Number(recipientRaw);
+    if (!Number.isFinite(ME)) return;
+    if (recipient !== ME) return;
+    const knownLatest = Number(UNREAD_LATEST_PER?.[String(sender)] || 0);
+    if (mid <= knownLatest) return;
+    const prev = dmLatestHints.get(sender) || 0;
+    if (mid > prev) dmLatestHints.set(sender, mid);
+  };
+  const scanMessagesForHints = (list) => {
+    if (!Array.isArray(list)) return;
+    list.forEach(noteDmLatest);
+  };
+
   if (js && Array.isArray(js.events)) {
     let mergedMessages = [];
     let mergedUnread = null;
@@ -3364,6 +3443,7 @@ function applySyncPayload(js){
     js.events.forEach(ev => {
       if (!ev || typeof ev !== 'object') return;
       if (Array.isArray(ev.messages) && ev.messages.length) {
+        scanMessagesForHints(ev.messages);
         mergedMessages = mergedMessages.concat(ev.messages);
       }
       if (ev.unread && typeof ev.unread === 'object') {
@@ -3384,6 +3464,7 @@ function applySyncPayload(js){
       } else {
         const seen = new Set(existing.map(m => Number(m?.id)));
         const additions = mergedMessages.filter(m => !seen.has(Number(m?.id)));
+        scanMessagesForHints(additions);
         js.messages = existing.concat(additions);
       }
     }
@@ -3397,7 +3478,6 @@ function applySyncPayload(js){
       js.mention_bumps = { ...(js.mention_bumps || {}), ...mergedMention };
     }
   }
-
 
   // --- helper: play mention sound with throttling fallback ---
   function playMentionOnce(){
@@ -3426,28 +3506,57 @@ function applySyncPayload(js){
     try { USERS.forEach(u => rememberGender(u.id, u.gender)); } catch(_){}
   }
 
-  if (js && js.unread) {
+  if (js && (js.unread || dmLatestHints.size)) {
     const unread = js.unread || {};
+    const hasUnreadRooms = unread && typeof unread === 'object' && unread.rooms;
+    const hasUnreadPer = unread && typeof unread === 'object' && unread.per;
 
     // keep previous counts for comparison (for sounds)
     const prevRooms = { ...(ROOM_UNREAD || {}) };
-    const prevDMs   = { ...(UNREAD_PER  || {}) };
+    const prevDmLatest = { ...(UNREAD_LATEST_PER || {}) };
 
-    // update to latest counts from server
-    UNREAD_PER  = normalizeUnreadMap(unread.per);
-    ROOM_UNREAD = normalizeUnreadMap(unread.rooms);
+    const nextDmLatest = hasUnreadPer
+      ? normalizeUnreadLatestMap(unread.per)
+      : { ...(UNREAD_LATEST_PER || {}) };
+    dmLatestHints.forEach((latest, peer) => {
+      const key = String(peer);
+      const current = Number(nextDmLatest[key] || 0);
+      if (latest > current) {
+        nextDmLatest[key] = latest;
+      }
+    });
+    const nextRoomUnread = hasUnreadRooms
+      ? normalizeUnreadMap(unread.rooms)
+      : { ...(ROOM_UNREAD || {}) };
 
-    // zero out blocked users in DM counts
-    Object.keys(UNREAD_PER).forEach(k => { if (isBlocked(+k)) UNREAD_PER[k] = 0; });
+    if (hasUnreadPer) {
+      Object.keys(prevDmLatest).forEach(k => {
+        if (!(k in nextDmLatest)) nextDmLatest[k] = 0;
+      });
+    }
+
+    UNREAD_LATEST_PER = nextDmLatest;
+    UNREAD_PER = unreadFlagsFromLatest(UNREAD_LATEST_PER);
+    ROOM_UNREAD = nextRoomUnread;
+
+    Object.keys(UNREAD_PER).forEach(k => {
+      if (isBlocked(+k)) {
+        UNREAD_PER[k] = 0;
+        UNREAD_LATEST_PER[k] = 0;
+        PREFETCH_DM_HINTS.delete(Number(k));
+      }
+    });
+
+    const dmIncrEntries = Object.entries(UNREAD_LATEST_PER)
+      .map(([id, latest]) => [Number(id), Number(latest) || 0])
+      .filter(([id, latest]) => Number.isFinite(id) && !isBlocked(id) && latest > (Number(prevDmLatest[id]) || 0));
+
+    const dmIncrIds = dmIncrEntries.map(([id]) => id);
 
     // 🔔 Notification logic:
     try{
       const roomIncr = Object.keys(ROOM_UNREAD)
         .filter(slug => (ROOM_UNREAD[slug] || 0) > (prevRooms[slug] || 0));
-
-
-      const dmIncr = Object.keys(UNREAD_PER)
-       .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
 
       // Prefetch newly-bumped sources so switching feels instant.
       const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
@@ -3458,22 +3567,22 @@ function applySyncPayload(js){
           .filter(slug => !isActiveRoom(slug))
           .forEach(slug => queuePrefetchRoom(slug));
 
-        dmIncr
-          .map(id => Number(id))
-          .filter(id => !isActiveDM(id))
-          .forEach(id => queuePrefetchDM(id));
+        dmIncrEntries
+          .filter(([id]) => !isActiveDM(id))
+          .forEach(([id, latest]) => queuePrefetchDM(id, latest));
       } catch(_) {}
+
       // --- ignore muted sources for sound decisions
       const roomIncrUnmuted = roomIncr.filter(slug => !isRoomMuted(slug));
-      const dmIncrUnmuted   = dmIncr.filter(id => !isDmMuted(+id));
+      const dmIncrUnmutedIds = dmIncrIds.filter(id => !isDmMuted(id));
 
       const interactive = isInteractive();
 
       const passiveRoomBumped = roomIncrUnmuted.some(slug => !isActiveRoom(slug));
-      const passiveDmBumped   = dmIncrUnmuted.some(id   => !isActiveDM(id));
+      const passiveDmBumped   = dmIncrUnmutedIds.some(id   => !isActiveDM(id));
 
       const shouldRing =
-        ((!interactive) && (roomIncrUnmuted.length || dmIncrUnmuted.length)) ||
+        ((!interactive) && (roomIncrUnmuted.length || dmIncrUnmutedIds.length)) ||
         (interactive && (passiveRoomBumped || passiveDmBumped));
 
       // Server-assisted mention hints — also ignore muted rooms and only ring on rising edge
@@ -3493,8 +3602,7 @@ function applySyncPayload(js){
       }
 
       // --- Ensure a tab exists for newly-bumped DMs
-      dmIncr.forEach(did => {
-        const id = Number(did);
+      dmIncrIds.forEach(id => {
         if (!ACTIVE_DMS.has(id)) {
           ACTIVE_DMS.add(id);
           saveDMActive(ACTIVE_DMS);
@@ -3506,8 +3614,8 @@ function applySyncPayload(js){
 
       // --- Optional: auto-open the first newly-bumped DM so it "pops up"
       if (AUTO_OPEN_DM_ON_NEW && currentDM == null) {
-        const first = dmIncr.find(did => !isBlocked(+did));
-        if (first) {
+        const first = dmIncrIds.find(id => !isBlocked(id));
+        if (Number.isFinite(first)) {
           try { openDM(Number(first)); } catch(_) {}
         }
       }
@@ -3517,6 +3625,8 @@ function applySyncPayload(js){
     if (isInteractive()) {
       if (currentDM != null) {
         UNREAD_PER[currentDM] = 0;
+        UNREAD_LATEST_PER[currentDM] = 0;
+        PREFETCH_DM_HINTS.delete(Number(currentDM));
       } else if (currentRoom) {
         ROOM_UNREAD[currentRoom] = 0;
       }
@@ -3809,6 +3919,8 @@ actBlock?.addEventListener('click', async ()=>{
         showToast('Användare avblockerad');
       }
       UNREAD_PER[id] = 0;
+      UNREAD_LATEST_PER[id] = 0;
+      PREFETCH_DM_HINTS.delete(Number(id));
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
       closeMsgSheet();
     } else {
@@ -3860,6 +3972,8 @@ imgActBlock?.addEventListener('click', async ()=>{
         showToast('Användare avblockerad');
       }
       UNREAD_PER[id] = 0;
+      UNREAD_LATEST_PER[id] = 0;
+      PREFETCH_DM_HINTS.delete(Number(id));
       renderUsers(); renderDMSidebar(); renderRoomTabs(); updateLeftCounts();
 
       const blocked = isBlocked(id);
@@ -4577,6 +4691,8 @@ async function openDM(id) {
   currentDM = Number(id);
   LAST_OPEN_DM = currentDM;
   UNREAD_PER[currentDM] = 0;
+  UNREAD_LATEST_PER[currentDM] = 0;
+  PREFETCH_DM_HINTS.delete(Number(currentDM));
 
   // Recompute total DM unread so the left badge updates immediately
   try {
@@ -4597,14 +4713,15 @@ async function openDM(id) {
   const cacheKey = cacheKeyForDM(currentDM);
   let cacheEntry = applyCache(cacheKey);
   let cacheHit = !!cacheEntry;
+  const latestHint = Number(UNREAD_LATEST_PER[currentDM] || 0);
   if (cacheHit && hasPendingPrefetch(cacheKey)) {
-    const prefetched = await ensurePrefetchedDM(currentDM);
+    const prefetched = await ensurePrefetchedDM(currentDM, latestHint);
     if (prefetched) {
       cacheEntry = applyCache(cacheKey) || cacheEntry;
       cacheHit = !!cacheEntry;
     }
   } else if (!cacheHit) {
-    const prefetched = await ensurePrefetchedDM(currentDM);
+    const prefetched = await ensurePrefetchedDM(currentDM, latestHint);
     if (prefetched) {
       cacheEntry = applyCache(cacheKey);
       cacheHit = !!cacheEntry;
