@@ -2797,11 +2797,17 @@ const queueMark = (() => {
     return isNearBottom(pubList, opts.bottomPx);
   }
 
-  async function flush() {
-    timer = null;
+  function scheduleFlush() {
+    if (timer != null) return;
+    timer = setTimeout(() => {
+      timer = null;
+      flush(false).catch(() => {});
+    }, opts.debounceMs);
+  }
 
-    if (!shouldSendNow()) {
-      timer = setTimeout(flush, opts.debounceMs);
+  async function flush(force) {
+    if (!force && !shouldSendNow()) {
+      scheduleFlush();
       return;
     }
 
@@ -2834,7 +2840,7 @@ const queueMark = (() => {
     }
   }
 
-  return function queueMark(ids, override = {}) {
+  const api = function queueMark(ids, override = {}) {
     let maxId = 0;
     if (Array.isArray(ids) && ids.length) {
       maxId = Math.max(...ids
@@ -2866,11 +2872,30 @@ const queueMark = (() => {
     }
 
     opts = { ...READS_DEFAULTS, ...(override || {}) };
-    if (timer == null) {
-      timer = setTimeout(flush, opts.debounceMs);
+
+    if (pendingDM || pendingRoom) {
+      scheduleFlush();
     }
   };
+
+  api.flushNow = () => {
+    if (timer != null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    flush(true).catch(() => {});
+  };
+
+  return api;
 })();
+
+function flushPendingReads() {
+  try {
+    if (typeof queueMark?.flushNow === 'function') {
+      queueMark.flushNow();
+    }
+  } catch (_) {}
+}
 
 
 
@@ -3708,16 +3733,17 @@ let LAST_OPEN_DM = null;
     ACTIVE_DMS.delete(id);
     saveDMActive(ACTIVE_DMS);
 
-if (currentDM === id){
-    muteFor(1200);
-  stopStream();
-  currentDM = null;
-  applyCache(activeCacheKey());
-  setComposerAccess();
-  showView('vPublic');
-  pollActive().catch(()=>{});
-  openStream();
-}
+    if (currentDM === id){
+      flushPendingReads();
+      muteFor(1200);
+      stopStream();
+      currentDM = null;
+      applyCache(activeCacheKey());
+      setComposerAccess();
+      showView('vPublic');
+      pollActive().catch(()=>{});
+      openStream();
+    }
     renderDMSidebar();
     renderRoomTabs();
     updateLeftCounts();
@@ -4180,6 +4206,7 @@ roomTabs.addEventListener('click', async e => {
   // DM tab
   const dmBtn = e.target.closest('.tab[data-dm]');
   if (dmBtn) {
+    flushPendingReads();
     muteFor(1200);
     const id = +dmBtn.dataset.dm;
     await openDM(id);
@@ -4196,6 +4223,7 @@ roomTabs.addEventListener('click', async e => {
   if (!JOINED.has(slug)) return;
   if (!room.allowed) { showToast('Endast för medlemmar'); return; }
 
+  flushPendingReads();
   muteFor(1200);
   stopStream();
   stashActive();
@@ -4346,7 +4374,8 @@ roomsListEl?.addEventListener('click', async (e) => {
       ensureJoinedBaseline();
       const next = ROOMS.find(r => JOINED.has(r.slug) && r.allowed)?.slug || defaultRoomSlug();
       if (next && next !== currentRoom) {
-            muteFor(1200);
+        flushPendingReads();
+        muteFor(1200);
         stopStream();
         currentRoom = next;
         const cacheEntry = applyCache(cacheKeyForRoom(currentRoom));
@@ -4650,6 +4679,7 @@ window.addEventListener('offline', () => {
 
 async function openDM(id) {
   if (isBlocked(id)) { showToast('Du har blockerat denna användare'); return; }
+  flushPendingReads();
   muteFor(1200);
 
   stopStream();
