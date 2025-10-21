@@ -846,6 +846,10 @@ const PREFETCH_DELAY_MS = 250;
 const PREFETCH_QUEUE = [];
 const PREFETCH_KEYS = new Set();
 const PREFETCH_INFLIGHT = new Map();
+const PREFETCH_RETRY_COUNTS = new Map();
+const PREFETCH_RETRY_TIMERS = new Map();
+const PREFETCH_RETRY_BASE_DELAY_MS = 1000;
+const PREFETCH_RETRY_MAX_DELAY_MS = 15000;
 let PREFETCH_TIMER = null;
 let PREFETCH_BUSY = false;
 
@@ -1148,10 +1152,55 @@ const previousWait = Number(POLL_LAST_SCHEDULED_MS) || 0;
   }, wait);
 }
 
+function cancelPrefetchRetry(key){
+  if (!key) return;
+  const timer = PREFETCH_RETRY_TIMERS.get(key);
+  if (timer) {
+    clearTimeout(timer);
+    PREFETCH_RETRY_TIMERS.delete(key);
+  }
+  PREFETCH_RETRY_COUNTS.delete(key);
+}
+
+function computePrefetchRetryDelay(attempt){
+  if (!Number.isFinite(attempt) || attempt <= 0) {
+    attempt = 1;
+  }
+  const base = PREFETCH_RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt - 1));
+  const jitter = 0.8 + Math.random() * 0.4;
+  return Math.min(
+    PREFETCH_RETRY_MAX_DELAY_MS,
+    Math.round(base * jitter)
+  );
+}
+
+function schedulePrefetchRetry(entry){
+  if (!entry || !entry.key) return;
+  const attempt = (PREFETCH_RETRY_COUNTS.get(entry.key) || 0) + 1;
+  PREFETCH_RETRY_COUNTS.set(entry.key, attempt);
+
+  const prevTimer = PREFETCH_RETRY_TIMERS.get(entry.key);
+  if (prevTimer) {
+    clearTimeout(prevTimer);
+  }
+
+  const delay = computePrefetchRetryDelay(attempt);
+  const timer = setTimeout(()=>{
+    PREFETCH_RETRY_TIMERS.delete(entry.key);
+    if (hasPendingPrefetch(entry.key)) return;
+    PREFETCH_KEYS.add(entry.key);
+    PREFETCH_QUEUE.push({ kind: entry.kind, value: entry.value, key: entry.key });
+    schedulePrefetchTick();
+  }, delay);
+
+  PREFETCH_RETRY_TIMERS.set(entry.key, timer);
+}
+
 function enqueuePrefetch(kind, value){
   if (value == null) return;
   const key = `${kind}:${value}`;
   if (PREFETCH_KEYS.has(key)) return;
+  cancelPrefetchRetry(key);
   PREFETCH_KEYS.add(key);
   PREFETCH_QUEUE.push({ kind, value, key });
   schedulePrefetchTick();
@@ -1184,6 +1233,7 @@ async function runPrefetchTick(){
 
   PREFETCH_BUSY = true;
   let promise = null;
+  let success = true;
   try {
     if (next.kind === 'room') {
       promise = prefetchRoom(next.value);
@@ -1193,12 +1243,20 @@ async function runPrefetchTick(){
 
     if (promise && typeof promise.then === 'function') {
       PREFETCH_INFLIGHT.set(next.key, promise);
-      await promise.catch(()=>{});
+      await promise;
     }
-  } catch (_) {} finally {
+  } catch (_) {
+    success = false;
+  } finally {
     PREFETCH_INFLIGHT.delete(next.key);
     PREFETCH_KEYS.delete(next.key);
     PREFETCH_BUSY = false;
+
+    if (success) {
+      cancelPrefetchRetry(next.key);
+    } else {
+      schedulePrefetchRetry(next);
+    }
 
     if (PREFETCH_QUEUE.length) {
       schedulePrefetchTick();
@@ -1231,19 +1289,25 @@ async function ensurePrefetched(kind, value){
 
   PREFETCH_KEYS.delete(key);
 
+  let success = true;
   try {
     const promise = kind === 'room' ? prefetchRoom(value) : prefetchDM(value);
     if (promise && typeof promise.then === 'function') {
       PREFETCH_INFLIGHT.set(key, promise);
-      await promise.catch(()=>{});
+      await promise;
     }
   } catch (_) {
-    // swallow
+    success = false;
   } finally {
     PREFETCH_INFLIGHT.delete(key);
+    if (success) {
+      cancelPrefetchRetry(key);
+    } else {
+      schedulePrefetchRetry({ kind, value, key });
+    }
   }
 
-  return true;
+  return success;
 }
 
 function hasPendingPrefetch(key){
@@ -1980,47 +2044,43 @@ function writeCache(key, patch){
 }
 
 async function prefetchRoom(slug){
-  try{
-    const key    = cacheKeyForRoom(slug);
-    const cached = ROOM_CACHE.get(key);
-    const since  = cached ? (Number(cached.last) || -1) : -1;
+  const key    = cacheKeyForRoom(slug);
+  const cached = ROOM_CACHE.get(key);
+  const since  = cached ? (Number(cached.last) || -1) : -1;
 
-    const params = new URLSearchParams({
-      public:'1', room: slug, since: String(since), limit:'30'
-    });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+  const params = new URLSearchParams({
+    public:'1', room: slug, since: String(since), limit:'30'
+  });
+  const items = await fetchJSON(`${API}/fetch?${params}`);
 
-    if (!Array.isArray(items) || items.length === 0) return;
+  if (!Array.isArray(items) || items.length === 0) return;
 
-    let maxId = cached?.last || -1;
-    maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
+  let maxId = cached?.last || -1;
+  maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
 
-    const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
-    const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    writeCache(key, { last: maxId, html: combined, isFull: false });
-  }catch(_){}
+  const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
+  const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
+  writeCache(key, { last: maxId, html: combined, isFull: false });
 }
 
 async function prefetchDM(userId){
-  try{
-    const key    = cacheKeyForDM(userId);
-    const cached = ROOM_CACHE.get(key);
-    const since  = cached ? (Number(cached.last) || -1) : -1;
+  const key    = cacheKeyForDM(userId);
+  const cached = ROOM_CACHE.get(key);
+  const since  = cached ? (Number(cached.last) || -1) : -1;
 
-    const params = new URLSearchParams({
-      to: String(userId), since: String(since), limit:'10'
-    });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+  const params = new URLSearchParams({
+    to: String(userId), since: String(since), limit:'10'
+  });
+  const items = await fetchJSON(`${API}/fetch?${params}`);
 
-    if (!Array.isArray(items) || items.length === 0) return;
+  if (!Array.isArray(items) || items.length === 0) return;
 
-    let maxId = cached?.last || -1;
-    maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
+  let maxId = cached?.last || -1;
+  maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
 
-    const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
-    const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    writeCache(key, { last: maxId, html: combined, isFull: false });
-  }catch(_){}
+  const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
+  const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
+  writeCache(key, { last: maxId, html: combined, isFull: false });
 }
 
 
