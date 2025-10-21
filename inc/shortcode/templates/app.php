@@ -1719,7 +1719,8 @@ function playNotifOnce() {
     }
     applyBlurClass();
 
-  const ROOM_CACHE = new Map();          
+  const ROOM_CACHE = new Map();
+  const INCOMPLETE_CACHE_KEYS = new Set();
   const FIRST_LOAD_LIMIT = 20;          
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
@@ -1973,6 +1974,23 @@ function msgsToHTML(items, cap=180){
 
 
 
+function markCacheIncomplete(key){
+  if (!key) return;
+  INCOMPLETE_CACHE_KEYS.add(key);
+}
+
+function writeCache(key, patch){
+  if (!key) return;
+  const prev = ROOM_CACHE.get(key) || {};
+  const next = { ...prev, ...patch };
+  ROOM_CACHE.set(key, next);
+  if (next && next.isFull === true) {
+    INCOMPLETE_CACHE_KEYS.delete(key);
+  } else {
+    INCOMPLETE_CACHE_KEYS.add(key);
+  }
+}
+
 async function prefetchRoom(slug){
   try{
     const key    = cacheKeyForRoom(slug);
@@ -1991,7 +2009,7 @@ async function prefetchRoom(slug){
 
     const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    ROOM_CACHE.set(key, { last: maxId, html: combined });
+    writeCache(key, { last: maxId, html: combined, isFull: false });
   }catch(_){}
 }
 
@@ -2013,7 +2031,7 @@ async function prefetchDM(userId){
 
     const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    ROOM_CACHE.set(key, { last: maxId, html: combined });
+    writeCache(key, { last: maxId, html: combined, isFull: false });
   }catch(_){}
 }
 
@@ -2031,20 +2049,25 @@ function applyCache(key){
     pubList.innerHTML = cached.html;
 
     // 🔧 prune immediately so layout stays cheap
-    pruneList(pubList, 180);
+    const trimmed = pruneList(pubList, 180);
 
     hydrateMessageIndexFromList(pubList);
 
-    // 🔁 re-stash the trimmed HTML so the cache doesn't bloat
-    ROOM_CACHE.set(key, {
+    const dist = Number.isFinite(cached.bottomDist) ? cached.bottomDist : 0;
+
+    const merged = {
+      ...cached,
       last: Number(cached.last) || -1,
       html: pubList.innerHTML,
-      bottomDist: Number.isFinite(cached.bottomDist) ? cached.bottomDist : 0
-    });
+      bottomDist: dist,
+      isFull: trimmed ? false : cached.isFull === true
+    };
 
-    pubList.dataset.last = String(cached.last);
+    // 🔁 re-stash the trimmed HTML so the cache doesn't bloat
+    writeCache(key, merged);
 
-    const dist = Number.isFinite(cached.bottomDist) ? cached.bottomDist : 0;
+    pubList.dataset.last = String(merged.last);
+
     requestAnimationFrame(()=>{
       pubList.scrollTop = Math.max(0, pubList.scrollHeight - pubList.clientHeight - dist);
     });
@@ -2052,12 +2075,12 @@ function applyCache(key){
     watchNewImages(pubList);
 
     if (AUTO_SCROLL && dist < 20) scrollToBottom(pubList, false);
-    return true;
+    return merged;
   }
   pubList.innerHTML = '';
   pubList.dataset.last = '-1';
   hydrateMessageIndexFromList(pubList);
-  return false;
+  return null;
 }
 
   function stashActive(){
@@ -2066,7 +2089,7 @@ function applyCache(key){
       0,
       pubList.scrollHeight - pubList.scrollTop - pubList.clientHeight
     );
-    ROOM_CACHE.set(activeCacheKey(), {
+    writeCache(activeCacheKey(), {
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML,
       bottomDist
@@ -2119,6 +2142,11 @@ function applyCache(key){
       const target = state || desiredStreamState();
       if (!target) return false;
 
+      const cacheKey = target.kind === 'dm'
+        ? cacheKeyForDM(target.to)
+        : cacheKeyForRoom(target.room);
+      markCacheIncomplete(cacheKey);
+
       const params = new URLSearchParams({ limit: String(FIRST_LOAD_LIMIT), since: '-1' });
       if (target.kind === 'dm') {
         params.set('to', String(target.to));
@@ -2128,9 +2156,9 @@ function applyCache(key){
       }
 
       const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
-      if (!Array.isArray(items) || !items.length) return false;
+      if (!Array.isArray(items)) return false;
 
-      handleStreamSync({ messages: items }, target);
+      handleStreamSync({ __snapshot: true, messages: items }, target);
       return true;
     } catch (_) {
       return false;
@@ -2398,9 +2426,11 @@ function clampHTML(html){
   return tmp.innerHTML;
 }
 
-function renderList(el, items){
+function renderList(el, items, options = {}){
+  const { allowOlder = false, rebuild = false } = options || {};
+
   const lastSeen = +el.dataset.last || -1;
-  let maxId = lastSeen;
+  let maxId = allowOlder ? -1 : lastSeen;
 
   const wasAtBottom = atBottom(el);
   const meIdNum = Number(ME_ID);
@@ -2410,9 +2440,24 @@ function renderList(el, items){
   let appendedCount  = 0;
   let anyFromOthers  = false;
 
+  let pendingFrag = null;
+  if (rebuild) {
+    pendingFrag = document.createDocumentFragment();
+    const pendingNodes = Array.from(el.querySelectorAll('li.item[data-temp]'));
+    pendingNodes.forEach(node => {
+      pendingFrag.appendChild(node);
+    });
+    el.innerHTML = '';
+  }
+
   items.forEach(m=>{
     const mid = Number(m.id);
     if (!Number.isFinite(mid)) return;
+
+    if (allowOlder) {
+      const duplicate = el.querySelector(`li.item[data-id="${mid}"]`);
+      if (duplicate) duplicate.remove();
+    }
 
     if (mid > maxId) maxId = mid;
     // 🔔 moderation events (wake-only, do not render)
@@ -2426,7 +2471,7 @@ function renderList(el, items){
             el.remove();
             forgetMessageById(Number(data.id));
             try {
-              ROOM_CACHE.set(activeCacheKey(), {
+              writeCache(activeCacheKey(), {
                 last: +pubList.dataset.last || -1,
                 html: pubList.innerHTML
               });
@@ -2443,7 +2488,7 @@ function renderList(el, items){
 
     const fromId = Number(m.sender_id || 0);
     if (fromId && isBlocked(fromId)) return;          // hide blocked users
-    if (mid <= lastSeen) return;                      // already rendered
+    if (!allowOlder && mid <= lastSeen) return;       // already rendered
 
     const li = document.createElement('li');
     li.dataset.id    = String(mid);
@@ -2568,6 +2613,10 @@ function renderList(el, items){
   if (appendedCount > 0) {
     el.appendChild(frag);
 
+    if (pendingFrag && pendingFrag.childNodes.length) {
+      el.appendChild(pendingFrag);
+    }
+
     // update last id only when we actually appended
     el.dataset.last = String(maxId);
 
@@ -2598,8 +2647,16 @@ function renderList(el, items){
 
     // Trigger read-marking for newly visible messages
     try { markVisible(el); } catch(_){}
+  } else if (pendingFrag && pendingFrag.childNodes.length) {
+    el.appendChild(pendingFrag);
+    if (rebuild) {
+      el.dataset.last = '-1';
+    }
   } else {
     // nothing appended; keep existing dataset.last unchanged
+    if (rebuild) {
+      el.dataset.last = '-1';
+    }
   }
 }
 
@@ -3639,7 +3696,7 @@ actHide?.addEventListener('click', async ()=>{
       try {
         MSG_TARGET.li?.remove();
 
-        ROOM_CACHE.set(activeCacheKey(), {
+        writeCache(activeCacheKey(), {
           last: +pubList.dataset.last || -1,
           html: pubList.innerHTML
         });
@@ -4077,25 +4134,29 @@ roomTabs.addEventListener('click', async e => {
   renderRoomTabs();
 
   const cacheKey = cacheKeyForRoom(slug);
-  let cacheHit = applyCache(cacheKey);
+  let cacheEntry = applyCache(cacheKey);
+  let cacheHit = !!cacheEntry;
   if (cacheHit && hasPendingPrefetch(cacheKey)) {
     const prefetched = await ensurePrefetchedRoom(slug);
     if (prefetched) {
-      cacheHit = applyCache(cacheKey) || cacheHit;
+      cacheEntry = applyCache(cacheKey) || cacheEntry;
+      cacheHit = !!cacheEntry;
     }
   } else if (!cacheHit) {
     const prefetched = await ensurePrefetchedRoom(slug);
     if (prefetched) {
-      cacheHit = applyCache(cacheKey);
+      cacheEntry = applyCache(cacheKey);
+      cacheHit = !!cacheEntry;
     }
   }
   setComposerAccess();
   showView('vPublic');
 
   let snapshotPromise = null;
-  if (cacheHit) {
+  if (cacheHit && cacheEntry?.isFull) {
     markVisible(pubList);
   } else {
+    markCacheIncomplete(cacheKey);
     snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
   }
 
@@ -4218,15 +4279,17 @@ roomsListEl?.addEventListener('click', async (e) => {
             muteFor(1200);
         stopStream();
         currentRoom = next;
-        const cacheHit = applyCache(cacheKeyForRoom(currentRoom));
+        const cacheEntry = applyCache(cacheKeyForRoom(currentRoom));
+        const cacheHit = !!cacheEntry;
         setComposerAccess();
         showView('vPublic');
 
         let snapshotPromise = null;
-        if (cacheHit) {
+        if (cacheHit && cacheEntry?.isFull) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
         } else {
+          markCacheIncomplete(cacheKeyForRoom(currentRoom));
           snapshotPromise = loadHistorySnapshot({ kind: 'room', room: currentRoom });
         }
 
@@ -4284,7 +4347,9 @@ roomsListEl?.addEventListener('click', async (e) => {
         if (Number.isFinite(id) && id > 0) forgetMessageById(id);
         item.remove();
       }
+      return true;
     }
+    return false;
   }
 function safeAutoScroll(container, renderUpdates) {
 
@@ -4389,15 +4454,22 @@ function handleStreamSync(js, context){
 
   applySyncPayload(js);
 
+  const isSnapshot  = js?.__snapshot === true;
   const prevLast    = +pubList.dataset.last || -1;
-  const isCold      = prevLast < 0;
+  const isCold      = isSnapshot || prevLast < 0;
   const wasAtBottom = atBottom(pubList);
+
+  const cacheKey = context.kind === 'dm'
+    ? cacheKeyForDM(context.to)
+    : cacheKeyForRoom(context.room);
+  const needsOlder = isSnapshot || INCOMPLETE_CACHE_KEYS.has(cacheKey);
+  const renderOpts  = needsOlder ? { allowOlder: true, rebuild: true } : undefined;
 
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
     const items   = isCold ? payload.slice(-FIRST_LOAD_LIMIT) : payload;
 
-    renderList(pubList, items);
+    renderList(pubList, items, renderOpts);
     markVisible(pubList);
     watchNewImages(pubList);
     updateReceipts(pubList, items, /*isDM=*/false);
@@ -4410,9 +4482,13 @@ function handleStreamSync(js, context){
     const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
 
-    ROOM_CACHE.set(cacheKeyForRoom(context.room), {
+    const cacheKey = cacheKeyForRoom(context.room);
+    const prevCache = ROOM_CACHE.get(cacheKey);
+    const isFull = isSnapshot ? true : prevCache?.isFull === true;
+    writeCache(cacheKey, {
       last: +pubList.dataset.last || -1,
-      html: pubList.innerHTML
+      html: pubList.innerHTML,
+      isFull
     });
   } else {
     const raw = Array.isArray(js?.messages) ? js.messages : [];
@@ -4434,7 +4510,7 @@ function handleStreamSync(js, context){
       recipient_id: m.recipient_id == null ? null : Number(m.recipient_id)
     }));
 
-    renderList(pubList, items);
+    renderList(pubList, items, renderOpts);
     markVisible(pubList);
     watchNewImages(pubList);
     updateReceipts(pubList, items, /*isDM=*/true);
@@ -4447,10 +4523,18 @@ function handleStreamSync(js, context){
     const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
 
-    ROOM_CACHE.set(cacheKeyForDM(context.to), {
+    const cacheKey = cacheKeyForDM(context.to);
+    const prevCache = ROOM_CACHE.get(cacheKey);
+    const isFull = isSnapshot ? true : prevCache?.isFull === true;
+    writeCache(cacheKey, {
       last: +pubList.dataset.last || -1,
-      html: pubList.innerHTML
+      html: pubList.innerHTML,
+      isFull
     });
+  }
+
+  if (isSnapshot) {
+    INCOMPLETE_CACHE_KEYS.delete(cacheKey);
   }
 }
 
@@ -4538,16 +4622,19 @@ async function openDM(id) {
 
   // 2) render from cache immediately
   const cacheKey = cacheKeyForDM(currentDM);
-  let cacheHit = applyCache(cacheKey);
+  let cacheEntry = applyCache(cacheKey);
+  let cacheHit = !!cacheEntry;
   if (cacheHit && hasPendingPrefetch(cacheKey)) {
     const prefetched = await ensurePrefetchedDM(currentDM);
     if (prefetched) {
-      cacheHit = applyCache(cacheKey) || cacheHit;
+      cacheEntry = applyCache(cacheKey) || cacheEntry;
+      cacheHit = !!cacheEntry;
     }
   } else if (!cacheHit) {
     const prefetched = await ensurePrefetchedDM(currentDM);
     if (prefetched) {
-      cacheHit = applyCache(cacheKey);
+      cacheEntry = applyCache(cacheKey);
+      cacheHit = !!cacheEntry;
     }
   }
 
@@ -4555,9 +4642,10 @@ async function openDM(id) {
   showView('vPublic');
 
   let snapshotPromise = null;
-  if (cacheHit) {
+  if (cacheHit && cacheEntry?.isFull) {
     markVisible(pubList);
   } else {
+    markCacheIncomplete(cacheKey);
     snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
   }
 
@@ -4933,7 +5021,7 @@ function finalizePendingMessage(pending, payload){
     }
 
     try {
-      ROOM_CACHE.set(activeCacheKey(), {
+      writeCache(activeCacheKey(), {
         last: +pubList.dataset.last || -1,
         html: pubList.innerHTML
       });
@@ -5840,6 +5928,13 @@ async function init(){
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
     } else {
+      const initialState = desiredStreamState();
+      if (initialState) {
+        const cacheKey = initialState.kind === 'dm'
+          ? cacheKeyForDM(initialState.to)
+          : cacheKeyForRoom(initialState.room);
+        markCacheIncomplete(cacheKey);
+      }
       const snapshotPromise = loadHistorySnapshot();
       const syncPromise = pollActive(true).catch(()=>{});          // single, awaited warm-up poll (force fresh)
       openStream();
