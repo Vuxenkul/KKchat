@@ -779,6 +779,9 @@ function handlePresenceChange(options = {}){
     } else {
       pollActive().catch(()=>{});
     }
+    if (currentDM != null) {
+      verifyRecentDM(currentDM).catch(()=>{});
+    }
     } else {
     if (!POLL_HIDDEN_SINCE) {
       POLL_HIDDEN_SINCE = Date.now();
@@ -848,6 +851,9 @@ const PREFETCH_KEYS = new Set();
 const PREFETCH_INFLIGHT = new Map();
 let PREFETCH_TIMER = null;
 let PREFETCH_BUSY = false;
+
+const DM_RECENT_VERIFY_COUNT = 3;
+const DM_RECENT_VERIFY_INFLIGHT = new Map();
 
 const POLL_ETAGS = new Map();
 const POLL_RETRY_HINT = new Map();
@@ -2145,6 +2151,88 @@ function applyCache(key){
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  async function verifyRecentDM(peerId) {
+    const id = Number(peerId);
+    if (!Number.isFinite(id) || id <= 0) return false;
+    if (isBlocked(id)) return false;
+
+    const inflight = DM_RECENT_VERIFY_INFLIGHT.get(id);
+    if (inflight) {
+      try { return await inflight; } catch (_) { return false; }
+    }
+
+    const task = (async () => {
+      try {
+        const params = new URLSearchParams({
+          to: String(id),
+          since: '-1',
+          limit: '12',
+        });
+
+        const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
+        if (!Array.isArray(items) || !items.length) return false;
+
+        if (currentDM !== id) return false;
+
+        const normalized = items
+          .map(m => ({
+            ...m,
+            id: Number(m.id),
+            sender_id: Number(m.sender_id),
+            recipient_id: m.recipient_id == null ? null : Number(m.recipient_id),
+          }))
+          .filter(m => Number.isFinite(m.id) && m.sender_id === id)
+          .slice(-DM_RECENT_VERIFY_COUNT);
+
+        if (!normalized.length) return false;
+
+        const list = document.getElementById('kk-pubList');
+        if (!list) return false;
+
+        const currentLast = +list.dataset.last || -1;
+
+        const missingOlder = normalized.filter(m => {
+          const mid = Number(m.id);
+          if (!Number.isFinite(mid)) return false;
+          if (list.querySelector(`li.item[data-id="${mid}"]`)) return false;
+          return mid <= currentLast;
+        });
+
+        if (missingOlder.length) {
+          if (currentDM !== id) return false;
+          return await loadHistorySnapshot({ kind: 'dm', to: id });
+        }
+
+        const unseen = normalized.filter(m => {
+          const mid = Number(m.id);
+          if (!Number.isFinite(mid)) return false;
+          if (list.querySelector(`li.item[data-id="${mid}"]`)) return false;
+          return mid > currentLast;
+        });
+
+        if (!unseen.length) return false;
+
+        if (currentDM !== id) return false;
+
+        unseen.sort((a, b) => Number(a.id) - Number(b.id));
+        handleStreamSync({ messages: unseen }, { kind: 'dm', to: id });
+        return true;
+      } catch (_) {
+        return false;
+      }
+    })();
+
+    DM_RECENT_VERIFY_INFLIGHT.set(id, task);
+
+    try {
+      return await task;
+    } finally {
+      if (DM_RECENT_VERIFY_INFLIGHT.get(id) === task) {
+        DM_RECENT_VERIFY_INFLIGHT.delete(id);
+      }
     }
   }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
@@ -4626,7 +4714,9 @@ async function openDM(id) {
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
   }
+  const verifyPromise = verifyRecentDM(currentDM).catch(()=>{});
   await syncPromise;
+  await verifyPromise;
 
 
 
