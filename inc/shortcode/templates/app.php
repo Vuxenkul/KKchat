@@ -2902,15 +2902,33 @@ function flushPendingReads() {
 function markVisible(listEl){
   if (!isInteractive()) return;
   if (!isVisible(listEl)) return;
-  const ids = [];
+
   const rect = listEl.getBoundingClientRect();
+  const ids = [];
+  const margin = 20;
+  const viewTop = rect.top - margin;
+  const viewBottom = rect.bottom + margin;
+
   listEl.querySelectorAll('li.item').forEach(li => {
     const r = li.getBoundingClientRect();
-    if (r.top >= rect.top - 20 && r.bottom <= rect.bottom + 20) {
+
+    if (r.bottom < viewTop || r.top > viewBottom) return;
+
+    const visibleTop = Math.max(r.top, rect.top);
+    const visibleBottom = Math.min(r.bottom, rect.bottom);
+    const visibleHeight = visibleBottom - visibleTop;
+
+    if (visibleHeight <= 0) return;
+
+    const minVisible = Math.min(rect.height, r.height || (r.bottom - r.top));
+    const threshold = Math.min(minVisible, Math.max(24, minVisible * 0.25));
+
+    if (visibleHeight >= threshold) {
       const id = Number(li.dataset.id);
       if (id > 0) ids.push(id);
     }
   });
+
   if (ids.length) queueMark(ids);
 }
 
