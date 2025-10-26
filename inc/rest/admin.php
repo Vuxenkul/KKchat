@@ -77,3 +77,67 @@ register_rest_route($ns, '/admin/user-messages', [
   },
   'permission_callback' => '__return_true',
 ]);
+
+register_rest_route($ns, '/admin/visibility', [
+  'methods'  => 'POST',
+  'callback' => function (WP_REST_Request $req) use ($require_admin) {
+    $require_admin();
+    kkchat_check_csrf_or_fail($req);
+
+    $me = kkchat_touch_active_user();
+    if ($me <= 0) {
+      kkchat_json(['ok' => false, 'err' => 'no_user'], 400);
+    }
+
+    global $wpdb; $t = kkchat_tables();
+
+    $current = (int) $wpdb->get_var($wpdb->prepare(
+      "SELECT is_hidden FROM {$t['users']} WHERE id = %d",
+      $me
+    ));
+
+    $raw = $req->get_param('hidden');
+    if (is_array($raw)) {
+      $raw = reset($raw);
+    }
+    $raw = is_string($raw) ? trim($raw) : $raw;
+
+    $target = null;
+    if ($raw === null || $raw === '' || (is_string($raw) && strtolower($raw) === 'toggle')) {
+      $target = $current ? 0 : 1;
+    } else {
+      $normalized = is_string($raw) ? strtolower($raw) : $raw;
+      if ($normalized === 1 || $normalized === true || $normalized === '1' || $normalized === 'true' || $normalized === 'yes' || $normalized === 'on') {
+        $target = 1;
+      } elseif ($normalized === 0 || $normalized === false || $normalized === '0' || $normalized === 'false' || $normalized === 'no' || $normalized === 'off') {
+        $target = 0;
+      } else {
+        kkchat_json(['ok' => false, 'err' => 'bad_param'], 400);
+      }
+    }
+
+    $target = $target ? 1 : 0;
+
+    if ($target !== $current) {
+      $updated = $wpdb->update(
+        $t['users'],
+        ['is_hidden' => $target],
+        ['id' => $me],
+        ['%d'],
+        ['%d']
+      );
+
+      if ($updated === false) {
+        kkchat_json(['ok' => false, 'err' => 'db_error'], 500);
+      }
+
+      kkchat_admin_presence_cache_flush();
+      if (function_exists('kkchat_public_presence_cache_flush')) {
+        kkchat_public_presence_cache_flush();
+      }
+    }
+
+    kkchat_json(['ok' => true, 'hidden' => $target]);
+  },
+  'permission_callback' => '__return_true',
+]);

@@ -29,7 +29,7 @@ if (!defined('ABSPATH')) exit;
       if ($limit <= 0) { $limit = 400; }
       $limit = max(1, $limit);
 
-      $cols = ['id','name','gender','wp_username'];
+      $cols = ['id','name','gender','wp_username','is_hidden'];
       if ($includeFlagged) { $cols[] = 'watch_flag'; }
 
       $select = implode(',', $cols);
@@ -56,6 +56,7 @@ if (!defined('ABSPATH')) exit;
           "SELECT {$select}
              FROM {$t['users']}
             WHERE %d - last_seen <= %d
+              AND is_hidden = 0
             ORDER BY name_lc ASC
             LIMIT %d",
           $now,
@@ -66,6 +67,7 @@ if (!defined('ABSPATH')) exit;
         $sql = $wpdb->prepare(
           "SELECT {$select}
              FROM {$t['users']}
+            WHERE is_hidden = 0
             ORDER BY name_lc ASC
             LIMIT %d",
           $limit
@@ -97,6 +99,33 @@ if (!defined('ABSPATH')) exit;
       }
 
       return $out;
+    }
+  }
+
+  if (!function_exists('kkchat_public_presence_cache_flush')) {
+    function kkchat_public_presence_cache_flush(): void {
+      if (!function_exists('wp_cache_delete')) { return; }
+
+      $ttl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', 2));
+      if ($ttl <= 0) { return; }
+
+      $bucketSize = max(1, $ttl);
+      $now = time();
+      $buckets = array_unique([
+        (int) floor($now / $bucketSize),
+        (int) floor(($now - 1) / $bucketSize),
+      ]);
+
+      $window = max(0, (int) apply_filters('kkchat_public_presence_window', 120));
+      $limit  = max(1, (int) apply_filters('kkchat_public_presence_limit', 400));
+
+      foreach ([false, true] as $includeFlagged) {
+        $flagKey = $includeFlagged ? 'f1' : 'f0';
+        foreach ($buckets as $bucket) {
+          $cacheKey = sprintf('presence:%s:%d:%d:%d', $flagKey, $window, $limit, $bucket);
+          wp_cache_delete($cacheKey, 'kkchat');
+        }
+      }
     }
   }
 
@@ -207,6 +236,7 @@ if (!defined('ABSPATH')) exit;
                      u.name,
                      u.gender,
                      u.watch_flag,
+                     u.is_hidden,
                      u.wp_username,
                      u.last_seen,
                      lm.last_content,
@@ -275,6 +305,7 @@ if (!defined('ABSPATH')) exit;
           'name'         => (string) ($r['name'] ?? ''),
           'gender'       => (string) ($r['gender'] ?? ''),
           'flagged'      => !empty($r['watch_flag']) ? 1 : 0,
+          'hidden'       => !empty($r['is_hidden']) ? 1 : 0,
           'is_admin'     => (!empty($r['wp_username']) && in_array(strtolower($r['wp_username']), $admin_names, true)) ? 1 : 0,
           'last_seen'    => (int) ($r['last_seen'] ?? 0),
           'last_message' => $lastMsg,

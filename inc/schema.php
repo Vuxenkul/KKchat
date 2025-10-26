@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '10');
+  define('KKCHAT_DB_VERSION', '11');
 }
 
 /**
@@ -82,6 +82,7 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `wp_username` VARCHAR(64) DEFAULT NULL,
     `watch_flag` TINYINT(1) NOT NULL DEFAULT 0,
     `watch_flag_at` INT UNSIGNED NULL,
+    `is_hidden` TINYINT(1) NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
     UNIQUE KEY `uniq_name_lc` (`name_lc`),
     KEY `idx_last_seen` (`last_seen`),
@@ -955,6 +956,10 @@ function kkchat_maybe_upgrade_schema() {
     @ $wpdb->query("ALTER TABLE {$t['users']}
       ADD `watch_flag` TINYINT(1) NOT NULL DEFAULT 0,
       ADD `watch_flag_at` INT UNSIGNED NULL");
+  }
+
+  if (!$wpdb->get_var("SHOW COLUMNS FROM {$t['users']} LIKE 'is_hidden'")) {
+    @ $wpdb->query("ALTER TABLE {$t['users']} ADD `is_hidden` TINYINT(1) NOT NULL DEFAULT 0");
   }
 
   // users: drop legacy typing columns (formerly used by /typing endpoint)

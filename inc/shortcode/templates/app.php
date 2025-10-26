@@ -3114,11 +3114,12 @@ function normalizeUnreadMap(map) {
 
 function userRow(u){
   const isMe   = u.id === ME_ID;
-  const adminIcon = u.is_admin ? `${iconMarkup('shield_person')} ` : ''; 
+  const adminIcon = u.is_admin ? `${iconMarkup('shield_person')} ` : '';
   const blocked = isBlocked(u.id);
   const unread = blocked ? 0 : (UNREAD_PER[u.id]||0);
   const badge  = unread ? `<span class="badge-sm" data-has>!</span>` : '';
   const name   = `${adminIcon}${esc(u.name)}${isMe ? ' (du)' : ''}`;
+  const isHidden = !!(u.hidden);
 
   const dmBtn  = isMe ? '' : `<button class="openbtn" data-dm="${u.id}" ${blocked?'disabled':''}
                         aria-label="${blocked?'Avblockera för att skriva':'Öppna privat med '+esc(u.name)}">${iconMarkup('forward_to_inbox')}</button>`;
@@ -3151,6 +3152,13 @@ function userRow(u){
        </span>`
     : '';
 
+  const incogBtn = (IS_ADMIN && isMe)
+    ? `<button class="incogbtn" type="button" data-incognito="1" data-hidden="${isHidden ? 1 : 0}"
+        aria-pressed="${isHidden ? 'true' : 'false'}"
+        title="${isHidden ? 'Du är dold – klicka för att visa dig' : 'Du är synlig – klicka för att gömma dig'}"
+        aria-label="${isHidden ? 'Visa mig i användarlistan' : 'Göm mig i användarlistan'}">${iconMarkup(isHidden ? 'visibility_off' : 'visibility')}</button>`
+    : '';
+
   const logoutSelfBtn = isMe
     ? `<button class="logoutbtn" data-logout="1" title="Logga ut" aria-label="Logga ut">Logga ut<b>${iconMarkup('logout')}</b></button>`
     : '';
@@ -3169,7 +3177,7 @@ function userRow(u){
           <div class="small">${esc(u.gender || '')}</div>
         </div>
       </div>
-      <div class="user-actions">${badge}${dmBtn}${blockBtn}${reportBtn}${modBtns}${logoutSelfBtn}</div>
+      <div class="user-actions">${badge}${dmBtn}${blockBtn}${reportBtn}${modBtns}${incogBtn}${logoutSelfBtn}</div>
       ${lastMessageLine(u)}
     </div>`;
 
@@ -3198,6 +3206,38 @@ function userRow(u){
   });
 
 userListEl.addEventListener('click', async (e)=>{
+
+  const inc = e.target.closest('[data-incognito]');
+    if (inc) {
+      e.preventDefault();
+      if (!IS_ADMIN) return;
+      if (inc.dataset.pending === '1') return;
+      inc.dataset.pending = '1';
+
+      const willHide = inc.getAttribute('data-hidden') === '1' ? '0' : '1';
+      const fd = new FormData();
+      fd.append('csrf_token', CSRF);
+      fd.append('hidden', willHide);
+
+      try {
+        const resp = await fetch(API + '/admin/visibility', { method: 'POST', body: fd, credentials: 'include', headers: h });
+        const js = await resp.json().catch(()=>({}));
+        if (resp.ok && js.ok) {
+          const hiddenNow = Number(js.hidden) === 1;
+          USERS = USERS.map(u => (Number(u.id) === Number(ME_ID) ? { ...u, hidden: hiddenNow } : u));
+          renderUsers();
+          showToast(hiddenNow ? 'Du är dold i användarlistan' : 'Du visas i användarlistan');
+        } else {
+          const err = js.err || 'Kunde inte uppdatera synlighet';
+          alert(err);
+        }
+      } catch (_) {
+        alert('Tekniskt fel');
+      } finally {
+        delete inc.dataset.pending;
+      }
+      return;
+    }
 
   const lo = e.target.closest('[data-logout]');
     if (lo) {
@@ -3431,6 +3471,7 @@ function normalizeUsersPayload(raw){
       gender: u.gender ?? u.category ?? '',
       is_admin: !!(u.is_admin ?? u.admin ?? u.isAdmin),
       flagged: (Number(u.flagged ?? u.watchlist ?? u.watch_flag ?? 0) ? 1 : 0),
+      hidden: Number(u.hidden ?? u.is_hidden ?? u.visibility ?? 0) === 1,
       last_message
     };
   }).filter(u => u.id);
