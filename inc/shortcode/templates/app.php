@@ -2953,7 +2953,14 @@ function normalizeUnreadMap(map) {
 }
 
   function sortUsersForList(){
+    const meId = Number(ME_ID);
     return [...USERS].sort((a,b)=>{
+      const aid = Number(a.id);
+      const bid = Number(b.id);
+      if (Number.isFinite(meId)) {
+        if (aid === meId) return -1;
+        if (bid === meId) return 1;
+      }
       const fa = a.flagged?1:0, fb = b.flagged?1:0;
       if (fa !== fb) return fb - fa;
 
