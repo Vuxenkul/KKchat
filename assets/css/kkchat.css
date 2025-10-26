@@ -892,6 +892,19 @@ html, body { margin: 0; height: 100%; }
 
 #kkchat-root .openbtn[aria-current="true"] { border-color: var(--brand); color: var(--brand); }
 
+#kkchat-root .incogbtn {
+  background: unset;
+  border: unset;
+  border-radius: unset;
+  padding: unset;
+  cursor: pointer;
+  font-size: 1.5rem;
+  color: var(--ink-soft);
+  transition: color .2s ease;
+}
+#kkchat-root .incogbtn:hover { color: var(--ink); }
+#kkchat-root .incogbtn[data-hidden="1"] { color: #E75055; }
+
 #kkchat-root .modbtn {
   background: unset;
   border: unset;
