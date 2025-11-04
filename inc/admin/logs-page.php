@@ -142,6 +142,89 @@ function kkchat_admin_logs_page() {
           LIMIT %d OFFSET %d";
   $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$per, $offset])));
 
+  // Markera IP-adresser som redan är blockerade
+  $blockedMap = [];
+  if ($rows) {
+    // Städa bort utgångna blockeringar innan vi slår upp
+    $now = time();
+    $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET active=0 WHERE active=1 AND expires_at IS NOT NULL AND expires_at <= %d", $now));
+
+    $lookupKeys = [];
+    $keyToIps   = [];
+    foreach ($rows as $row) {
+      foreach (['sender_ip', 'recipient_ip'] as $field) {
+        $rawIp = trim((string)($row->$field ?? ''));
+        if ($rawIp === '') continue;
+
+        $keysForIp = [];
+        $key = kkchat_ip_ban_key($rawIp);
+        if ($key) {
+          $keysForIp[] = $key;
+        }
+        if (kkchat_is_ipv6($rawIp)) {
+          $packed = @inet_pton($rawIp);
+          if ($packed !== false) {
+            $canon = strtolower((string)@inet_ntop($packed));
+            if ($canon !== '') {
+              $keysForIp[] = $canon;
+            }
+          }
+        }
+        if (!$keysForIp) continue;
+
+        $keysForIp = array_values(array_unique(array_filter($keysForIp, 'strlen')));
+        foreach ($keysForIp as $keyStr) {
+          $lookupKeys[$keyStr] = true;
+          if (!isset($keyToIps[$keyStr])) {
+            $keyToIps[$keyStr] = [];
+          }
+          $keyToIps[$keyStr][$rawIp] = true;
+        }
+      }
+    }
+
+    if ($lookupKeys) {
+      $keyList      = array_keys($lookupKeys);
+      $placeholders = implode(',', array_fill(0, count($keyList), '%s'));
+      $sqlBlocks    = "SELECT target_ip,cause,expires_at,created_at,created_by FROM {$t['blocks']} WHERE active=1 AND type='ipban' AND target_ip IN ($placeholders)";
+      $blockRows    = $wpdb->get_results($wpdb->prepare($sqlBlocks, ...$keyList), ARRAY_A);
+
+      foreach ($blockRows as $banRow) {
+        $target = (string)($banRow['target_ip'] ?? '');
+        if ($target === '' || empty($keyToIps[$target])) continue;
+
+        $expires = isset($banRow['expires_at']) ? (int)$banRow['expires_at'] : 0;
+        $cause   = trim((string)($banRow['cause'] ?? ''));
+        $creator = trim((string)($banRow['created_by'] ?? ''));
+        $parts   = [];
+
+        if ($expires > 0) {
+          $parts[] = 'Blockerad till ' . date_i18n('Y-m-d H:i', $expires);
+        } else {
+          $parts[] = 'Blockerad tills vidare';
+        }
+        if (strpos($target, '/64') !== false) {
+          $parts[] = 'Gäller hela IPv6-/64-nätet';
+        }
+        if ($cause !== '') {
+          $parts[] = 'Orsak: ' . wp_strip_all_tags($cause);
+        }
+        if ($creator !== '') {
+          $parts[] = 'Skapad av ' . $creator;
+        }
+        $tooltip = implode(' • ', $parts);
+
+        foreach (array_keys($keyToIps[$target]) as $originalIp) {
+          $blockedMap[$originalIp] = [
+            'active'  => true,
+            'tooltip' => $tooltip,
+            'key'     => $target,
+          ];
+        }
+      }
+    }
+  }
+
   // Sidopanel: användarnamn
   $ulike = sanitize_text_field($_GET['ulike'] ?? '');
   if ($ulike !== '') {
@@ -279,10 +362,26 @@ function kkchat_admin_logs_page() {
           <input type="hidden" name="user_wp_username" value="">
         </form>
 
+        <p class="kkchat-ip-legend">
+          <span class="kkchat-ip-flag">
+            <span aria-hidden="true">⛔</span>
+            <span class="kkchat-ip-flag-text">Blockerad IP</span>
+            <span class="screen-reader-text">Blockerad IP-adress</span>
+          </span>
+          – adressen har en aktiv IP-blockering.
+        </p>
+
         <!-- Stilar: miniatyr + lightbox + samtal -->
         <style>
           .kkchat-msg { white-space: pre-wrap; }
           .kkchat-thumb { width:96px; height:96px; object-fit:cover; border:1px solid #e3e3e3; border-radius:6px; cursor:zoom-in; background:#fafafa; }
+          .kkchat-ip { display:inline-block; padding:2px 6px; border-radius:4px; border:1px solid transparent; font-family:SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace; }
+          .kkchat-ip--blocked { color:#8b0000; border-color:#d93025; background:#fde8e7; font-weight:600; }
+          .kkchat-ip-flag { display:inline-flex; align-items:center; gap:4px; font-weight:600; color:#8b0000; font-size:12px; margin-left:4px; }
+          .kkchat-ip-flag-text { font-size:12px; }
+          .kkchat-ip-legend { margin:6px 0 14px; font-size:12px; color:#555; display:flex; align-items:center; gap:6px; }
+          .kkchat-ip-blocked-btn[disabled] { cursor:not-allowed; opacity:0.9; color:#831313; background:#f7d8d8; border-color:#e0a5a5; }
+          .kkchat-ip-blocked-btn[disabled]:hover { color:#831313; background:#f7d8d8; border-color:#e0a5a5; }
           .kkchat-lightbox {
             position: fixed; inset: 0; display:none; align-items:center; justify-content:center;
             background: rgba(0,0,0,.85); z-index: 99999;
@@ -415,13 +514,27 @@ function kkchat_admin_logs_page() {
                 <?php echo esc_html($m->sender_name); ?><?php echo $m->sender_id ? ' (#'.(int)$m->sender_id.')' : ''; ?>
                 <br>
                 <?php if (!empty($m->sender_ip)): ?>
-                  <code><?php echo esc_html($m->sender_ip); ?></code>
-                  <button type="button" class="button" style="margin-left:6px"
-                          data-ip="<?php echo esc_attr($m->sender_ip); ?>"
-                          data-user-id="<?php echo (int)$m->sender_id; ?>"
-                          data-user-name="<?php echo esc_attr($m->sender_name); ?>"
-                          data-who="avsändare"
-                          onclick="kkBanIPFromLogs(this)">Blockera IP</button>
+                  <?php
+                    $senderIp      = (string)$m->sender_ip;
+                    $senderBlocked = $senderIp !== '' && isset($blockedMap[$senderIp]) ? $blockedMap[$senderIp] : null;
+                    $senderTitle   = $senderBlocked && !empty($senderBlocked['tooltip']) ? $senderBlocked['tooltip'] : '';
+                  ?>
+                  <code class="kkchat-ip<?php echo $senderBlocked ? ' kkchat-ip--blocked' : ''; ?>"<?php echo $senderTitle !== '' ? ' title="'.esc_attr($senderTitle).'"' : ''; ?>><?php echo esc_html($senderIp); ?></code>
+                  <?php if ($senderBlocked): ?>
+                    <span class="kkchat-ip-flag"<?php echo $senderTitle !== '' ? ' title="'.esc_attr($senderTitle).'"' : ''; ?>>
+                      <span aria-hidden="true">⛔</span>
+                      <span class="kkchat-ip-flag-text">Blockerad</span>
+                      <span class="screen-reader-text">IP-adressen är blockerad</span>
+                    </span>
+                    <button type="button" class="button kkchat-ip-blocked-btn" style="margin-left:6px" disabled aria-disabled="true"<?php echo $senderTitle !== '' ? ' title="'.esc_attr($senderTitle).'"' : ''; ?>>Blockerad</button>
+                  <?php else: ?>
+                    <button type="button" class="button" style="margin-left:6px"
+                            data-ip="<?php echo esc_attr($senderIp); ?>"
+                            data-user-id="<?php echo (int)$m->sender_id; ?>"
+                            data-user-name="<?php echo esc_attr($m->sender_name); ?>"
+                            data-who="avsändare"
+                            onclick="kkBanIPFromLogs(this)">Blockera IP</button>
+                  <?php endif; ?>
                 <?php else: ?>
                   <span class="description">—</span>
                 <?php endif; ?>
@@ -431,13 +544,27 @@ function kkchat_admin_logs_page() {
                   <?php echo esc_html($m->recipient_name ?: ('#'.$m->recipient_id)); ?> (#<?php echo (int)$m->recipient_id; ?>)
                   <br>
                   <?php if (!empty($m->recipient_ip)): ?>
-                    <code><?php echo esc_html($m->recipient_ip); ?></code>
-                    <button type="button" class="button" style="margin-left:6px"
-                            data-ip="<?php echo esc_attr($m->recipient_ip); ?>"
-                            data-user-id="<?php echo (int)$m->recipient_id; ?>"
-                            data-user-name="<?php echo esc_attr($m->recipient_name); ?>"
-                            data-who="mottagare"
-                            onclick="kkBanIPFromLogs(this)">Blockera IP</button>
+                    <?php
+                      $recipientIp      = (string)$m->recipient_ip;
+                      $recipientBlocked = $recipientIp !== '' && isset($blockedMap[$recipientIp]) ? $blockedMap[$recipientIp] : null;
+                      $recipientTitle   = $recipientBlocked && !empty($recipientBlocked['tooltip']) ? $recipientBlocked['tooltip'] : '';
+                    ?>
+                    <code class="kkchat-ip<?php echo $recipientBlocked ? ' kkchat-ip--blocked' : ''; ?>"<?php echo $recipientTitle !== '' ? ' title="'.esc_attr($recipientTitle).'"' : ''; ?>><?php echo esc_html($recipientIp); ?></code>
+                    <?php if ($recipientBlocked): ?>
+                      <span class="kkchat-ip-flag"<?php echo $recipientTitle !== '' ? ' title="'.esc_attr($recipientTitle).'"' : ''; ?>>
+                        <span aria-hidden="true">⛔</span>
+                        <span class="kkchat-ip-flag-text">Blockerad</span>
+                        <span class="screen-reader-text">IP-adressen är blockerad</span>
+                      </span>
+                      <button type="button" class="button kkchat-ip-blocked-btn" style="margin-left:6px" disabled aria-disabled="true"<?php echo $recipientTitle !== '' ? ' title="'.esc_attr($recipientTitle).'"' : ''; ?>>Blockerad</button>
+                    <?php else: ?>
+                      <button type="button" class="button" style="margin-left:6px"
+                              data-ip="<?php echo esc_attr($recipientIp); ?>"
+                              data-user-id="<?php echo (int)$m->recipient_id; ?>"
+                              data-user-name="<?php echo esc_attr($m->recipient_name); ?>"
+                              data-who="mottagare"
+                              onclick="kkBanIPFromLogs(this)">Blockera IP</button>
+                    <?php endif; ?>
                   <?php else: ?>
                     <span class="description">—</span>
                   <?php endif; ?>
