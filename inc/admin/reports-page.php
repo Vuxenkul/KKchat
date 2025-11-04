@@ -96,7 +96,7 @@ function kkchat_admin_reports_page() {
     return $blockedMap;
   };
 
-  // Åtgärder: lös / återöppna / ta bort
+  // Åtgärder: lös / reaktivera / ta bort
   if (isset($_GET['act'], $_GET['id']) && check_admin_referer($nonce)) {
     $id = (int)$_GET['id'];
     if ($_GET['act'] === 'resolve') {
@@ -104,7 +104,7 @@ function kkchat_admin_reports_page() {
       echo '<div class="updated"><p>Rapport markerad som löst.</p></div>';
     } elseif ($_GET['act'] === 'reopen') {
       $wpdb->update($t['reports'], ['status'=>'open'], ['id'=>$id], ['%s'], ['%d']);
-      echo '<div class="updated"><p>Rapport återöppnad.</p></div>';
+      echo '<div class="updated"><p>Rapport reaktiverad.</p></div>';
     } elseif ($_GET['act'] === 'delete') {
       $wpdb->delete($t['reports'], ['id'=>$id], ['%d']);
       echo '<div class="updated"><p>Rapport raderad.</p></div>';
@@ -241,7 +241,6 @@ function kkchat_admin_reports_page() {
             <?php if ($reporterIp !== ''): ?>
               <code class="kkchat-ip<?php echo $reporterBlocked ? ' kkchat-ip--blocked' : ''; ?>"<?php echo $reporterBlocked ? ' title="'.esc_attr($reporterBlocked['tooltip']).'"' : ''; ?>><?php echo esc_html($reporterIp); ?></code>
               <?php if ($reporterBlocked): ?>
-                <span class="kkchat-ip-flag" aria-hidden="true">⛔</span>
                 <span class="screen-reader-text"><?php esc_html_e('IP-adressen är blockerad.', 'kkchat'); ?></span>
               <?php endif; ?>
             <?php endif; ?>
@@ -251,7 +250,6 @@ function kkchat_admin_reports_page() {
             <?php if ($reportedIp !== ''): ?>
               <code class="kkchat-ip<?php echo $reportedBlocked ? ' kkchat-ip--blocked' : ''; ?>"<?php echo $reportedBlocked ? ' title="'.esc_attr($reportedBlocked['tooltip']).'"' : ''; ?>><?php echo esc_html($reportedIp); ?></code>
               <?php if ($reportedBlocked): ?>
-                <span class="kkchat-ip-flag" aria-hidden="true">⛔</span>
                 <span class="screen-reader-text"><?php esc_html_e('IP-adressen är blockerad.', 'kkchat'); ?></span>
               <?php endif; ?>
             <?php endif; ?>
@@ -262,7 +260,7 @@ function kkchat_admin_reports_page() {
               <?php echo $r->status==='open' ? 'Öppen' : 'Löst'; ?>
             </span>
             <?php if ($reportedBlocked && $r->status === 'open'): ?>
-              <span class="kkchat-status-pill"><?php esc_html_e('Blockerad IP', 'kkchat'); ?></span>
+              <span class="kkchat-status-pill"><?php esc_html_e('⛔ IP', 'kkchat'); ?></span>
             <?php endif; ?>
           </td>
           <td>
@@ -270,7 +268,7 @@ function kkchat_admin_reports_page() {
               $res = wp_nonce_url(add_query_arg(['act' => ($r->status==='open' ? 'resolve' : 'reopen'), 'id' => $r->id], $reports_base), $nonce);
               $del = wp_nonce_url(add_query_arg(['act' => 'delete', 'id' => $r->id], $reports_base), $nonce);
             ?>
-            <a class="button" href="<?php echo esc_url($res); ?>"><?php echo $r->status==='open' ? 'Markera som löst' : 'Återöppna'; ?></a>
+            <a class="button" href="<?php echo esc_url($res); ?>"><?php echo $r->status==='open' ? 'Markera som löst' : 'Reaktivera'; ?></a>
             <a class="button button-danger" href="<?php echo esc_url($del); ?>" onclick="return confirm('Radera denna rapport?');">Ta bort</a>
           </td>
         </tr>
@@ -292,7 +290,6 @@ function kkchat_admin_reports_page() {
       </p>
     <?php endif; ?>
     <p class="kkchat-ip-legend">
-      <span class="kkchat-ip-flag" aria-hidden="true">⛔</span>
       <span class="kkchat-ip-flag-text"><?php esc_html_e('Blockerad IP-adress', 'kkchat'); ?></span>
       – <?php esc_html_e('markerade adresser har en aktiv blockering och kan markeras som lösta via knappen ovan.', 'kkchat'); ?>
     </p>
@@ -339,16 +336,16 @@ function kkchat_admin_reports_page() {
         font-size: 12px;
         font-weight: 600;
       }
-      .kkchat-status--open {
+      .kkchat-status--resolved {
         color: #0b5c13;
         background: #dff5e3;
         border: 1px solid #3ca45b;
       }
-      .kkchat-status--resolved {
-        color: #555;
-        background: #f0f0f0;
-        border: 1px solid #ccc;
-      }
+      .kkchat-status--open {
+        color: #ffffff;
+        background: #f75f5e;
+        border: 1px solid #d63638;
+    }
       .kkchat-status-pill {
         display: inline-block;
         margin-left: 6px;
