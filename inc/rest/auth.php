@@ -54,6 +54,8 @@ if (!defined('ABSPATH')) exit;
 
       // Insert presence (wp_username is NULL for guests)
       $name_lc = mb_strtolower($nick, 'UTF-8');
+      $is_admin_user = ($via_wp && kkchat_is_admin_username($wp_username));
+      $auto_hide_admin = $is_admin_user && kkchat_admin_auto_incognito_enabled();
       $ins = $wpdb->insert($t['users'], [
         'name'        => $nick,
         'name_lc'     => $name_lc,
@@ -61,7 +63,8 @@ if (!defined('ABSPATH')) exit;
         'last_seen'   => $now,
         'ip'          => $ip,
         'wp_username' => $via_wp ? $wp_username : null,
-      ], ['%s','%s','%s','%d','%s','%s']);
+        'is_hidden'   => $auto_hide_admin ? 1 : 0,
+      ], ['%s','%s','%s','%d','%s','%s','%d']);
 
       if (!$ins) {
         if ($via_wp) {
@@ -74,7 +77,8 @@ if (!defined('ABSPATH')) exit;
             'last_seen'   => $now,
             'ip'          => $ip,
             'wp_username' => $wp_username,
-          ], ['%s','%s','%s','%d','%s','%s']);
+            'is_hidden'   => $auto_hide_admin ? 1 : 0,
+          ], ['%s','%s','%s','%d','%s','%s','%d']);
           if (!$ins2) kkchat_json(['ok'=>false,'err'=>'Namnet är upptaget']);
         } else {
           kkchat_json(['ok'=>false,'err'=>'Namnet är upptaget']);
@@ -87,6 +91,7 @@ if (!defined('ABSPATH')) exit;
       $_SESSION['kkchat_gender']         = $gender;
       $_SESSION['kkchat_is_guest']       = $via_wp ? 0 : 1;
       $_SESSION['kkchat_seen_at_public'] = time();
+      $_SESSION['kkchat_auto_hidden']    = $auto_hide_admin ? 1 : 0;
       kkchat_touch_active_user();
 
       if ($via_wp) {
@@ -96,7 +101,7 @@ if (!defined('ABSPATH')) exit;
       }
 
       // Admin determined strictly by configured list vs real WP username
-      $_SESSION['kkchat_is_admin'] = ($via_wp && kkchat_is_admin_username($wp_username)) ? 1 : 0;
+      $_SESSION['kkchat_is_admin'] = $is_admin_user ? 1 : 0;
 
       // Prevent session fixation after auth
       if (function_exists('session_regenerate_id')) @session_regenerate_id(true);

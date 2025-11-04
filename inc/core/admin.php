@@ -12,6 +12,10 @@ function kkchat_admin_usernames(): array {
     return array_map('strtolower', $arr);
 }
 
+function kkchat_admin_auto_incognito_enabled(): bool {
+    return (bool) get_option('kkchat_admin_auto_incognito', 0);
+}
+
 function kkchat_is_admin(): bool {
     if (!empty($_SESSION['kkchat_is_admin'])) {
         return true;
