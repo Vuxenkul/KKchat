@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '12');
+  define('KKCHAT_DB_VERSION', '13');
 }
 
 /**
@@ -161,6 +161,7 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `reporter_id` INT UNSIGNED NOT NULL,
     `reporter_name` VARCHAR(64) NOT NULL,
     `reporter_ip` VARCHAR(45) NULL,
+    `reporter_ip_key` VARCHAR(64) NULL,
     `reported_id` INT UNSIGNED NOT NULL,
     `reported_name` VARCHAR(64) NOT NULL,
     `reported_ip` VARCHAR(45) NULL,
@@ -346,6 +347,9 @@ function kkchat_maybe_migrate(){
     if (!kkchat_column_exists($t['reports'], 'reported_ip_key')) {
       $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
     }
+    if (!kkchat_column_exists($t['reports'], 'reporter_ip_key')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reporter_ip_key` VARCHAR(64) NULL AFTER `reporter_ip`");
+    }
 
     $has_idx = (bool) $wpdb->get_var($wpdb->prepare(
       "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s LIMIT 1",
@@ -366,6 +370,21 @@ function kkchat_maybe_migrate(){
             $t['reports'],
             ['reported_ip_key' => $key],
             ['reported_ip' => $rawIp],
+            ['%s'],
+            ['%s']
+          );
+        }
+      }
+    }
+    $reporterIps = $wpdb->get_col("SELECT DISTINCT reporter_ip FROM {$t['reports']} WHERE reporter_ip <> '' AND (reporter_ip_key IS NULL OR reporter_ip_key = '')");
+    if ($reporterIps) {
+      foreach ($reporterIps as $rawIp) {
+        $key = kkchat_ip_ban_key($rawIp);
+        if ($key) {
+          $wpdb->update(
+            $t['reports'],
+            ['reporter_ip_key' => $key],
+            ['reporter_ip' => $rawIp],
             ['%s'],
             ['%s']
           );
@@ -845,6 +864,7 @@ function kkchat_maybe_upgrade_schema() {
       `reporter_id` INT UNSIGNED NOT NULL,
       `reporter_name` VARCHAR(64) NOT NULL,
       `reporter_ip` VARCHAR(45) NULL,
+      `reporter_ip_key` VARCHAR(64) NULL,
       `reported_id` INT UNSIGNED NOT NULL,
       `reported_name` VARCHAR(64) NOT NULL,
       `reported_ip` VARCHAR(45) NULL,
@@ -869,6 +889,10 @@ function kkchat_maybe_upgrade_schema() {
     if (!$has_reported_ip_key) {
       @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
     }
+    $has_reporter_ip_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reporter_ip_key'");
+    if (!$has_reporter_ip_key) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reporter_ip_key` VARCHAR(64) NULL AFTER `reporter_ip`");
+    }
     if (!$has_index($t['reports'], 'idx_reported_ip_key_created')) {
       @ $wpdb->query("ALTER TABLE {$t['reports']} ADD KEY `idx_reported_ip_key_created` (`reported_ip_key`,`created_at`)");
     }
@@ -881,6 +905,21 @@ function kkchat_maybe_upgrade_schema() {
             $t['reports'],
             ['reported_ip_key' => $key],
             ['reported_ip' => $rawIp],
+            ['%s'],
+            ['%s']
+          );
+        }
+      }
+    }
+    $reporter_backfill = $wpdb->get_col("SELECT DISTINCT reporter_ip FROM {$t['reports']} WHERE reporter_ip <> '' AND (reporter_ip_key IS NULL OR reporter_ip_key = '')");
+    if ($reporter_backfill) {
+      foreach ($reporter_backfill as $rawIp) {
+        $key = kkchat_ip_ban_key($rawIp);
+        if ($key) {
+          @ $wpdb->update(
+            $t['reports'],
+            ['reporter_ip_key' => $key],
+            ['reporter_ip' => $rawIp],
             ['%s'],
             ['%s']
           );

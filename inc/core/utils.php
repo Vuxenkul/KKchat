@@ -192,6 +192,16 @@ function kkchat_dedupe_window(): int {
     return (int) apply_filters('kkchat_dedupe_window', (int) get_option('kkchat_dedupe_window', 10));
 }
 
+function kkchat_report_autoban_threshold(): int {
+    $value = max(0, (int) get_option('kkchat_report_autoban_threshold', 0));
+    return (int) apply_filters('kkchat_report_autoban_threshold', $value);
+}
+
+function kkchat_report_autoban_window_days(): int {
+    $value = max(0, (int) get_option('kkchat_report_autoban_window_days', 0));
+    return (int) apply_filters('kkchat_report_autoban_window_days', $value);
+}
+
 function kkchat_sanitize_guest_nick(string $nick): string {
     $nick = preg_replace('~[^\p{L}\p{N} _\-]~u', '', $nick);
     $nick = trim($nick);

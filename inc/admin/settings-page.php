@@ -213,20 +213,23 @@ function kkchat_admin_settings_page() {
           </td>
         </tr>
       </table>
-      <h2>Rapporter</h2>
+      <h2><?php esc_html_e('Rapporter', 'kkchat'); ?></h2>
+      <p class="description">
+        <?php esc_html_e('Konfigurera auto-IP-ban baserat på anmälningar från unika IP-adresser. Ange 0 för att stänga av ett fält.', 'kkchat'); ?>
+      </p>
       <table class="form-table">
         <tr>
-          <th><label for="report_autoban_threshold">Auto-IP-ban – tröskel</label></th>
+          <th><label for="report_autoban_threshold"><?php esc_html_e('Auto-IP-ban – tröskel', 'kkchat'); ?></label></th>
           <td>
-            <input id="report_autoban_threshold" name="report_autoban_threshold" type="number" class="small-text" min="0" step="1" value="<?php echo (int) $v_report_autoban_threshold; ?>">
-            <p class="description">Antal unika anmälare som krävs för att blockera IP-adressen automatiskt (0 = av).</p>
+            <input id="report_autoban_threshold" name="report_autoban_threshold" type="number" class="small-text" min="0" step="1" value="<?php echo esc_attr((int) $v_report_autoban_threshold); ?>">
+            <p class="description"><?php esc_html_e('Antal unika anmälar-IP-adresser som krävs innan IP-adressen spärras automatiskt. Ange 0 för att stänga av.', 'kkchat'); ?></p>
           </td>
         </tr>
         <tr>
-          <th><label for="report_autoban_window_days">Auto-IP-ban – fönster</label></th>
+          <th><label for="report_autoban_window_days"><?php esc_html_e('Auto-IP-ban – tidsfönster (dagar)', 'kkchat'); ?></label></th>
           <td>
-            <input id="report_autoban_window_days" name="report_autoban_window_days" type="number" class="small-text" min="0" step="1" value="<?php echo (int) $v_report_autoban_window_days; ?>"> dagar
-            <p class="description">Tidsfönster i hela dagar som räknas när rapporter summeras (0 = av).</p>
+            <input id="report_autoban_window_days" name="report_autoban_window_days" type="number" class="small-text" min="0" step="1" value="<?php echo esc_attr((int) $v_report_autoban_window_days); ?>">
+            <p class="description"><?php esc_html_e('Så här många dagar bakåt i tiden rapporter räknas när tröskeln kontrolleras. Ange 0 för att stänga av.', 'kkchat'); ?></p>
           </td>
         </tr>
       </table>
