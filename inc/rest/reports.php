@@ -22,10 +22,12 @@ if (!defined('ABSPATH')) exit;
       if ($reported_id === $me_id) kkchat_json(['ok'=>false,'err'=>'self_report'], 400);
       if ($reason === '' || mb_strlen($reason) > 1000) kkchat_json(['ok'=>false,'err'=>'bad_reason'], 400);
 
-      $u = $wpdb->get_row($wpdb->prepare("SELECT id,name,ip FROM {$t['users']} WHERE id=%d", $reported_id), ARRAY_A);
+      $u = $wpdb->get_row($wpdb->prepare("SELECT id,name,ip,wp_username FROM {$t['users']} WHERE id=%d", $reported_id), ARRAY_A);
       if (!$u) kkchat_json(['ok'=>false,'err'=>'user_gone'], 400);
 
       $now = time();
+      $reported_ip_raw = (string)($u['ip'] ?? '');
+      $reported_ip_key = kkchat_ip_ban_key($reported_ip_raw);
       $wpdb->insert($t['reports'], [
         'created_at'    => $now,
         'reporter_id'   => $me_id,
@@ -33,12 +35,69 @@ if (!defined('ABSPATH')) exit;
         'reporter_ip'   => kkchat_client_ip(),
         'reported_id'   => (int)$u['id'],
         'reported_name' => (string)$u['name'],
-        'reported_ip'   => (string)($u['ip'] ?? ''),
+        'reported_ip'   => $reported_ip_raw,
+        'reported_ip_key' => $reported_ip_key ?: null,
         'reason'        => $reason,
         'status'        => 'open',
-      ], ['%d','%d','%s','%s','%d','%s','%s','%s','%s']);
+      ], ['%d','%d','%s','%s','%d','%s','%s','%s','%s','%s']);
 
       if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      $threshold    = max(0, (int) get_option('kkchat_report_autoban_threshold', 0));
+      $window_days  = max(0, (int) get_option('kkchat_report_autoban_window_days', 0));
+      $window_secs  = ($window_days > 0) ? (int) ($window_days * (defined('DAY_IN_SECONDS') ? DAY_IN_SECONDS : 86400)) : 0;
+
+      if ($reported_ip_key && $threshold > 0 && $window_secs > 0) {
+        $since = max(0, $now - $window_secs);
+        $distinct_reporters = (int) $wpdb->get_var($wpdb->prepare(
+          "SELECT COUNT(DISTINCT reporter_id) FROM {$t['reports']} WHERE reported_ip_key = %s AND created_at >= %d",
+          $reported_ip_key,
+          $since
+        ));
+
+        if ($distinct_reporters >= $threshold) {
+          $existing_ban = (bool) $wpdb->get_var($wpdb->prepare(
+            "SELECT 1 FROM {$t['blocks']} WHERE type='ipban' AND active=1 AND target_ip=%s LIMIT 1",
+            $reported_ip_key
+          ));
+
+          if (!$existing_ban) {
+            $cause = sprintf(
+              'Auto-ban via rapporter: %d rapporter inom %d dagar.',
+              $distinct_reporters,
+              $window_days
+            );
+
+            $wpdb->insert($t['blocks'], [
+              'type'               => 'ipban',
+              'target_user_id'     => (int) $u['id'],
+              'target_name'        => $u['name'] ?? null,
+              'target_wp_username' => $u['wp_username'] ?? null,
+              'target_ip'          => $reported_ip_key,
+              'cause'              => $cause,
+              'created_by'         => 'auto:reports',
+              'created_at'         => $now,
+              'expires_at'         => null,
+              'active'             => 1,
+            ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+
+            if (!$wpdb->last_error) {
+              $ban_id = (int) $wpdb->insert_id;
+              if ($ban_id > 0) {
+                $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", $ban_id));
+              }
+
+              $wpdb->delete($t['users'], ['id' => (int) $u['id']], ['%d']);
+
+              $wpdb->query($wpdb->prepare(
+                "UPDATE {$t['reports']} SET status='resolved', resolved_at=%d, resolved_by=%s WHERE status='open' AND reported_ip_key = %s",
+                $now,
+                'auto:reports',
+                $reported_ip_key
+              ));
+            }
+          }
+        }
+      }
       kkchat_json(['ok'=>true]);
     },
     'permission_callback' => '__return_true',

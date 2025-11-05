@@ -5,6 +5,8 @@ function kkchat_admin_reports_page() {
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
   $nonce = 'kkchat_reports';
+  $auto_threshold   = max(0, (int) get_option('kkchat_report_autoban_threshold', 0));
+  $auto_window_days = max(0, (int) get_option('kkchat_report_autoban_window_days', 0));
 
   $build_block_map = static function(array $ips) use ($wpdb, $t) {
     $blockedMap = [];
@@ -181,6 +183,18 @@ function kkchat_admin_reports_page() {
   ?>
   <div class="wrap">
     <h1>KKchat – Rapporter</h1>
+
+    <p class="description" style="margin:12px 0 20px;">
+      <?php if ($auto_threshold > 0 && $auto_window_days > 0): ?>
+        <?php printf(
+          esc_html__('Automatiskt IP-ban utlöses när %d unika rapporter inkommer inom %d dagar. Sätt värdet till 0 för att stänga av.', 'kkchat'),
+          (int) $auto_threshold,
+          (int) $auto_window_days
+        ); ?>
+      <?php else: ?>
+        <?php esc_html_e('Automatiskt IP-ban via rapporter är avstängt (tröskeln eller fönstret är 0).', 'kkchat'); ?>
+      <?php endif; ?>
+    </p>
 
     <form method="get" action="<?php echo esc_url($reports_base); ?>" style="background:#fff;border:1px solid #eee;padding:10px;border-radius:8px;margin:12px 0">
       <table class="form-table">
