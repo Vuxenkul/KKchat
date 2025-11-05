@@ -22,6 +22,8 @@ function kkchat_admin_settings_page() {
     $dupe_autokick_minutes = max(0, (int)($_POST['dupe_autokick_minutes'] ?? 1)); // 0 = av
     $dedupe_window         = max(1, (int)($_POST['dedupe_window'] ?? 10)); // direkt-spamskydd
 
+    $report_autoban_threshold   = max(0, (int)($_POST['report_autoban_threshold'] ?? 0));
+    $report_autoban_window_days = max(0, (int)($_POST['report_autoban_window_days'] ?? 0));
     $poll_hidden_threshold = max(0, (int)($_POST['poll_hidden_threshold'] ?? 90));
     $poll_hidden_delay     = max(0, (int)($_POST['poll_hidden_delay'] ?? 30));
     $poll_hot_interval     = max(1, (int)($_POST['poll_hot_interval'] ?? 4));
@@ -47,6 +49,8 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_min_interval_seconds',  $min_interval_seconds);
     update_option('kkchat_dupe_autokick_minutes', $dupe_autokick_minutes);
     update_option('kkchat_dedupe_window',         $dedupe_window);
+    update_option('kkchat_report_autoban_threshold',   $report_autoban_threshold);
+    update_option('kkchat_report_autoban_window_days', $report_autoban_window_days);
     update_option('kkchat_poll_hidden_threshold', $poll_hidden_threshold);
     update_option('kkchat_poll_hidden_delay',     $poll_hidden_delay);
     update_option('kkchat_poll_hot_interval',     $poll_hot_interval);
@@ -73,6 +77,8 @@ function kkchat_admin_settings_page() {
   $v_min_interval_seconds  = (int)get_option('kkchat_min_interval_seconds', 3);
   $v_dupe_autokick_minutes = (int)get_option('kkchat_dupe_autokick_minutes', 1);
   $v_dedupe_window         = (int)get_option('kkchat_dedupe_window', 10);
+  $v_report_autoban_threshold   = (int) get_option('kkchat_report_autoban_threshold', 0);
+  $v_report_autoban_window_days = (int) get_option('kkchat_report_autoban_window_days', 0);
   $v_poll_hidden_threshold = (int)get_option('kkchat_poll_hidden_threshold', 90);
   $v_poll_hidden_delay     = (int)get_option('kkchat_poll_hidden_delay', 30);
   $v_poll_hot_interval     = (int)get_option('kkchat_poll_hot_interval', 4);
@@ -204,6 +210,23 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="dupe_autokick_minutes" name="dupe_autokick_minutes" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_dupe_autokick_minutes; ?>"> minuter
             <p class="description">0 = av. Annars kickas användaren i så här många minuter vid dubblett-spam.</p>
+          </td>
+        </tr>
+      </table>
+      <h2>Rapporter</h2>
+      <table class="form-table">
+        <tr>
+          <th><label for="report_autoban_threshold">Auto-IP-ban – tröskel</label></th>
+          <td>
+            <input id="report_autoban_threshold" name="report_autoban_threshold" type="number" class="small-text" min="0" step="1" value="<?php echo (int) $v_report_autoban_threshold; ?>">
+            <p class="description">Antal unika anmälare som krävs för att blockera IP-adressen automatiskt (0 = av).</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="report_autoban_window_days">Auto-IP-ban – fönster</label></th>
+          <td>
+            <input id="report_autoban_window_days" name="report_autoban_window_days" type="number" class="small-text" min="0" step="1" value="<?php echo (int) $v_report_autoban_window_days; ?>"> dagar
+            <p class="description">Tidsfönster i hela dagar som räknas när rapporter summeras (0 = av).</p>
           </td>
         </tr>
       </table>

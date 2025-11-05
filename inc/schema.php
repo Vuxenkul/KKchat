@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '11');
+  define('KKCHAT_DB_VERSION', '12');
 }
 
 /**
@@ -22,6 +22,8 @@ function kkchat_activate() {
     'kkchat_min_interval_seconds'  => 3,
     'kkchat_dupe_autokick_minutes' => 1,
     'kkchat_dedupe_window'         => 10,
+    'kkchat_report_autoban_threshold' => 0,
+    'kkchat_report_autoban_window_days' => 0,
   ] as $k => $def) {
     if (get_option($k) === false) add_option($k, $def);
   }
@@ -163,13 +165,15 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `reported_name` VARCHAR(64) NOT NULL,
     `reported_ip` VARCHAR(45) NULL,
     `reason` TEXT NOT NULL,
+    `reported_ip_key` VARCHAR(64) NULL,
     `status` ENUM('open','resolved') NOT NULL DEFAULT 'open',
     `resolved_at` INT UNSIGNED DEFAULT NULL,
     `resolved_by` VARCHAR(64) DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `idx_status_created` (`status`,`created_at`),
     KEY `idx_reported_id` (`reported_id`),
-    KEY `idx_reporter_id` (`reporter_id`)
+    KEY `idx_reporter_id` (`reporter_id`),
+    KEY `idx_reported_ip_key_created` (`reported_ip_key`,`created_at`)
   ) $charset;";
 
   // Per-user blocks (matches kkchat_block_* helpers)
@@ -335,6 +339,38 @@ function kkchat_maybe_migrate(){
     }
     if (kkchat_column_exists($t['banners'], 'next_run') && !kkchat_column_is_nullable($t['banners'], 'next_run')) {
       $wpdb->query("ALTER TABLE `{$t['banners']}` MODIFY `next_run` INT UNSIGNED NULL");
+    }
+  }
+
+  if (kkchat_table_exists($t['reports'])) {
+    if (!kkchat_column_exists($t['reports'], 'reported_ip_key')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
+    }
+
+    $has_idx = (bool) $wpdb->get_var($wpdb->prepare(
+      "SELECT 1 FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME=%s AND INDEX_NAME=%s LIMIT 1",
+      $t['reports'],
+      'idx_reported_ip_key_created'
+    ));
+    if (!$has_idx) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD KEY `idx_reported_ip_key_created` (`reported_ip_key`,`created_at`)");
+    }
+
+    // Backfill normalization key for existing rows
+    $ips = $wpdb->get_col("SELECT DISTINCT reported_ip FROM {$t['reports']} WHERE reported_ip <> '' AND (reported_ip_key IS NULL OR reported_ip_key = '')");
+    if ($ips) {
+      foreach ($ips as $rawIp) {
+        $key = kkchat_ip_ban_key($rawIp);
+        if ($key) {
+          $wpdb->update(
+            $t['reports'],
+            ['reported_ip_key' => $key],
+            ['reported_ip' => $rawIp],
+            ['%s'],
+            ['%s']
+          );
+        }
+      }
     }
   }
 
@@ -813,13 +849,15 @@ function kkchat_maybe_upgrade_schema() {
       `reported_name` VARCHAR(64) NOT NULL,
       `reported_ip` VARCHAR(45) NULL,
       `reason` TEXT NOT NULL,
+      `reported_ip_key` VARCHAR(64) NULL,
       `status` ENUM('open','resolved') NOT NULL DEFAULT 'open',
       `resolved_at` INT UNSIGNED DEFAULT NULL,
       `resolved_by` VARCHAR(64) DEFAULT NULL,
       PRIMARY KEY (`id`),
       KEY `idx_status_created` (`status`,`created_at`),
       KEY `idx_reported_id` (`reported_id`),
-      KEY `idx_reporter_id` (`reporter_id`)
+      KEY `idx_reporter_id` (`reporter_id`),
+      KEY `idx_reported_ip_key_created` (`reported_ip_key`,`created_at`)
     ) $charset;";
     dbDelta($sql8);
   } else {
@@ -827,6 +865,28 @@ function kkchat_maybe_upgrade_schema() {
     if (!$has_resolved_at) { @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `resolved_at` INT UNSIGNED DEFAULT NULL"); }
     $has_resolved_by = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'resolved_by'");
     if (!$has_resolved_by) { @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `resolved_by` VARCHAR(64) DEFAULT NULL"); }
+    $has_reported_ip_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reported_ip_key'");
+    if (!$has_reported_ip_key) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
+    }
+    if (!$has_index($t['reports'], 'idx_reported_ip_key_created')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD KEY `idx_reported_ip_key_created` (`reported_ip_key`,`created_at`)");
+    }
+    $needs_backfill = $wpdb->get_col("SELECT DISTINCT reported_ip FROM {$t['reports']} WHERE reported_ip <> '' AND (reported_ip_key IS NULL OR reported_ip_key = '')");
+    if ($needs_backfill) {
+      foreach ($needs_backfill as $rawIp) {
+        $key = kkchat_ip_ban_key($rawIp);
+        if ($key) {
+          @ $wpdb->update(
+            $t['reports'],
+            ['reported_ip_key' => $key],
+            ['reported_ip' => $rawIp],
+            ['%s'],
+            ['%s']
+          );
+        }
+      }
+    }
   }
 
   // user_blocks
