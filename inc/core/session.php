@@ -105,9 +105,11 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
         $ip      = kkchat_client_ip();
         $wp_user = kkchat_current_wp_username() ?: null;
 
+        $is_hidden = !empty($_SESSION['kkchat_auto_hidden']) ? 1 : 0;
+
         $wpdb->query($wpdb->prepare(
-            "INSERT INTO {$t['users']} (name, name_lc, gender, last_seen, ip, wp_username)
-       VALUES (%s, %s, %s, %d, %s, %s)
+            "INSERT INTO {$t['users']} (name, name_lc, gender, last_seen, ip, wp_username, is_hidden)
+       VALUES (%s, %s, %s, %d, %s, %s, %d)
        ON DUPLICATE KEY UPDATE
        id = LAST_INSERT_ID(id),
          gender = VALUES(gender),
@@ -119,7 +121,8 @@ function kkchat_touch_active_user(bool $refresh_presence = true, bool $refresh_s
             $gender,
             $now,
             $ip,
-            $wp_user
+            $wp_user,
+            $is_hidden
         ));
 
         $id = (int) $wpdb->insert_id;

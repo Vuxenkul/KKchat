@@ -137,6 +137,8 @@ register_rest_route($ns, '/admin/visibility', [
       }
     }
 
+    $_SESSION['kkchat_auto_hidden'] = $target ? 1 : 0;
+
     kkchat_json(['ok' => true, 'hidden' => $target]);
   },
   'permission_callback' => '__return_true',

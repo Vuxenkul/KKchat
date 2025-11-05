@@ -31,6 +31,7 @@ function kkchat_admin_settings_page() {
     $poll_slow_after       = max($poll_medium_after, (int)($_POST['poll_slow_after'] ?? 5));
     $poll_extra_2g         = max(0, (int)($_POST['poll_extra_2g'] ?? 20));
     $poll_extra_3g         = max(0, (int)($_POST['poll_extra_3g'] ?? 10));
+    $admin_auto_incognito  = !empty($_POST['admin_auto_incognito']) ? 1 : 0;
 
     $poll_medium_interval  = max($poll_hot_interval, $poll_medium_interval);
     $poll_slow_interval    = max($poll_medium_interval, $poll_slow_interval);
@@ -55,6 +56,7 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_poll_slow_after',       $poll_slow_after);
     update_option('kkchat_poll_extra_2g',         $poll_extra_2g);
     update_option('kkchat_poll_extra_3g',         $poll_extra_3g);
+    update_option('kkchat_admin_auto_incognito',  $admin_auto_incognito);
 
     echo '<div class="updated"><p>Inställningar sparade.</p></div>';
   }
@@ -80,6 +82,7 @@ function kkchat_admin_settings_page() {
   $v_poll_slow_after       = (int)get_option('kkchat_poll_slow_after', 5);
   $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
   $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
+  $v_admin_auto_incognito  = (int)get_option('kkchat_admin_auto_incognito', 0);
 
   $sync_metrics_defaults = [
     'total_requests'     => 0,
@@ -267,6 +270,16 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="poll_extra_3g" name="poll_extra_3g" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_extra_3g; ?>"> sekunder
             <p class="description">Addera så här många sekunder om anslutningen är 3G.</p>
+          </td>
+        </tr>
+      </table>
+      <h2>Administratörer</h2>
+      <table class="form-table">
+        <tr>
+          <th><label for="admin_auto_incognito">Automatiskt incognito-läge</label></th>
+          <td>
+            <label><input id="admin_auto_incognito" name="admin_auto_incognito" type="checkbox" value="1" <?php checked($v_admin_auto_incognito, 1); ?>> Logga in administratörer som dolda</label>
+            <p class="description">Aktivera för att låta administratörer starta sessioner som gömda i användarlistan. De kan fortfarande växla synlighet manuellt i appen.</p>
           </td>
         </tr>
       </table>
