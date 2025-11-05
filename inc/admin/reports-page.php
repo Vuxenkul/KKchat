@@ -5,8 +5,8 @@ function kkchat_admin_reports_page() {
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
   $nonce = 'kkchat_reports';
-  $auto_threshold   = max(0, (int) get_option('kkchat_report_autoban_threshold', 0));
-  $auto_window_days = max(0, (int) get_option('kkchat_report_autoban_window_days', 0));
+  $auto_threshold   = kkchat_report_autoban_threshold();
+  $auto_window_days = kkchat_report_autoban_window_days();
 
   $build_block_map = static function(array $ips) use ($wpdb, $t) {
     $blockedMap = [];

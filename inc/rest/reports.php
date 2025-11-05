@@ -42,8 +42,8 @@ if (!defined('ABSPATH')) exit;
       ], ['%d','%d','%s','%s','%d','%s','%s','%s','%s','%s']);
 
       if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
-      $threshold    = max(0, (int) get_option('kkchat_report_autoban_threshold', 0));
-      $window_days  = max(0, (int) get_option('kkchat_report_autoban_window_days', 0));
+      $threshold    = kkchat_report_autoban_threshold();
+      $window_days  = kkchat_report_autoban_window_days();
       $window_secs  = ($window_days > 0) ? (int) ($window_days * (defined('DAY_IN_SECONDS') ? DAY_IN_SECONDS : 86400)) : 0;
 
       if ($reported_ip_key && $threshold > 0 && $window_secs > 0) {
