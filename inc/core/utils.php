@@ -271,6 +271,33 @@ function kkchat_is_ipv6(string $ip): bool {
     return (bool) filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6);
 }
 
+function kkchat_normalize_ip_for_lookup(string $ip): string {
+    $ip = preg_replace('~[^0-9a-fA-F:\\.]~', '', trim($ip));
+    if ($ip === '') {
+        return '';
+    }
+
+    if (kkchat_is_ipv4($ip)) {
+        return $ip;
+    }
+
+    if (kkchat_is_ipv6($ip)) {
+        if (function_exists('inet_pton') && function_exists('inet_ntop')) {
+            $packed = @inet_pton($ip);
+            if ($packed !== false) {
+                $decoded = @inet_ntop($packed);
+                if ($decoded !== false) {
+                    $ip = $decoded;
+                }
+            }
+        }
+
+        return strtolower($ip);
+    }
+
+    return '';
+}
+
 function kkchat_ipv6_prefix64(string $ip): ?string {
     $bin = @inet_pton($ip);
     if ($bin === false || strlen($bin) !== 16) {
@@ -298,4 +325,130 @@ function kkchat_ip_ban_key(?string $ip): ?string {
         return kkchat_ipv6_prefix64($ip) ?: $ip;
     }
     return $ip;
+}
+
+function kkchat_tor_exit_cache_key(): string {
+    return 'kkchat_tor_exit_ips';
+}
+
+function kkchat_tor_exit_cache_ttl(): int {
+    $base = defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60;
+    $default = 45 * $base;
+    $ttl = (int) apply_filters('kkchat_tor_exit_cache_ttl', $default);
+    if ($ttl < $base) {
+        $ttl = $base;
+    }
+    return $ttl;
+}
+
+function kkchat_tor_exit_cache_failure_ttl(): int {
+    $ttl = (int) apply_filters('kkchat_tor_exit_cache_failure_ttl', 10 * (defined('MINUTE_IN_SECONDS') ? MINUTE_IN_SECONDS : 60));
+    if ($ttl < 60) {
+        $ttl = 60;
+    }
+    return $ttl;
+}
+
+function kkchat_tor_exit_source_url(): string {
+    return (string) apply_filters(
+        'kkchat_tor_exit_source_url',
+        'https://onionoo.torproject.org/details?type=relay&running=true&flag=exit&fields=exit_addresses'
+    );
+}
+
+function kkchat_tor_exit_normalize_list(array $ips): array {
+    $map = [];
+    foreach ($ips as $ip) {
+        $normalized = kkchat_normalize_ip_for_lookup((string) $ip);
+        if ($normalized !== '') {
+            $map[$normalized] = true;
+        }
+    }
+
+    return array_keys($map);
+}
+
+function kkchat_fetch_tor_exit_ips(): array {
+    if (!function_exists('wp_remote_get')) {
+        return [];
+    }
+
+    $response = wp_remote_get(kkchat_tor_exit_source_url(), [
+        'timeout'    => 15,
+        'user-agent' => sprintf(
+            'KKchat Tor Exit Fetch (+%s)',
+            function_exists('home_url') ? home_url('/') : (function_exists('site_url') ? site_url('/') : '')
+        ),
+    ]);
+
+    if (is_wp_error($response)) {
+        return [];
+    }
+
+    $code = (int) wp_remote_retrieve_response_code($response);
+    if ($code !== 200) {
+        return [];
+    }
+
+    $body = (string) wp_remote_retrieve_body($response);
+    $json = json_decode($body, true);
+    if (!is_array($json)) {
+        return [];
+    }
+
+    $relays = $json['relays'] ?? [];
+    if (!is_array($relays)) {
+        return [];
+    }
+
+    $ips = [];
+    foreach ($relays as $relay) {
+        if (empty($relay['exit_addresses']) || !is_array($relay['exit_addresses'])) {
+            continue;
+        }
+        foreach ($relay['exit_addresses'] as $address) {
+            $normalized = kkchat_normalize_ip_for_lookup((string) $address);
+            if ($normalized !== '') {
+                $ips[$normalized] = true;
+            }
+        }
+    }
+
+    return array_keys($ips);
+}
+
+function kkchat_get_tor_exit_ips(bool $force_refresh = false): array {
+    static $cache = null;
+    if (!$force_refresh && is_array($cache)) {
+        return $cache;
+    }
+
+    $key = kkchat_tor_exit_cache_key();
+
+    if (!$force_refresh) {
+        $stored = get_transient($key);
+        if (is_array($stored)) {
+            return $cache = kkchat_tor_exit_normalize_list($stored);
+        }
+    }
+
+    $ips = kkchat_fetch_tor_exit_ips();
+    if (!empty($ips)) {
+        set_transient($key, $ips, kkchat_tor_exit_cache_ttl());
+        return $cache = $ips;
+    }
+
+    $cache = [];
+    set_transient($key, $cache, kkchat_tor_exit_cache_failure_ttl());
+    return $cache;
+}
+
+function kkchat_is_tor_exit_ip(?string $ip): bool {
+    $normalized = kkchat_normalize_ip_for_lookup((string) $ip);
+    if ($normalized === '') {
+        return false;
+    }
+
+    $list = kkchat_get_tor_exit_ips();
+    return in_array($normalized, $list, true);
 }

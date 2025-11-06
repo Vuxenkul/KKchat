@@ -40,6 +40,10 @@ if (!defined('ABSPATH')) exit;
 
       // Check moderation blocks BEFORE inserting presence
       $ip = kkchat_client_ip();
+      if (kkchat_is_tor_exit_ip($ip)) {
+        kkchat_json(['ok'=>false,'err'=>'Login failed. Try a different browser.'], 403);
+      }
+
       $block = kkchat_moderation_block_for(0, $nick, $wp_username, $ip);
       if ($block) {
         if ($block['type']==='ipban') kkchat_json(['ok'=>false,'err'=>'ip_banned','cause'=>$block['row']['cause']??''], 403);
