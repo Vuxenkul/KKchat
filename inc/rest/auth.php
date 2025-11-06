@@ -46,8 +46,9 @@ if (!defined('ABSPATH')) exit;
 
       $block = kkchat_moderation_block_for(0, $nick, $wp_username, $ip);
       if ($block) {
-        if ($block['type']==='ipban') kkchat_json(['ok'=>false,'err'=>'ip_banned','cause'=>$block['row']['cause']??''], 403);
-        if ($block['type']==='kick')  kkchat_json(['ok'=>false,'err'=>'kicked','cause'=>$block['row']['cause']??'', 'until'=>$block['row']['expires_at']??null], 403);
+        $block_id = isset($block['row']['id']) ? (int)$block['row']['id'] : null;
+        if ($block['type']==='ipban') kkchat_json(['ok'=>false,'err'=>'ip_banned','cause'=>$block['row']['cause']??'', 'block_id'=>$block_id], 403);
+        if ($block['type']==='kick')  kkchat_json(['ok'=>false,'err'=>'kicked','cause'=>$block['row']['cause']??'', 'until'=>$block['row']['expires_at']??null, 'block_id'=>$block_id], 403);
       }
 
       global $wpdb; $t = kkchat_tables();

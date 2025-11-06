@@ -2121,10 +2121,13 @@ function applyCache(key){
     if(!r.ok){
       let js={}; try{ js = await r.json(); }catch(_){}
       if (js.err === 'kicked' || js.err === 'ip_banned') {
-      alert(js.err === 'ip_banned' ? 'Regelbrott - Bannad' : 'Regelbrott - Kickad');
-      location.reload();
-      return [];
-    }
+        const base = js.err === 'ip_banned' ? 'Regelbrott - Bannad' : 'Regelbrott - Kickad';
+        const code = Number(js.block_id);
+        const suffix = (Number.isFinite(code) && code > 0) ? ` (Felkod: ${code})` : '';
+        alert(base + suffix);
+        location.reload();
+        return [];
+      }
 
       throw new Error('fetch '+url);
     }
