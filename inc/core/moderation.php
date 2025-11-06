@@ -57,11 +57,12 @@ function kkchat_assert_not_blocked_or_fail() {
     $ip          = kkchat_client_ip();
     $b           = kkchat_moderation_block_for($uid, $name, $wp_username, $ip);
     if ($b) {
+        $block_id = isset($b['row']['id']) ? (int) $b['row']['id'] : null;
         if ($b['type'] === 'ipban') {
-            kkchat_json(['ok' => false, 'err' => 'ip_banned', 'cause' => $b['row']['cause'] ?? ''], 403);
+            kkchat_json(['ok' => false, 'err' => 'ip_banned', 'cause' => $b['row']['cause'] ?? '', 'block_id' => $block_id], 403);
         }
         if ($b['type'] === 'kick') {
-            kkchat_json(['ok' => false, 'err' => 'kicked', 'cause' => $b['row']['cause'] ?? '', 'until' => $b['row']['expires_at'] ?? null], 403);
+            kkchat_json(['ok' => false, 'err' => 'kicked', 'cause' => $b['row']['cause'] ?? '', 'until' => $b['row']['expires_at'] ?? null, 'block_id' => $block_id], 403);
         }
     }
 }

@@ -109,10 +109,17 @@ f.addEventListener('submit', async (ev)=>{
     }
 
     // Error: show message and re-enable form
-    e.textContent =
+    let msg =
       js.err === 'ip_banned' ? 'Regelbrott - Bannad' :
       js.err === 'kicked'    ? 'Regelbrott - Kickad' :
       (js.err || 'Ogiltigt val');
+    if (js.err === 'ip_banned' || js.err === 'kicked') {
+      const code = Number(js.block_id);
+      if (Number.isFinite(code) && code > 0) {
+        msg += ` (Felkod: ${code})`;
+      }
+    }
+    e.textContent = msg;
     e.style.display = 'block';
     setSubmittingState(false);
 
