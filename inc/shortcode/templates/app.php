@@ -467,6 +467,7 @@
   const reportListEl    = document.getElementById('kk-reportList');
   const reportRefreshBtn= document.getElementById('kk-reportRefresh');
   const countReportsEl  = document.getElementById('kk-countReports');
+  const REPORT_REASON_PLACEHOLDER = 'Skriv anledning här';
 
   // State for reports
   let OPEN_REPORTS_COUNT = 0;
@@ -3298,10 +3299,10 @@ userListEl.addEventListener('click', async (e)=>{
   if (rep) {
     const id = +rep.dataset.report;
     const whom = nameById(id);
-    let reason = prompt(`Ange anledning till rapporten för ${whom}:`, '');
-    if (reason == null) return; 
+    let reason = prompt(`Ange anledning till rapporten för ${whom}:`, REPORT_REASON_PLACEHOLDER);
+    if (reason == null) return;
     reason = (reason || '').trim();
-    if (!reason) { alert('Du måste ange en anledning.'); return; }
+    if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
 
     const fd = new FormData();
     fd.append('csrf_token', CSRF);
@@ -3961,10 +3962,10 @@ actDm?.addEventListener('click', ()=>{
   closeMsgSheet();
 });
 actReport?.addEventListener('click', async ()=>{
-  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, '');
+  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, REPORT_REASON_PLACEHOLDER);
   if (reason == null) return;
   reason = (reason || '').trim();
-  if (!reason) { alert('Du måste ange en anledning.'); return; }
+  if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
   const fd = new FormData();
   fd.append('csrf_token', CSRF);
   fd.append('reported_id', String(MSG_TARGET.id));
@@ -4009,10 +4010,10 @@ imgActDm?.addEventListener('click', ()=>{
 });
 
 imgActReport?.addEventListener('click', async ()=>{
-  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, '');
+  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, REPORT_REASON_PLACEHOLDER);
   if (reason == null) return;
   reason = (reason || '').trim();
-  if (!reason) { alert('Du måste ange en anledning.'); return; }
+  if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
 
   const fd = new FormData();
   fd.append('csrf_token', CSRF);
