@@ -1802,8 +1802,9 @@ async function doLogout(){
   let JOINED = loadJoined();
 
     // --- Local (browser-only) mute state ---
-    const MUTE_ROOMS_KEY = 'kk_muted_rooms_v1';
-    const MUTE_DMS_KEY   = 'kk_muted_dms_v1';
+    const MUTE_ROOMS_KEY      = 'kk_muted_rooms_v1';
+    const MUTE_DMS_KEY        = 'kk_muted_dms_v1';
+    const MUTE_NEW_CHATS_KEY  = 'kk_mute_new_chats_v1';
     
     function loadSet(key){
       try{ const raw = localStorage.getItem(key)||'[]';
@@ -1814,8 +1815,53 @@ async function doLogout(){
       try{ localStorage.setItem(key, JSON.stringify([...set])); }catch(_){}
     }
     
-    let MUTED_ROOMS = loadSet(MUTE_ROOMS_KEY);
-    let MUTED_DMS   = loadSet(MUTE_DMS_KEY);
+    let MUTED_ROOMS     = loadSet(MUTE_ROOMS_KEY);
+    let MUTED_DMS       = loadSet(MUTE_DMS_KEY);
+    let MUTE_NEW_CHATS  = (localStorage.getItem(MUTE_NEW_CHATS_KEY) || '0') === '1';
+
+    function applyMutePreferenceToChat(kind, identifier){
+      if (kind === 'room') {
+        const slug = String(identifier || '').trim();
+        if (!slug) return;
+        if (MUTE_NEW_CHATS) {
+          MUTED_ROOMS.add(slug);
+        } else {
+          MUTED_ROOMS.delete(slug);
+        }
+        return;
+      }
+
+      if (kind === 'dm') {
+        const id = Number(identifier);
+        if (!Number.isFinite(id)) return;
+        if (MUTE_NEW_CHATS) {
+          MUTED_DMS.add(id);
+        } else {
+          MUTED_DMS.delete(id);
+        }
+      }
+    }
+
+    function setMuteNewChats(on){
+      SETTINGS_OPEN = false;
+      const next = !!on;
+      if (MUTE_NEW_CHATS === next) return;
+      MUTE_NEW_CHATS = next;
+      try {
+        localStorage.setItem(MUTE_NEW_CHATS_KEY, MUTE_NEW_CHATS ? '1' : '0');
+      } catch (_) {}
+
+      for (const slug of JOINED) {
+        applyMutePreferenceToChat('room', slug);
+      }
+      for (const id of ACTIVE_DMS) {
+        applyMutePreferenceToChat('dm', id);
+      }
+
+      saveSet(MUTE_ROOMS_KEY, MUTED_ROOMS);
+      saveSet(MUTE_DMS_KEY, MUTED_DMS);
+      renderRoomTabs();
+    }
     
     function isRoomMuted(slug){ return !!slug && MUTED_ROOMS.has(String(slug)); }
     function isDmMuted(id){ return Number.isFinite(+id) && MUTED_DMS.has(+id); }
@@ -1896,14 +1942,22 @@ async function doLogout(){
     }
 
 
-  const DM_KEY = 'kk_active_dms_v1';
+  const DM_KEY       = 'kk_active_dms_v1';
+  const DM_SEEN_KEY  = 'kk_seen_dms_v1';
   function loadDMActive(){
     try{ const raw = localStorage.getItem(DM_KEY)||'[]'; const arr = JSON.parse(raw); return new Set(Array.isArray(arr)?arr:[]); }catch(_){ return new Set(); }
   }
   function saveDMActive(set){
     try{ localStorage.setItem(DM_KEY, JSON.stringify([...set])); }catch(_){}
   }
+  function loadDMSeen(){
+    try{ const raw = localStorage.getItem(DM_SEEN_KEY)||'[]'; const arr = JSON.parse(raw); return new Set(Array.isArray(arr)?arr:[]); }catch(_){ return new Set(); }
+  }
+  function saveDMSeen(set){
+    try{ localStorage.setItem(DM_SEEN_KEY, JSON.stringify([...set])); }catch(_){}
+  }
   let ACTIVE_DMS = loadDMActive();
+  let SEEN_DMS   = loadDMSeen();
   let INITIAL_DM_PREFETCH_DONE = false;
 
   let BLOCKED = new Set();
@@ -3632,6 +3686,27 @@ function applySyncPayload(js){
       const dmIncr = Object.keys(UNREAD_PER)
        .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
 
+      let seenChanged = false;
+      let muteSetChanged = false;
+      dmIncr.forEach(id => {
+        const numericId = Number(id);
+        if (!Number.isFinite(numericId)) return;
+        if (SEEN_DMS.has(numericId)) return;
+        SEEN_DMS.add(numericId);
+        seenChanged = true;
+        const wasMuted = MUTED_DMS.has(numericId);
+        applyMutePreferenceToChat('dm', numericId);
+        if (wasMuted !== MUTED_DMS.has(numericId)) {
+          muteSetChanged = true;
+        }
+      });
+      if (seenChanged) {
+        saveDMSeen(SEEN_DMS);
+      }
+      if (muteSetChanged) {
+        saveSet(MUTE_DMS_KEY, MUTED_DMS);
+      }
+
       // Prefetch newly-bumped sources so switching feels instant.
       const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
       const isActiveDM   = (id)   => currentDM != null && Number(id) === Number(currentDM);
@@ -3681,6 +3756,12 @@ function applySyncPayload(js){
         if (!ACTIVE_DMS.has(id)) {
           ACTIVE_DMS.add(id);
           saveDMActive(ACTIVE_DMS);
+          if (!SEEN_DMS.has(id)) {
+            SEEN_DMS.add(id);
+            saveDMSeen(SEEN_DMS);
+          }
+          applyMutePreferenceToChat('dm', id);
+          saveSet(MUTE_DMS_KEY, MUTED_DMS);
           // reflect it in the UI immediately
           try { renderDMSidebar(); } catch(_){}
           try { renderRoomTabs(); } catch(_){}
@@ -4106,6 +4187,9 @@ function renderRoomTabs(){
   const allMuteLabel = allMuted
     ? `${iconMarkup('notifications')} Slå på ljud för alla`
     : `${iconMarkup('notifications_off')} Tysta alla`;
+  const muteNewChatsLabel = MUTE_NEW_CHATS
+    ? `${iconMarkup('notifications')} Slå på ljud för nya chattar`
+    : `${iconMarkup('notifications_off')} Tysta nya chattar`;
 
   const adminMenu = !HAS_ADMIN_TOOLS ? '' : `
     <div class="tab-settings tab-settings-admin${ADMIN_MENU_OPEN ? ' is-open' : ''}" data-admin-root>
@@ -4138,6 +4222,7 @@ function renderRoomTabs(){
         <button type="button" class="tab-settings-item" data-settings-blur="1" role="menuitem">${blurLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-autoscroll="1" role="menuitem">${autoLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
+        <button type="button" class="tab-settings-item" data-settings-mute-new="1" role="menuitem">${muteNewChatsLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-all="1" role="menuitem">${allMuteLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-logout="1" role="menuitem">${iconMarkup('logout')} Logga ut</button>
       </div>
@@ -4251,6 +4336,14 @@ roomTabs.addEventListener('click', async e => {
     e.stopPropagation();
     SETTINGS_OPEN = false;
     toggleActiveChatMute();
+    return;
+  }
+
+  const muteNewBtn = e.target.closest('[data-settings-mute-new]');
+  if (muteNewBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    setMuteNewChats(!MUTE_NEW_CHATS);
     return;
   }
 
@@ -4426,6 +4519,8 @@ roomsListEl?.addEventListener('click', async (e) => {
     const slug = j.dataset.join;
     JOINED.add(slug);
     saveJoined(JOINED);
+    applyMutePreferenceToChat('room', slug);
+    saveSet(MUTE_ROOMS_KEY, MUTED_ROOMS);
     renderRoomsSidebar();
     renderRoomTabs();
     updateLeftCounts();
@@ -4757,11 +4852,21 @@ async function openDM(id) {
   stashActive();
 
   // Ensure the DM appears in the sidebar/tabs (don't render yet)
-  ACTIVE_DMS.add(Number(id));
+  const numericId = Number(id);
+  const alreadyActive = ACTIVE_DMS.has(numericId);
+  ACTIVE_DMS.add(numericId);
   saveDMActive(ACTIVE_DMS);
+  if (!alreadyActive) {
+    if (!SEEN_DMS.has(numericId)) {
+      SEEN_DMS.add(numericId);
+      saveDMSeen(SEEN_DMS);
+    }
+    applyMutePreferenceToChat('dm', numericId);
+    saveSet(MUTE_DMS_KEY, MUTED_DMS);
+  }
 
   // 👉 Set state FIRST so renderers know which tab is active
-  currentDM = Number(id);
+  currentDM = numericId;
   LAST_OPEN_DM = currentDM;
   UNREAD_PER[currentDM] = 0;
 
