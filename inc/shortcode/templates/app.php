@@ -1942,14 +1942,22 @@ async function doLogout(){
     }
 
 
-  const DM_KEY = 'kk_active_dms_v1';
+  const DM_KEY       = 'kk_active_dms_v1';
+  const DM_SEEN_KEY  = 'kk_seen_dms_v1';
   function loadDMActive(){
     try{ const raw = localStorage.getItem(DM_KEY)||'[]'; const arr = JSON.parse(raw); return new Set(Array.isArray(arr)?arr:[]); }catch(_){ return new Set(); }
   }
   function saveDMActive(set){
     try{ localStorage.setItem(DM_KEY, JSON.stringify([...set])); }catch(_){}
   }
+  function loadDMSeen(){
+    try{ const raw = localStorage.getItem(DM_SEEN_KEY)||'[]'; const arr = JSON.parse(raw); return new Set(Array.isArray(arr)?arr:[]); }catch(_){ return new Set(); }
+  }
+  function saveDMSeen(set){
+    try{ localStorage.setItem(DM_SEEN_KEY, JSON.stringify([...set])); }catch(_){}
+  }
   let ACTIVE_DMS = loadDMActive();
+  let SEEN_DMS   = loadDMSeen();
   let INITIAL_DM_PREFETCH_DONE = false;
 
   let BLOCKED = new Set();
@@ -3678,6 +3686,27 @@ function applySyncPayload(js){
       const dmIncr = Object.keys(UNREAD_PER)
        .filter(id => !isBlocked(+id) && (UNREAD_PER[id] || 0) > (prevDMs[id] || 0));
 
+      let seenChanged = false;
+      let muteSetChanged = false;
+      dmIncr.forEach(id => {
+        const numericId = Number(id);
+        if (!Number.isFinite(numericId)) return;
+        if (SEEN_DMS.has(numericId)) return;
+        SEEN_DMS.add(numericId);
+        seenChanged = true;
+        const wasMuted = MUTED_DMS.has(numericId);
+        applyMutePreferenceToChat('dm', numericId);
+        if (wasMuted !== MUTED_DMS.has(numericId)) {
+          muteSetChanged = true;
+        }
+      });
+      if (seenChanged) {
+        saveDMSeen(SEEN_DMS);
+      }
+      if (muteSetChanged) {
+        saveSet(MUTE_DMS_KEY, MUTED_DMS);
+      }
+
       // Prefetch newly-bumped sources so switching feels instant.
       const isActiveRoom = (slug) => currentDM == null && slug === currentRoom;
       const isActiveDM   = (id)   => currentDM != null && Number(id) === Number(currentDM);
@@ -3727,6 +3756,10 @@ function applySyncPayload(js){
         if (!ACTIVE_DMS.has(id)) {
           ACTIVE_DMS.add(id);
           saveDMActive(ACTIVE_DMS);
+          if (!SEEN_DMS.has(id)) {
+            SEEN_DMS.add(id);
+            saveDMSeen(SEEN_DMS);
+          }
           applyMutePreferenceToChat('dm', id);
           saveSet(MUTE_DMS_KEY, MUTED_DMS);
           // reflect it in the UI immediately
@@ -4824,6 +4857,10 @@ async function openDM(id) {
   ACTIVE_DMS.add(numericId);
   saveDMActive(ACTIVE_DMS);
   if (!alreadyActive) {
+    if (!SEEN_DMS.has(numericId)) {
+      SEEN_DMS.add(numericId);
+      saveDMSeen(SEEN_DMS);
+    }
     applyMutePreferenceToChat('dm', numericId);
     saveSet(MUTE_DMS_KEY, MUTED_DMS);
   }
