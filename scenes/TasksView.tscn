@@ -1,0 +1,152 @@
+[gd_scene load_steps=2 format=4]
+
+[ext_resource path="res://scripts/TasksView.gd" type="Script" id="1"]
+
+[node name="TasksView" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 0.0
+offset_bottom = 0.0
+script = ExtResource( 1 )
+
+[node name="ScrollContainer" type="ScrollContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+scroll_horizontal = false
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+custom_minimum_size = Vector2(0, 600)
+
+[node name="AddTaskPanel" type="Panel" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 0
+custom_minimum_size = Vector2(0, 160)
+
+[node name="AddTaskVBox" type="VBoxContainer" parent="ScrollContainer/VBoxContainer/AddTaskPanel"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offsets = PackedFloat32Array(12, 12, -12, -12)
+separation = 6
+
+[node name="AddTaskLabel" type="Label" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+text = "Add Task"
+
+[node name="NameBox" type="HBoxContainer" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="NameLabel" type="Label" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/NameBox"]
+layout_mode = 2
+text = "Name"
+custom_minimum_size = Vector2(80, 0)
+
+[node name="NameInput" type="LineEdit" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/NameBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "E.g. Morning stretch"
+
+[node name="GroupBox" type="HBoxContainer" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="GroupLabel" type="Label" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/GroupBox"]
+layout_mode = 2
+text = "Group"
+custom_minimum_size = Vector2(80, 0)
+
+[node name="GroupInput" type="LineEdit" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/GroupBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+placeholder_text = "Health, Study, ..."
+
+[node name="ScheduleBox" type="HBoxContainer" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ScheduleLabel" type="Label" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/ScheduleBox"]
+layout_mode = 2
+text = "Schedule"
+custom_minimum_size = Vector2(80, 0)
+
+[node name="ScheduleType" type="OptionButton" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/ScheduleBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="TimesPerWeekBox" type="HBoxContainer" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+visible = false
+
+[node name="TimesLabel" type="Label" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/TimesPerWeekBox"]
+layout_mode = 2
+text = "Times / week"
+custom_minimum_size = Vector2(110, 0)
+
+[node name="TimesInput" type="SpinBox" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/TimesPerWeekBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(120, 0)
+min_value = 1
+max_value = 14
+value = 3
+
+[node name="DifficultyBox" type="HBoxContainer" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="DifficultyLabel" type="Label" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/DifficultyBox"]
+layout_mode = 2
+text = "Difficulty"
+custom_minimum_size = Vector2(80, 0)
+
+[node name="DifficultyOption" type="OptionButton" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox/DifficultyBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="AddTaskButton" type="Button" parent="ScrollContainer/VBoxContainer/AddTaskPanel/AddTaskVBox"]
+layout_mode = 2
+text = "Add Task"
+
+[node name="TodayLabel" type="Label" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+text = "Today's Tasks"
+theme_override_font_sizes/font_size = 22
+
+[node name="TodayTasks" type="VBoxContainer" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+separation = 8
+
+[node name="WeeklyLabel" type="Label" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+text = "Weekly Overview"
+theme_override_font_sizes/font_size = 22
+
+[node name="WeeklyTasks" type="VBoxContainer" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+separation = 8
+
+[node name="TimesLabel" type="Label" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+text = "X / Week Progress"
+theme_override_font_sizes/font_size = 22
+
+[node name="TimesTasks" type="VBoxContainer" parent="ScrollContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+separation = 8
