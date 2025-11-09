@@ -1,0 +1,15 @@
+[gd_resource type="ProjectSettings" load_steps=2 format=4]
+
+[ext_resource path="res://Main.tscn" type="PackedScene" id="1"]
+
+[resource]
+config/name="Habit Evolution: Paleo Edition"
+config/features=PackedStringArray("4.2")
+application/run/main_scene="res://Main.tscn"
+autoload/GameState="*res://scripts/GameState.gd"
+display/window/size/viewport_width=720
+display/window/size/viewport_height=1280
+display/window/stretch/mode="canvas_items"
+display/window/stretch/aspect="expand"
+display/window/handheld/orientation=1
+rendering/renderer/render_loop_enabled=false
