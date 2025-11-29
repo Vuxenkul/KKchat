@@ -133,7 +133,10 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
 
           // Remove presence and block the send
           $wpdb->delete($t['users'], ['id'=>$me_id], ['%d']);
-          kkchat_json(['ok'=>false,'err'=>'auto_moderated','cause'=>$cause], 403);
+          kkchat_json([
+            'ok'    => false,
+            'err'   => 'auto_moderated',
+          ], 403);
         }
       }
       // === end automod ===
@@ -313,7 +316,11 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
 
             unset($_SESSION['kk_dupe'][$key]);
             $wpdb->delete($t['users'], ['id'=>$me_id], ['%d']);
-            kkchat_json(['ok'=>false,'err'=>'auto_moderated','cause'=>$cause], 403);
+            kkchat_json([
+              'ok'    => false,
+              'err'   => 'auto_moderated',
+              'cause' => 'Ditt meddelande kunde inte skickas.',
+            ], 403);
           }
         }
 
