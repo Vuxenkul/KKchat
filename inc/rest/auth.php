@@ -2,12 +2,65 @@
 if (!defined('ABSPATH')) exit;
 
   /* =========================================================
+   *                  Embed origin allowlist
+   * ========================================================= */
+  if (!function_exists('kkchat_allowed_embed_hosts')) {
+    function kkchat_allowed_embed_hosts(): array {
+      $defaults = [];
+
+      $siteHost = wp_parse_url(get_site_url(), PHP_URL_HOST);
+      if (is_string($siteHost) && $siteHost !== '') {
+        $defaults[] = strtolower($siteHost);
+      }
+
+      $defaults[] = 'porrbio.se';
+      $defaults[] = 'www.porrbio.se';
+
+      $hosts = (array) apply_filters('kkchat_allowed_embed_hosts', $defaults);
+
+      $hosts = array_map(function ($h) {
+        return is_string($h) ? strtolower(trim($h)) : '';
+      }, $hosts);
+
+      return array_values(array_filter(array_unique($hosts), function ($h) {
+        return $h !== '';
+      }));
+    }
+  }
+
+  if (!function_exists('kkchat_request_parent_host')) {
+    function kkchat_request_parent_host(): ?string {
+      $candidates = [
+        (string) ($_SERVER['HTTP_ORIGIN']  ?? ''),
+        (string) ($_SERVER['HTTP_REFERER'] ?? ''),
+      ];
+
+      foreach ($candidates as $value) {
+        if ($value === '') continue;
+        $parsed = wp_parse_url($value);
+        if (!is_array($parsed) || empty($parsed['host'])) continue;
+        $host = strtolower((string) $parsed['host']);
+        if ($host !== '') return $host;
+      }
+
+      return null;
+    }
+  }
+
+  /* =========================================================
    *                     AUTH
    * ========================================================= */
 
   register_rest_route($ns, '/login', [
     'methods'  => 'POST',
     'callback' => function (WP_REST_Request $req) {
+      $allowedHosts = kkchat_allowed_embed_hosts();
+      $requestHost  = kkchat_request_parent_host();
+
+      if (!$requestHost || !in_array($requestHost, $allowedHosts, true)) {
+        kkchat_json(['ok'=>false,'err'=>'forbidden_origin'], 403);
+      }
+
       kkchat_check_csrf_or_fail($req);
 
       $gender  = trim((string)$req->get_param('login_gender'));
