@@ -245,6 +245,36 @@
   </div>
 </div>
 
+<!-- Upload confirmation dialog -->
+<div id="kk-uploadConfirm" class="kk-upload-modal" role="dialog" aria-modal="true" aria-labelledby="kk-uploadTitle" aria-hidden="true">
+  <div class="kk-upload-modal__box">
+    <h3 id="kk-uploadTitle">Godkänn uppladdning</h3>
+    <p>Bekräfta att du vill skicka bilden.</p>
+    <label><input type="checkbox" id="kk-uploadIsXxx" checked> Bilden är XXX</label>
+    <div class="kk-upload-modal__actions">
+      <button type="button" id="kk-uploadCancel">Avbryt</button>
+      <button type="button" id="kk-uploadConfirmBtn" class="primary">Godkänn uppladdning</button>
+    </div>
+  </div>
+</div>
+
+<!-- Auto-unblur settings dialog -->
+<div id="kk-unblurModal" class="kk-unblur-modal" role="dialog" aria-modal="true" aria-labelledby="kk-unblurTitle" aria-hidden="true">
+  <div class="kk-unblur-modal__box">
+    <h3 id="kk-unblurTitle">Auto-avblurra bilder från:</h3>
+    <div class="kk-unblur-modal__list">
+      <label><input type="checkbox" value="man" data-unblur-choice> Män</label>
+      <label><input type="checkbox" value="woman" data-unblur-choice> Kvinnor</label>
+      <label><input type="checkbox" value="nonbinary" data-unblur-choice> Icke-binär/Annat</label>
+      <label><input type="checkbox" value="unknown" data-unblur-choice> Okänt/inte angivet</label>
+    </div>
+    <div class="kk-unblur-modal__actions">
+      <button type="button" id="kk-unblurCancel">Stäng</button>
+      <button type="button" id="kk-unblurSave" class="primary">Spara</button>
+    </div>
+  </div>
+</div>
+
     <audio id="kk-notifSound"   src="<?= $audio ?>"         preload="auto"></audio>
     <audio id="kk-mentionSound" src="<?= $mention_audio ?>" preload="auto"></audio>
         <audio id="kk-reportSound"  src="<?= $report_audio ?>"  preload="auto"></audio>
@@ -291,6 +321,14 @@
   const multiTabModal = document.getElementById('kk-multiTabModal');
   const multiTabDesc  = document.getElementById('kk-multiTabDesc');
   const multiTabUseHere = document.getElementById('kk-multiTabUseHere');
+  const uploadConfirm = document.getElementById('kk-uploadConfirm');
+  const uploadIsXxx   = document.getElementById('kk-uploadIsXxx');
+  const uploadConfirmBtn = document.getElementById('kk-uploadConfirmBtn');
+  const uploadCancelBtn  = document.getElementById('kk-uploadCancel');
+  const unblurModal   = document.getElementById('kk-unblurModal');
+  const unblurSave    = document.getElementById('kk-unblurSave');
+  const unblurCancel  = document.getElementById('kk-unblurCancel');
+  const unblurChoices = unblurModal ? Array.from(unblurModal.querySelectorAll('[data-unblur-choice]')) : [];
 
   const MATERIAL_ICON_CLASS = 'material-symbols-rounded';
   function iconMarkup(name, { filled = false } = {}) {
@@ -322,6 +360,46 @@
     ev.preventDefault();
     claimActiveTab({ forceCold: true });
   });
+
+  function openUploadConfirm(){
+    return new Promise(resolve => {
+      if (!uploadConfirm) { resolve({ ok:true, isXxx:true }); return; }
+      if (uploadIsXxx) uploadIsXxx.checked = true;
+      uploadConfirm.setAttribute('open','');
+      uploadConfirm.setAttribute('aria-hidden','false');
+      const cleanup = ()=>{
+        uploadConfirm.removeAttribute('open');
+        uploadConfirm.setAttribute('aria-hidden','true');
+      };
+      const finish = (result)=>{ cleanup(); uploadConfirm?.removeEventListener('click', backdropHandler); resolve(result); };
+      const onConfirm = ()=> finish({ ok:true, isXxx: !!(uploadIsXxx?.checked) });
+      const onCancel = ()=> finish({ ok:false, isXxx: !!(uploadIsXxx?.checked) });
+      const backdropHandler = function(e){ if (e.target === uploadConfirm) { onCancel(); } };
+      uploadConfirmBtn?.addEventListener('click', onConfirm, { once:true });
+      uploadCancelBtn?.addEventListener('click', onCancel, { once:true });
+      uploadConfirm?.addEventListener('click', backdropHandler);
+    });
+  }
+
+  function openUnblurModal(){
+    if (!unblurModal) return;
+    unblurChoices.forEach(chk => { chk.checked = AUTO_UNBLUR.has(chk.value); });
+    unblurModal.setAttribute('open','');
+    unblurModal.setAttribute('aria-hidden','false');
+  }
+  function closeUnblurModal(){
+    if (!unblurModal) return;
+    unblurModal.removeAttribute('open');
+    unblurModal.setAttribute('aria-hidden','true');
+  }
+  unblurSave?.addEventListener('click', ()=>{
+    AUTO_UNBLUR = new Set(unblurChoices.filter(c=>c.checked).map(c=>c.value));
+    saveAutoUnblur();
+    refreshImageBlurStates();
+    closeUnblurModal();
+  });
+  unblurCancel?.addEventListener('click', closeUnblurModal);
+  unblurModal?.addEventListener('click', (e)=>{ if (e.target === unblurModal) closeUnblurModal(); });
 
   const handleActivityEvent = () => noteUserActivity();
   function addActivityListener(target, type, opts){
@@ -1713,6 +1791,16 @@ function playNotifOnce() {
 
     const BLUR_KEY = 'kk_blur_images';
     let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '0') === '1';
+    const AUTO_UNBLUR_KEY = 'kk_unblur_genders';
+    const UNBLURRED_IMAGES = new Set();
+    function loadAutoUnblur(){
+      try { const raw = localStorage.getItem(AUTO_UNBLUR_KEY) || '[]'; const arr = JSON.parse(raw); return new Set(Array.isArray(arr)?arr:[]); }
+      catch(_) { return new Set(); }
+    }
+    let AUTO_UNBLUR = loadAutoUnblur();
+    function saveAutoUnblur(){
+      try { localStorage.setItem(AUTO_UNBLUR_KEY, JSON.stringify([...AUTO_UNBLUR])); } catch(_){}
+    }
     let SETTINGS_OPEN = false;
     let ADMIN_MENU_OPEN = false;
 
@@ -1722,6 +1810,7 @@ function playNotifOnce() {
       IMG_BLUR = !!on;
       localStorage.setItem(BLUR_KEY, IMG_BLUR ? '1' : '0');
       applyBlurClass();
+      refreshImageBlurStates();
       renderRoomTabs();
     }
     applyBlurClass();
@@ -2009,8 +2098,11 @@ function msgToHTML(m){
   if (kind === 'image'){
     const u = String(m.content||'').trim();
     const alt = `Bild från ${sid === ME_ID ? 'dig' : who}`;
+    const blurred = imageShouldStartBlurred(m);
+    const badge = m.is_xxx ? '<span class="imgmsg-badge">XXX</span>' : '';
+    const overlay = `<div class="imgmsg-overlay"${blurred ? '' : ' hidden'}><button type="button" data-img-unblur="${mid}">Visa bild</button></div>`;
     return `<li ${attrs.join(' ')} data-body="${escAttr('[Bild]')}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}>
-      <div class="bubble img">${replyButtonHTML}${replyPreviewHTML}<img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
+      <div class="bubble img">${replyButtonHTML}${replyPreviewHTML}<div class="imgmsg-wrap" data-blurred="${blurred ? '1' : '0'}" data-mid="${mid}" data-sid="${sid}"${m.is_xxx ? ' data-xxx="1"' : ''}>${badge}${overlay}<img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async" data-mid="${mid}" data-sid="${sid}" data-xxx="${m.is_xxx ? 1 : 0}"></div></div>
       ${metaHTML}
     </li>`;
   }
@@ -3134,6 +3226,40 @@ function normalizeUnreadMap(map) {
       const src = `${GENDER_ICON_BASE}${file}`;
       return `<span class="bubble-gender" aria-hidden="true"><img class="bubble-gender-icon" src="${escAttr(src)}" alt="" role="presentation"></span>`;
     }
+    function shouldAutoUnblur(senderId){
+      const key = normalizeGenderKey(genderById(senderId));
+      return AUTO_UNBLUR.has(key);
+    }
+    function imageShouldStartBlurred(msg){
+      const mid = Number(msg?.id || 0);
+      if (UNBLURRED_IMAGES.has(mid)) return false;
+      const sensitive = !!msg?.is_xxx;
+      const senderId = Number(msg?.sender_id || msg?.senderId || 0);
+      if (sensitive && shouldAutoUnblur(senderId)) return false;
+      if (sensitive) return true;
+      return IMG_BLUR;
+    }
+    function markImageUnblurred(messageId){
+      const mid = Number(messageId);
+      if (Number.isFinite(mid)) UNBLURRED_IMAGES.add(mid);
+    }
+    function refreshImageBlurStates(){
+      document.querySelectorAll('.imgmsg-wrap').forEach(wrap => {
+        const img = wrap.querySelector('img.imgmsg');
+        if (!img) return;
+        const mid = Number(img.dataset.mid || wrap.dataset.mid || 0);
+        const sid = Number(img.dataset.sid || wrap.dataset.sid || 0);
+        const isXxx = img.dataset.xxx === '1' || wrap.dataset.xxx === '1';
+        const shouldBlur = (()=>{
+          if (UNBLURRED_IMAGES.has(mid)) return false;
+          if (isXxx) return !shouldAutoUnblur(sid);
+          return IMG_BLUR;
+        })();
+        wrap.dataset.blurred = shouldBlur ? '1' : '0';
+        const overlay = wrap.querySelector('.imgmsg-overlay');
+        if (overlay) overlay.hidden = !shouldBlur;
+      });
+    }
     function isAdminById(id){
   const n = Number(id);
   if (!Number.isFinite(n)) return false;
@@ -4182,6 +4308,7 @@ function renderRoomTabs(){
   const blurLabel = IMG_BLUR
     ? `${iconMarkup('visibility')} Visa bilder`
     : `${iconMarkup('visibility_off')} Censurera bilder`;
+  const autoUnblurLabel = `${iconMarkup('visibility')} Auto-avblurra (kön)`;
 
   const allMuted = allChatsMuted();
   const allMuteLabel = allMuted
@@ -4220,6 +4347,7 @@ function renderRoomTabs(){
            role="menu"
            aria-hidden="${SETTINGS_OPEN ? 'false' : 'true'}">
         <button type="button" class="tab-settings-item" data-settings-blur="1" role="menuitem">${blurLabel}</button>
+        <button type="button" class="tab-settings-item" data-settings-unblur="1" role="menuitem">${autoUnblurLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-autoscroll="1" role="menuitem">${autoLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-new="1" role="menuitem">${muteNewChatsLabel}</button>
@@ -4312,6 +4440,15 @@ roomTabs.addEventListener('click', async e => {
     e.preventDefault();
     e.stopPropagation();
     setImageBlur(!IMG_BLUR);
+    return;
+  }
+
+  const unblurBtn = e.target.closest('[data-settings-unblur]');
+  if (unblurBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    SETTINGS_OPEN = false;
+    openUnblurModal();
     return;
   }
 
@@ -5102,10 +5239,13 @@ async function takeWebcamPhoto(){
     showToast('Komprimerar…');
     file = await compressImageIfNeeded(file);
 
+    const { ok: confirmed, isXxx } = await openUploadConfirm();
+    if (!confirmed) { showToast('Uppladdning avbruten'); return; }
+
     showToast('Laddar bild…');
     const url = await uploadImage(file);
 
-    const ok = await sendImageMessage(url);
+    const ok = await sendImageMessage(url, isXxx);
     if (ok) {
       await pollActive();
       showToast('Bild skickad');
@@ -5570,11 +5710,12 @@ async function uploadImage(file){
   }
   return js.url;
 }
-  async function sendImageMessage(url){
+  async function sendImageMessage(url, isXxx){
     const fd = new FormData();
     fd.append('csrf_token', CSRF);
     fd.append('kind', 'image');
     fd.append('image_url', url);
+    fd.append('is_xxx', isXxx ? '1' : '0');
     if (COMPOSER_REPLY && Number.isFinite(Number(COMPOSER_REPLY.id))) {
       fd.append('reply_to_id', String(COMPOSER_REPLY.id));
       fd.append('reply_excerpt', COMPOSER_REPLY.excerpt || '');
@@ -5594,20 +5735,22 @@ pubUpBtn?.addEventListener('click', () => {
   pubImgInp?.click();
 });
 
-pubImgInp?.addEventListener('change', async ()=>{
-  const file = pubImgInp.files?.[0]; pubImgInp.value='';
-  if (!file) return;
-  try{
-    showToast('Komprimerar…');
-    const small = await compressImageIfNeeded(file);
-    showToast('Laddar bild…');
-    const url = await uploadImage(small);
-    const ok  = await sendImageMessage(url);
-    if (ok) {
-      await pollActive();
-      showToast('Bild skickad');
-      clearComposerReply();
-    }
+  pubImgInp?.addEventListener('change', async ()=>{
+    const file = pubImgInp.files?.[0]; pubImgInp.value='';
+    if (!file) return;
+    try{
+      showToast('Komprimerar…');
+      const small = await compressImageIfNeeded(file);
+    const { ok: confirmed, isXxx } = await openUploadConfirm();
+    if (!confirmed) { showToast('Uppladdning avbruten'); return; }
+      showToast('Laddar bild…');
+      const url = await uploadImage(small);
+    const ok  = await sendImageMessage(url, isXxx);
+      if (ok) {
+        await pollActive();
+        showToast('Bild skickad');
+        clearComposerReply();
+      }
   }catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   }
@@ -5638,9 +5781,11 @@ pubCamInp?.addEventListener('change', async ()=>{
   try{
     showToast('Komprimerar…');
     const small = await compressImageIfNeeded(file);
+    const { ok: confirmed, isXxx } = await openUploadConfirm();
+    if (!confirmed) { showToast('Uppladdning avbruten'); return; }
     showToast('Laddar bild…');
     const url = await uploadImage(small);
-    const ok  = await sendImageMessage(url);
+    const ok  = await sendImageMessage(url, isXxx);
     if (ok) {
       await pollActive();
       showToast('Bild skickad');
@@ -5703,7 +5848,20 @@ function openImagePreview(src, alt, sid = null, sname = ''){
 
   function bindPreview(listEl){
   listEl.addEventListener('click', (e)=>{
+    const unblurBtn = e.target.closest('[data-img-unblur]');
+    if (unblurBtn) {
+      const mid = Number(unblurBtn.getAttribute('data-img-unblur') || 0);
+      markImageUnblurred(mid);
+      refreshImageBlurStates();
+      return;
+    }
     const img = e.target.closest('img.imgmsg'); if (!img) return;
+    const wrap = img.closest('.imgmsg-wrap');
+    if (wrap && wrap.dataset.blurred === '1') {
+      markImageUnblurred(img.dataset.mid || 0);
+      refreshImageBlurStates();
+      return;
+    }
     const li    = img.closest('li.item');
     const sid   = Number(li?.dataset.sid || 0);
     const sname = li?.dataset.sname || '';
@@ -5712,6 +5870,7 @@ function openImagePreview(src, alt, sid = null, sname = ''){
 }
 
   bindPreview(pubList);
+  refreshImageBlurStates();
 
   function autoGrow(t){ t.style.height='auto'; t.style.height = Math.min(120, t.scrollHeight) + 'px'; }
   [...document.querySelectorAll('textarea')].forEach(t=>{ t.addEventListener('input', ()=>autoGrow(t)); setTimeout(()=>autoGrow(t),0); });

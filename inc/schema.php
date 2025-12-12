@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '13');
+  define('KKCHAT_DB_VERSION', '14');
 }
 
 /**
@@ -42,6 +42,7 @@ function kkchat_activate() {
     `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
     `content_hash` CHAR(40) NULL,
     `content` TEXT NOT NULL,
+    `is_xxx` TINYINT(1) NOT NULL DEFAULT 0,
     `reply_to_id` BIGINT UNSIGNED NULL,
     `reply_to_sender_id` INT UNSIGNED NULL,
     `reply_to_sender_name` VARCHAR(64) NULL,
@@ -283,6 +284,9 @@ function kkchat_maybe_migrate(){
     }
     if (!kkchat_column_exists($t['messages'], 'reply_to_excerpt')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `reply_to_excerpt` VARCHAR(255) NULL AFTER `reply_to_sender_name`");
+    }
+    if (!kkchat_column_exists($t['messages'], 'is_xxx')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `is_xxx` TINYINT(1) NOT NULL DEFAULT 0 AFTER `content`");
     }
 
     // Index helpers

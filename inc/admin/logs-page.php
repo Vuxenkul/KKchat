@@ -136,7 +136,7 @@ function kkchat_admin_logs_page() {
   $sql = "SELECT id,created_at,kind,room,
                  sender_id,sender_name,sender_ip,
                  recipient_id,recipient_name,recipient_ip,
-                 content, hidden_at, hidden_by, hidden_cause
+                 content, is_xxx, hidden_at, hidden_by, hidden_cause
           FROM {$t['messages']} $whereSql
           ORDER BY id DESC
           LIMIT %d OFFSET %d";
@@ -257,7 +257,7 @@ function kkchat_admin_logs_page() {
   $convRows = [];
   if ($convA > 0 && $convB > 0) {
     $convRows = $wpdb->get_results($wpdb->prepare(
-      "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content
+      "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content,is_xxx
          FROM {$t['messages']}
         WHERE (sender_id=%d AND recipient_id=%d)
            OR (sender_id=%d AND recipient_id=%d)
@@ -455,6 +455,7 @@ function kkchat_admin_logs_page() {
                       <div class="kkchat-msg">
                         <?php if ($r->kind === 'image' && $is_image_url($r->content)): ?>
                           <?php $full = esc_url($r->content); ?>
+                          <?php if (!empty($r->is_xxx)): ?><div><strong>XXX-märkt</strong></div><?php endif; ?>
                           <img src="<?php echo $full; ?>" alt="Bild #<?php echo (int)$r->id; ?>" class="kkchat-thumb" data-full="<?php echo $full; ?>" loading="lazy">
                         <?php else: ?>
                           <?php echo $r->content; /* redan escapat vid skrivning */ ?>
@@ -476,6 +477,8 @@ function kkchat_admin_logs_page() {
               <th>Samtal</th>
               <th>Tid</th>
               <th>Typ</th>
+              <th>XXX</th>
+              <th>Status</th>
               <th>Rum/DM</th>
               <th>Avsändare (IP)</th>
               <th>Mottagare (IP)</th>
@@ -501,6 +504,8 @@ function kkchat_admin_logs_page() {
 
               <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$m->created_at)); ?></td>
               <td><?php echo esc_html($m->kind); ?></td>
+              <td><?php echo !empty($m->is_xxx) ? '<strong>XXX-märkt</strong>' : 'Ej XXX'; ?></td>
+              <td><?php echo !empty($m->hidden_at) ? 'Blockad' : 'Tillåten'; ?></td>
               <td>
                 <?php
                 if ($m->recipient_id) {

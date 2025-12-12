@@ -27,7 +27,7 @@ register_rest_route($ns, '/fetch', [
     $limit = max(1, min($limit, 200));               // 1..500
 
     $blocked = kkchat_blocked_ids($me);
-    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
+    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt, is_xxx';
 
     if ($onlyPublic) {
       if ($since < 0) {
@@ -141,6 +141,7 @@ register_rest_route($ns, '/fetch', [
           'reply_to_sender_id'   => isset($r['reply_to_sender_id']) ? (int)$r['reply_to_sender_id'] : null,
           'reply_to_sender_name' => $r['reply_to_sender_name'] ?: null,
           'reply_to_excerpt'     => $r['reply_to_excerpt'] ?: null,
+          'is_xxx'       => !empty($r['is_xxx']),
         ];
       }
     }

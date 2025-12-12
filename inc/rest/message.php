@@ -44,9 +44,12 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
 
       $txt = '';
       $image_url = '';
+      $is_xxx = false;
       if ($kind === 'image') {
         $image_url = esc_url_raw((string)$req->get_param('image_url'));
         if ($image_url === '') kkchat_json(['ok'=>false,'err'=>'bad_image'], 400);
+
+        $is_xxx = filter_var($req->get_param('is_xxx'), FILTER_VALIDATE_BOOLEAN);
 
         // Validate URL is within WP uploads AND under /kkchat/ subdir
         $up = wp_upload_dir();
@@ -327,9 +330,10 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
         'sender_ip'    => $sender_ip,
         'content_hash' => $content_hash,
         'content'      => $content,
+        'is_xxx'       => $is_xxx ? 1 : 0,
         'kind'         => $kind
       ];
-      $format = ['%d','%d','%s','%s','%s','%s','%s'];
+      $format = ['%d','%d','%s','%s','%s','%s','%d','%s'];
 
       if ($reply_to_id !== null) {
         $data['reply_to_id'] = $reply_to_id;
