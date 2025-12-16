@@ -1982,6 +1982,27 @@ function hexToRgba(hex, alpha){
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+function normalizeHex(hex){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||''));
+  return m ? `#${m[1].toLowerCase()}` : '';
+}
+
+function shadeHex(hex, factor){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||''));
+  if (!m) return '';
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  const shade = (channel) => {
+    const target = factor > 0 ? 255 : 0;
+    const delta = (target - channel) * Math.abs(factor);
+    return Math.max(0, Math.min(255, Math.round(channel + (factor > 0 ? delta : -delta))));
+  };
+  const toHex = (n) => n.toString(16).padStart(2, '0');
+  return `#${toHex(shade(r))}${toHex(shade(g))}${toHex(shade(b))}`;
+}
+
 function bannerAutolink(text){
   const safe = esc(String(text||''));
   return safe.replace(/(https?:\/\/[^\s<]+)/gi, m => {
@@ -2021,11 +2042,13 @@ function normalizeBannerHTML(payload){
 }
 
 function bannerStyleAttr(payload){
-  const color = typeof payload.bg_color === 'string' ? payload.bg_color.trim() : '';
+  const color = normalizeHex(typeof payload.bg_color === 'string' ? payload.bg_color.trim() : '');
   if (!color) return '';
-  const border = hexToRgba(color, 0.75) || color;
+  const darker = shadeHex(color, -0.2) || color;
+  const border = hexToRgba(darker, 0.75) || darker;
   const shadow = hexToRgba(color, 0.35) || color;
-  return ` style="--banner-bg:${escAttr(color)};--banner-border:${escAttr(border)};--banner-shadow:${escAttr(shadow)}"`;
+  const bg = `linear-gradient(135deg, ${color} 0%, ${darker} 100%)`;
+  return ` style="--banner-bg:${escAttr(bg)};--banner-border:${escAttr(border)};--banner-shadow:${escAttr(shadow)}"`;
 }
 
 function bannerImageHTML(payload){
