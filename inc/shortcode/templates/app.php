@@ -1963,6 +1963,101 @@ async function doLogout(){
   let BLOCKED = new Set();
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
   
+function parseBannerPayload(content){
+  if (typeof content !== 'string') return { text: '' };
+  try {
+    const data = JSON.parse(content);
+    if (data && typeof data === 'object') return data;
+  } catch(_){ }
+  return { text: String(content) };
+}
+
+function hexToRgba(hex, alpha){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||'').trim());
+  if (!m) return '';
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function normalizeHex(hex){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||''));
+  return m ? `#${m[1].toLowerCase()}` : '';
+}
+
+function shadeHex(hex, factor){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||''));
+  if (!m) return '';
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  const shade = (channel) => {
+    const target = factor > 0 ? 255 : 0;
+    const delta = (target - channel) * Math.abs(factor);
+    return Math.max(0, Math.min(255, Math.round(channel + (factor > 0 ? delta : -delta))));
+  };
+  const toHex = (n) => n.toString(16).padStart(2, '0');
+  return `#${toHex(shade(r))}${toHex(shade(g))}${toHex(shade(b))}`;
+}
+
+function bannerAutolink(text){
+  const safe = esc(String(text||''));
+  return safe.replace(/(https?:\/\/[^\s<]+)/gi, m => {
+    const url = escAttr(m);
+    return `<a href="${url}" target="_blank" rel="noopener">${esc(m)}</a>`;
+  });
+}
+
+function normalizeBannerHTML(payload){
+  const rawHtml = typeof payload.html === 'string' ? payload.html : '';
+  const tmp = document.createElement('div');
+  tmp.innerHTML = rawHtml;
+
+  const anchors = tmp.querySelectorAll('a');
+  const hasAnchors = anchors.length > 0;
+
+  if (!hasAnchors) {
+    // If the stored HTML only has basic breaks, auto-link the textual content so custom
+    // anchor markup like <a href="…">Label</a> or pasted URLs become clickable.
+    const text = rawHtml ? tmp.textContent || '' : (payload.text || '');
+    const autolinked = bannerAutolink(text);
+    tmp.innerHTML = autolinked.replace(/\n/g, '<br>');
+  }
+
+  if (payload.link_url && tmp.querySelectorAll('a').length === 0) {
+    const href = escAttr(payload.link_url);
+    tmp.innerHTML = `<a href="${href}" target="_blank" rel="noopener">${tmp.innerHTML || esc(payload.link_url)}</a>`;
+  }
+
+  tmp.querySelectorAll('a').forEach(a => {
+    a.target = '_blank';
+    const rel = new Set((a.rel || '').split(/\s+/).filter(Boolean));
+    rel.add('noopener');
+    a.rel = Array.from(rel).join(' ');
+  });
+  return tmp.innerHTML;
+}
+
+function bannerStyleAttr(payload){
+  const color = normalizeHex(typeof payload.bg_color === 'string' ? payload.bg_color.trim() : '');
+  if (!color) return '';
+  const darker = shadeHex(color, -0.2) || color;
+  const border = hexToRgba(darker, 0.75) || darker;
+  const shadow = hexToRgba(color, 0.35) || color;
+  const bg = `linear-gradient(135deg, ${color} 0%, ${darker} 100%)`;
+  return ` style="--banner-bg:${escAttr(bg)};--banner-border:${escAttr(border)};--banner-shadow:${escAttr(shadow)}"`;
+}
+
+function bannerImageHTML(payload){
+  if (!payload.image_url) return '';
+  const target = escAttr(payload.link_url || payload.image_url);
+  const src = escAttr(payload.image_url);
+  return `<div class="banner-bubble__image"><a href="${target}" target="_blank" rel="noopener"><img class="banner-media" src="${src}" alt="Bannerbild" loading="lazy" decoding="async"></a></div>`;
+}
+
 function msgToHTML(m){
   const mid = Number(m.id);
   if (!Number.isFinite(mid)) return '';
@@ -1979,16 +2074,20 @@ function msgToHTML(m){
   const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
   const attrs = [
-    `class="item ${sid===ME_ID?'me':'them'}${roleClass}"`,
-    `data-id="${mid}"`,
-    `data-sid="${sid}"`,
-    `data-sname="${escAttr(who)}"`,
-    `data-kind="${escAttr(kind)}"`
+    `class=\"item ${sid===ME_ID?'me':'them'}${roleClass}\"`,
+    `data-id=\"${mid}\"`,
+    `data-sid=\"${sid}\"`,
+    `data-sname=\"${escAttr(who)}\"`,
+    `data-kind=\"${escAttr(kind)}\"`
   ];
 
   if (kind === 'banner'){
-    const content = String(m.content||'');
-    return `<li ${attrs.join(' ')} data-body="${escAttr(content)}"><div class="banner-bubble">${esc(content)}</div></li>`;
+    const payload = parseBannerPayload(m.content);
+    const textHTML = normalizeBannerHTML(payload);
+    const imageHTML = bannerImageHTML(payload);
+    const styleAttr = bannerStyleAttr(payload);
+    const body = payload.text || (typeof payload.html === 'string' ? payload.html : '');
+    return `<li ${attrs.join(' ')} data-body="${escAttr(body)}"><div class="banner-bubble"${styleAttr}>${textHTML}${imageHTML}</div></li>`;
   }
 
   const canReply = sid > 0 && sid !== Number(ME_ID);
@@ -2626,10 +2725,14 @@ function renderList(el, items, options = {}){
     li.dataset.kind  = kind || 'chat';
 
     if ((m.kind||'chat') === 'banner'){
+      const payload = parseBannerPayload(m.content);
+      const textHTML = normalizeBannerHTML(payload);
+      const imageHTML = bannerImageHTML(payload);
+      const styleAttr = bannerStyleAttr(payload);
+      const body = payload.text || (typeof payload.html === 'string' ? payload.html : '');
       li.className = 'item banner';
-      const text = String(m.content || '');
-      li.dataset.body = text;
-      li.innerHTML = `<div class="banner-bubble">${esc(text)}</div>`;
+      li.dataset.body = body;
+      li.innerHTML = `<div class="banner-bubble"${styleAttr}>${textHTML}${imageHTML}</div>`;
     } else {
       const roleClass = isAdminById(m.sender_id) ? ' admin' : '';
       li.className = 'item ' + (m.sender_id===ME_ID? 'me':'them') + roleClass;
