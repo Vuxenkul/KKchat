@@ -102,23 +102,27 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     KEY `idx_sort` (`sort`)
   ) $charset;";
 
-  $sql5 = "CREATE TABLE IF NOT EXISTS `{$t['banners']}` (
-    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    `content` TEXT NOT NULL,
-    `rooms_csv` TEXT NOT NULL,
-    `interval_sec` INT UNSIGNED NOT NULL,
-    `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling',
-    `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0,
-    `daily_start_min` SMALLINT UNSIGNED NULL,
-    `daily_end_min` SMALLINT UNSIGNED NULL,
-    `window_start` INT UNSIGNED NULL,
-    `window_end` INT UNSIGNED NULL,
-    `next_run` INT UNSIGNED NULL,
-    `active` TINYINT(1) NOT NULL DEFAULT 1,
-    `last_run` INT UNSIGNED NULL,
-    PRIMARY KEY (`id`),
-    KEY `idx_next_active` (`next_run`,`active`)
-  ) $charset;";
+    $sql5 = "CREATE TABLE IF NOT EXISTS `{$t['banners']}` (
+      `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      `content` TEXT NOT NULL,
+      `link_url` TEXT NULL,
+      `image_id` BIGINT UNSIGNED NULL,
+      `image_url` TEXT NULL,
+      `bg_color` VARCHAR(16) NULL,
+      `rooms_csv` TEXT NOT NULL,
+      `interval_sec` INT UNSIGNED NOT NULL,
+      `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling',
+      `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0,
+      `daily_start_min` SMALLINT UNSIGNED NULL,
+      `daily_end_min` SMALLINT UNSIGNED NULL,
+      `window_start` INT UNSIGNED NULL,
+      `window_end` INT UNSIGNED NULL,
+      `next_run` INT UNSIGNED NULL,
+      `active` TINYINT(1) NOT NULL DEFAULT 1,
+      `last_run` INT UNSIGNED NULL,
+      PRIMARY KEY (`id`),
+      KEY `idx_next_active` (`next_run`,`active`)
+    ) $charset;";
 
   $sql6 = "CREATE TABLE IF NOT EXISTS `{$t['blocks']}` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -319,29 +323,41 @@ function kkchat_maybe_migrate(){
     }
   }
 
-  if (kkchat_table_exists($t['banners'])) {
-    if (!kkchat_column_exists($t['banners'], 'schedule_mode')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling' AFTER `interval_sec`");
+    if (kkchat_table_exists($t['banners'])) {
+      if (!kkchat_column_exists($t['banners'], 'schedule_mode')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling' AFTER `interval_sec`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'link_url')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `link_url` TEXT NULL AFTER `content`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'image_id')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `image_id` BIGINT UNSIGNED NULL AFTER `link_url`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'image_url')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `image_url` TEXT NULL AFTER `image_id`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'bg_color')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `bg_color` VARCHAR(16) NULL AFTER `image_url`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'weekdays_mask')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `schedule_mode`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'daily_start_min')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `daily_start_min` SMALLINT UNSIGNED NULL AFTER `weekdays_mask`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'daily_end_min')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `daily_end_min` SMALLINT UNSIGNED NULL AFTER `daily_start_min`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'window_start')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_start` INT UNSIGNED NULL AFTER `daily_end_min`");
+      }
+      if (!kkchat_column_exists($t['banners'], 'window_end')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_end` INT UNSIGNED NULL AFTER `window_start`");
+      }
+      if (kkchat_column_exists($t['banners'], 'next_run') && !kkchat_column_is_nullable($t['banners'], 'next_run')) {
+        $wpdb->query("ALTER TABLE `{$t['banners']}` MODIFY `next_run` INT UNSIGNED NULL");
+      }
     }
-    if (!kkchat_column_exists($t['banners'], 'weekdays_mask')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0 AFTER `schedule_mode`");
-    }
-    if (!kkchat_column_exists($t['banners'], 'daily_start_min')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `daily_start_min` SMALLINT UNSIGNED NULL AFTER `weekdays_mask`");
-    }
-    if (!kkchat_column_exists($t['banners'], 'daily_end_min')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `daily_end_min` SMALLINT UNSIGNED NULL AFTER `daily_start_min`");
-    }
-    if (!kkchat_column_exists($t['banners'], 'window_start')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_start` INT UNSIGNED NULL AFTER `daily_end_min`");
-    }
-    if (!kkchat_column_exists($t['banners'], 'window_end')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_end` INT UNSIGNED NULL AFTER `window_start`");
-    }
-    if (kkchat_column_exists($t['banners'], 'next_run') && !kkchat_column_is_nullable($t['banners'], 'next_run')) {
-      $wpdb->query("ALTER TABLE `{$t['banners']}` MODIFY `next_run` INT UNSIGNED NULL");
-    }
-  }
 
   if (kkchat_table_exists($t['reports'])) {
     if (!kkchat_column_exists($t['reports'], 'reported_ip_key')) {
@@ -547,8 +563,27 @@ function kkchat_banner_next_run_window(array $row, int $after, int $interval): ?
   return $candidate;
 }
 
-add_action('kkchat_cron_tick', 'kkchat_run_scheduled_banners');
-function kkchat_run_scheduled_banners(){
+  add_action('kkchat_cron_tick', 'kkchat_run_scheduled_banners');
+
+  function kkchat_banner_message_payload(array $row): array {
+    $html = (string)($row['content'] ?? '');
+    $text = trim(wp_strip_all_tags(str_replace(['<br>', '<br/>', '<br />'], "\n", $html)));
+
+    return [
+      'html'      => $html,
+      'text'      => $text,
+      'link_url'  => (string)($row['link_url'] ?? ''),
+      'image_url' => (string)($row['image_url'] ?? ''),
+      'bg_color'  => (string)($row['bg_color'] ?? ''),
+    ];
+  }
+
+  function kkchat_banner_message_content(array $row): string {
+    $payload = kkchat_banner_message_payload($row);
+    return wp_json_encode($payload);
+  }
+
+  function kkchat_run_scheduled_banners(){
   global $wpdb; $t = kkchat_tables();
   $now = time();
 
@@ -589,19 +624,19 @@ function kkchat_run_scheduled_banners(){
       error_log("[KKchat] Banner #{$r['id']} has empty rooms_csv");
     } elseif (!$rooms) {
       error_log("[KKchat] Banner #{$r['id']} rooms not found: {$r['rooms_csv']}");
-    } else {
-      // Insert one banner message per valid room
-      $content = (string)$r['content'];
-      foreach ($rooms as $slug) {
-        $attempts++;
-        $ok = $wpdb->insert($t['messages'], [
-          'created_at'  => $now,
-          'sender_id'   => 0,
-          'sender_name' => 'System',
-          'room'        => $slug,
-          'kind'        => 'banner',
-          'content'     => $content,
-        ], ['%d','%d','%s','%s','%s','%s']);
+      } else {
+        // Insert one banner message per valid room
+        $content = kkchat_banner_message_content($r);
+        foreach ($rooms as $slug) {
+          $attempts++;
+          $ok = $wpdb->insert($t['messages'], [
+            'created_at'  => $now,
+            'sender_id'   => 0,
+            'sender_name' => 'System',
+            'room'        => $slug,
+            'kind'        => 'banner',
+            'content'     => $content,
+          ], ['%d','%d','%s','%s','%s','%s']);
 
         if ($ok === false) {
           error_log('[KKchat] Banner insert failed (room='.$slug.'): '.$wpdb->last_error);

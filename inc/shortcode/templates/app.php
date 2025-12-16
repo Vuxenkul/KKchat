@@ -1963,6 +1963,67 @@ async function doLogout(){
   let BLOCKED = new Set();
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
   
+function parseBannerPayload(content){
+  if (typeof content !== 'string') return { text: '' };
+  try {
+    const data = JSON.parse(content);
+    if (data && typeof data === 'object') return data;
+  } catch(_){ }
+  return { text: String(content) };
+}
+
+function hexToRgba(hex, alpha){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||'').trim());
+  if (!m) return '';
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function bannerAutolink(text){
+  const safe = esc(String(text||''));
+  return safe.replace(/(https?:\/\/[^\s<]+)/gi, m => {
+    const url = escAttr(m);
+    return `<a href="${url}" target="_blank" rel="noopener">${esc(m)}</a>`;
+  });
+}
+
+function normalizeBannerHTML(payload){
+  const hasHtml = typeof payload.html === 'string' && payload.html.trim() !== '';
+  const baseHtml = hasHtml ? payload.html : bannerAutolink(payload.text || '');
+  const tmp = document.createElement('div');
+  tmp.innerHTML = baseHtml;
+  const anchors = tmp.querySelectorAll('a');
+  if (!hasHtml && payload.link_url && anchors.length === 0) {
+    const href = escAttr(payload.link_url);
+    tmp.innerHTML = `<a href="${href}" target="_blank" rel="noopener">${tmp.innerHTML || esc(payload.link_url)}</a>`;
+  }
+  tmp.querySelectorAll('a').forEach(a => {
+    a.target = '_blank';
+    const rel = new Set((a.rel || '').split(/\s+/).filter(Boolean));
+    rel.add('noopener');
+    a.rel = Array.from(rel).join(' ');
+  });
+  return tmp.innerHTML;
+}
+
+function bannerStyleAttr(payload){
+  const color = typeof payload.bg_color === 'string' ? payload.bg_color.trim() : '';
+  if (!color) return '';
+  const border = hexToRgba(color, 0.75) || color;
+  const shadow = hexToRgba(color, 0.35) || color;
+  return ` style="--banner-bg:${escAttr(color)};--banner-border:${escAttr(border)};--banner-shadow:${escAttr(shadow)}"`;
+}
+
+function bannerImageHTML(payload){
+  if (!payload.image_url) return '';
+  const target = escAttr(payload.link_url || payload.image_url);
+  const src = escAttr(payload.image_url);
+  return `<div class="banner-bubble__image"><a href="${target}" target="_blank" rel="noopener"><img class="banner-media" src="${src}" alt="Bannerbild" loading="lazy" decoding="async"></a></div>`;
+}
+
 function msgToHTML(m){
   const mid = Number(m.id);
   if (!Number.isFinite(mid)) return '';
@@ -1979,16 +2040,20 @@ function msgToHTML(m){
   const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
   const attrs = [
-    `class="item ${sid===ME_ID?'me':'them'}${roleClass}"`,
-    `data-id="${mid}"`,
-    `data-sid="${sid}"`,
-    `data-sname="${escAttr(who)}"`,
-    `data-kind="${escAttr(kind)}"`
+    `class=\"item ${sid===ME_ID?'me':'them'}${roleClass}\"`,
+    `data-id=\"${mid}\"`,
+    `data-sid=\"${sid}\"`,
+    `data-sname=\"${escAttr(who)}\"`,
+    `data-kind=\"${escAttr(kind)}\"`
   ];
 
   if (kind === 'banner'){
-    const content = String(m.content||'');
-    return `<li ${attrs.join(' ')} data-body="${escAttr(content)}"><div class="banner-bubble">${esc(content)}</div></li>`;
+    const payload = parseBannerPayload(m.content);
+    const textHTML = normalizeBannerHTML(payload);
+    const imageHTML = bannerImageHTML(payload);
+    const styleAttr = bannerStyleAttr(payload);
+    const body = payload.text || (typeof payload.html === 'string' ? payload.html : '');
+    return `<li ${attrs.join(' ')} data-body="${escAttr(body)}"><div class="banner-bubble"${styleAttr}>${textHTML}${imageHTML}</div></li>`;
   }
 
   const canReply = sid > 0 && sid !== Number(ME_ID);
