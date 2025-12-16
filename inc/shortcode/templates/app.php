@@ -2691,10 +2691,14 @@ function renderList(el, items, options = {}){
     li.dataset.kind  = kind || 'chat';
 
     if ((m.kind||'chat') === 'banner'){
+      const payload = parseBannerPayload(m.content);
+      const textHTML = normalizeBannerHTML(payload);
+      const imageHTML = bannerImageHTML(payload);
+      const styleAttr = bannerStyleAttr(payload);
+      const body = payload.text || (typeof payload.html === 'string' ? payload.html : '');
       li.className = 'item banner';
-      const text = String(m.content || '');
-      li.dataset.body = text;
-      li.innerHTML = `<div class="banner-bubble">${esc(text)}</div>`;
+      li.dataset.body = body;
+      li.innerHTML = `<div class="banner-bubble"${styleAttr}>${textHTML}${imageHTML}</div>`;
     } else {
       const roleClass = isAdminById(m.sender_id) ? ' admin' : '';
       li.className = 'item ' + (m.sender_id===ME_ID? 'me':'them') + roleClass;
