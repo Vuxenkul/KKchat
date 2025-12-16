@@ -2670,7 +2670,7 @@ function textMentionsName(text, name){
 function watchNewImages(container){
   container.querySelectorAll('img.imgmsg:not([data-watch])').forEach(img=>{
     img.dataset.watch = '1';
-    if (IMG_BLUR) img.removeAttribute('data-unblurred');
+    if (IMG_BLUR && img.dataset.explicit === '1') img.removeAttribute('data-unblurred');
     img.addEventListener('load', ()=>{
       if (AUTO_SCROLL || atBottom(container)) scrollToBottom(container, false);
     }, { once: true });
@@ -5870,7 +5870,8 @@ function openImagePreview(src, alt, sid = null, sname = ''){
     const li    = img.closest('li.item');
     const sid   = Number(li?.dataset.sid || 0);
     const sname = li?.dataset.sname || '';
-    if (IMG_BLUR && !img.dataset.unblurred) {
+    const isExplicit = img.dataset.explicit === '1';
+    if (IMG_BLUR && isExplicit && !img.dataset.unblurred) {
       img.dataset.unblurred = '1';
       return;
     }
