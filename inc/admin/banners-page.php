@@ -644,6 +644,9 @@ function kkchat_admin_banners_page(){
     document.addEventListener('DOMContentLoaded', function(){
       const mode = document.getElementById('kkb_mode');
       const rows = document.querySelectorAll('.kkb-schedule');
+      const bgPicker = document.getElementById('kkb_bg');
+      const bgHex = document.querySelector('input[name="bg_color_hex"]');
+
       function syncScheduleRows(){
         const value = mode ? mode.value : '';
         rows.forEach(function(row){
@@ -651,6 +654,35 @@ function kkchat_admin_banners_page(){
           row.style.display = showFor.includes(value) ? '' : 'none';
         });
       }
+
+      function normalizeHex(value){
+        const trimmed = (value || '').trim();
+        if (!trimmed) return '';
+        const withHash = trimmed.startsWith('#') ? trimmed : '#'+trimmed;
+        return /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(withHash) ? withHash.toLowerCase() : '';
+      }
+
+      function syncFromPicker(){
+        if (bgPicker && bgHex) {
+          bgHex.value = bgPicker.value || '';
+        }
+      }
+
+      function syncFromHex(){
+        if (!bgPicker || !bgHex) return;
+        const normalized = normalizeHex(bgHex.value);
+        if (normalized) {
+          bgHex.value = normalized;
+          bgPicker.value = normalized;
+        }
+      }
+
+      if (bgPicker && bgHex) {
+        bgPicker.addEventListener('input', syncFromPicker);
+        bgHex.addEventListener('change', syncFromHex);
+        bgHex.addEventListener('blur', syncFromHex);
+      }
+
       if (mode) {
         mode.addEventListener('change', syncScheduleRows);
         syncScheduleRows();
