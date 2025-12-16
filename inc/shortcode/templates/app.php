@@ -1991,15 +1991,26 @@ function bannerAutolink(text){
 }
 
 function normalizeBannerHTML(payload){
-  const hasHtml = typeof payload.html === 'string' && payload.html.trim() !== '';
-  const baseHtml = hasHtml ? payload.html : bannerAutolink(payload.text || '');
+  const rawHtml = typeof payload.html === 'string' ? payload.html : '';
   const tmp = document.createElement('div');
-  tmp.innerHTML = baseHtml;
+  tmp.innerHTML = rawHtml;
+
   const anchors = tmp.querySelectorAll('a');
-  if (!hasHtml && payload.link_url && anchors.length === 0) {
+  const hasAnchors = anchors.length > 0;
+
+  if (!hasAnchors) {
+    // If the stored HTML only has basic breaks, auto-link the textual content so custom
+    // anchor markup like <a href="…">Label</a> or pasted URLs become clickable.
+    const text = rawHtml ? tmp.textContent || '' : (payload.text || '');
+    const autolinked = bannerAutolink(text);
+    tmp.innerHTML = autolinked.replace(/\n/g, '<br>');
+  }
+
+  if (payload.link_url && tmp.querySelectorAll('a').length === 0) {
     const href = escAttr(payload.link_url);
     tmp.innerHTML = `<a href="${href}" target="_blank" rel="noopener">${tmp.innerHTML || esc(payload.link_url)}</a>`;
   }
+
   tmp.querySelectorAll('a').forEach(a => {
     a.target = '_blank';
     const rel = new Set((a.rel || '').split(/\s+/).filter(Boolean));
