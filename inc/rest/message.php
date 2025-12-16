@@ -42,11 +42,23 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
       $kind = (string)$req->get_param('kind');
       $kind = ($kind === 'image') ? 'image' : 'chat';
 
+      $normalize_bool = function($raw, bool $fallback = false): bool {
+        if ($raw === null || $raw === '') return $fallback;
+        if (is_bool($raw)) return $raw;
+        $v = is_string($raw) ? strtolower(trim($raw)) : $raw;
+        if ($v === 1 || $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on') return true;
+        if ($v === 0 || $v === '0' || $v === 'false' || $v === 'no' || $v === 'off') return false;
+        return $fallback;
+      };
+
       $txt = '';
       $image_url = '';
+      $is_explicit = false;
       if ($kind === 'image') {
         $image_url = esc_url_raw((string)$req->get_param('image_url'));
         if ($image_url === '') kkchat_json(['ok'=>false,'err'=>'bad_image'], 400);
+
+        $is_explicit = $normalize_bool($req->get_param('is_explicit'), true);
 
         // Validate URL is within WP uploads AND under /kkchat/ subdir
         $up = wp_upload_dir();
@@ -75,6 +87,7 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
       } else {
         $txt = trim((string)$req->get_param('content'));
         if ($txt==='' || mb_strlen($txt) > 2000) kkchat_json(['ok'=>false], 400);
+        $is_explicit = false;
       }
 
       // === Auto moderation by Word Rules (non-admin only) ===
@@ -327,9 +340,10 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
         'sender_ip'    => $sender_ip,
         'content_hash' => $content_hash,
         'content'      => $content,
-        'kind'         => $kind
+        'kind'         => $kind,
+        'is_explicit'  => $is_explicit ? 1 : 0,
       ];
-      $format = ['%d','%d','%s','%s','%s','%s','%s'];
+      $format = ['%d','%d','%s','%s','%s','%s','%s','%d'];
 
       if ($reply_to_id !== null) {
         $data['reply_to_id'] = $reply_to_id;

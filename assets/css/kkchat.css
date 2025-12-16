@@ -113,6 +113,60 @@ body {
   align-items: center;
   justify-content: center;
 }
+
+#kkchat-root .kk-explicit-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 1100;
+  padding: 16px;
+}
+#kkchat-root .kk-explicit-modal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#kkchat-root .kk-explicit-box {
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 16px;
+  padding: 18px;
+  max-width: 380px;
+  width: 100%;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.28);
+}
+#kkchat-root .kk-explicit-text {
+  margin: 6px 0 10px;
+  color: #374151;
+  font-size: 14px;
+}
+#kkchat-root .kk-explicit-name {
+  font-weight: 700;
+  margin: 4px 0 12px;
+  word-break: break-word;
+  color: #111827;
+}
+#kkchat-root .kk-explicit-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  margin: 8px 0;
+  color: #111827;
+}
+#kkchat-root .kk-explicit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+#kkchat-root .kk-explicit-actions .iconbtn.primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+}
+#kkchat-root .kk-explicit-actions .iconbtn.primary:hover { filter: brightness(0.98); }
 #kk-multiTabModal {
     backdrop-filter: blur(10px);
   position: fixed;
@@ -378,7 +432,40 @@ html, body { margin: 0; height: 100%; }
   justify-content: center;
 }
 
-#kkchat-root.nsfw-blur img.imgmsg { filter: blur(20px); }
+#kkchat-root .bubble.img { position: relative; }
+#kkchat-root .imgbadge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: #be123c;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+}
+#kkchat-root .bubble.img:not(.is-explicit) .imgbadge { display: none; }
+
+#kkchat-root.nsfw-blur img.imgmsg:not([data-unblurred]) { filter: blur(20px); cursor: pointer; }
+#kkchat-root.nsfw-blur img.imgmsg[data-unblurred] { filter: none; }
+#kkchat-root .kk-explicit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #be123c;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+}
+#kkchat-root .kk-explicit-badge.is-muted {
+  background: #6b7280;
+  color: #f9fafb;
+}
 
 
 /* ===========================
