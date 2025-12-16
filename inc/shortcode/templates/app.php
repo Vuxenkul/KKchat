@@ -1988,7 +1988,8 @@ function msgToHTML(m){
 
   if (kind === 'banner'){
     const content = String(m.content||'');
-    return `<li ${attrs.join(' ')} data-body="${escAttr(content)}"><div class="banner-bubble">${esc(content)}</div></li>`;
+    const plain = bannerPlain(content);
+    return `<li ${attrs.join(' ')} data-body="${escAttr(plain)}"><div class="banner-bubble">${content}</div></li>`;
   }
 
   const canReply = sid > 0 && sid !== Number(ME_ID);
@@ -2294,6 +2295,7 @@ function applyCache(key){
     }
   }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+  function bannerPlain(html){ const d=document.createElement('div'); d.innerHTML=html; return (d.textContent||d.innerText||'').trim(); }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   function truncateText(str, limit = 160){

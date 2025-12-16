@@ -105,6 +105,9 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
   $sql5 = "CREATE TABLE IF NOT EXISTS `{$t['banners']}` (
     `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     `content` TEXT NOT NULL,
+    `content_html` TEXT NULL,
+    `link_url` TEXT NULL,
+    `image_id` BIGINT UNSIGNED NULL,
     `rooms_csv` TEXT NOT NULL,
     `interval_sec` INT UNSIGNED NOT NULL,
     `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling',
@@ -113,6 +116,8 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `daily_end_min` SMALLINT UNSIGNED NULL,
     `window_start` INT UNSIGNED NULL,
     `window_end` INT UNSIGNED NULL,
+    `visible_from` INT UNSIGNED NULL,
+    `visible_until` INT UNSIGNED NULL,
     `next_run` INT UNSIGNED NULL,
     `active` TINYINT(1) NOT NULL DEFAULT 1,
     `last_run` INT UNSIGNED NULL,
@@ -338,6 +343,21 @@ function kkchat_maybe_migrate(){
     if (!kkchat_column_exists($t['banners'], 'window_end')) {
       $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `window_end` INT UNSIGNED NULL AFTER `window_start`");
     }
+    if (!kkchat_column_exists($t['banners'], 'content_html')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `content_html` TEXT NULL AFTER `content`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'link_url')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `link_url` TEXT NULL AFTER `content_html`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'image_id')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `image_id` BIGINT UNSIGNED NULL AFTER `link_url`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'visible_from')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `visible_from` INT UNSIGNED NULL AFTER `window_end`");
+    }
+    if (!kkchat_column_exists($t['banners'], 'visible_until')) {
+      $wpdb->query("ALTER TABLE `{$t['banners']}` ADD COLUMN `visible_until` INT UNSIGNED NULL AFTER `visible_from`");
+    }
     if (kkchat_column_exists($t['banners'], 'next_run') && !kkchat_column_is_nullable($t['banners'], 'next_run')) {
       $wpdb->query("ALTER TABLE `{$t['banners']}` MODIFY `next_run` INT UNSIGNED NULL");
     }
@@ -462,14 +482,46 @@ function kkchat_banner_next_run(array $row, int $after): ?int {
   $interval = max(60, (int)($row['interval_sec'] ?? 60));
   $mode     = strtolower((string)($row['schedule_mode'] ?? 'rolling'));
 
-  if ($mode === 'weekly') {
-    return kkchat_banner_next_run_weekly($row, $after, $interval);
-  }
-  if ($mode === 'window') {
-    return kkchat_banner_next_run_window($row, $after, $interval);
+  $visibleFrom = isset($row['visible_from']) ? (int) $row['visible_from'] : 0;
+  $visibleUntil = isset($row['visible_until']) ? (int) $row['visible_until'] : 0;
+  if ($visibleFrom > 0 && $visibleUntil > 0 && $visibleFrom >= $visibleUntil) {
+    return null;
   }
 
-  return $after + $interval;
+  if ($visibleUntil > 0 && $after >= $visibleUntil) {
+    return null;
+  }
+  if ($visibleFrom > 0 && $after < $visibleFrom) {
+    $after = $visibleFrom - 1;
+  }
+
+  if ($mode === 'weekly') {
+    return kkchat_banner_apply_visibility(
+      kkchat_banner_next_run_weekly($row, $after, $interval),
+      $visibleFrom,
+      $visibleUntil
+    );
+  }
+  if ($mode === 'window') {
+    return kkchat_banner_apply_visibility(
+      kkchat_banner_next_run_window($row, $after, $interval),
+      $visibleFrom,
+      $visibleUntil
+    );
+  }
+
+  return kkchat_banner_apply_visibility($after + $interval, $visibleFrom, $visibleUntil);
+}
+
+function kkchat_banner_apply_visibility(?int $candidate, int $visibleFrom, int $visibleUntil): ?int {
+  if ($candidate === null) { return null; }
+  if ($visibleFrom > 0 && $candidate < $visibleFrom) {
+    $candidate = $visibleFrom;
+  }
+  if ($visibleUntil > 0 && $candidate > $visibleUntil) {
+    return null;
+  }
+  return $candidate;
 }
 
 function kkchat_banner_next_run_weekly(array $row, int $after, int $interval): ?int {
@@ -573,6 +625,8 @@ function kkchat_run_scheduled_banners(){
   foreach ($rows as $r) {
     $attempts  = 0;
     $successes = 0;
+    $visibleFrom = isset($r['visible_from']) ? (int) $r['visible_from'] : 0;
+    $visibleUntil = isset($r['visible_until']) ? (int) $r['visible_until'] : 0;
 
     // ② Parse tokens as entered (accept titles OR slugs)
     $tokens = array_filter(array_map('trim', explode(',', (string)$r['rooms_csv'])));
@@ -589,9 +643,15 @@ function kkchat_run_scheduled_banners(){
       error_log("[KKchat] Banner #{$r['id']} has empty rooms_csv");
     } elseif (!$rooms) {
       error_log("[KKchat] Banner #{$r['id']} rooms not found: {$r['rooms_csv']}");
+    } elseif ($visibleFrom > 0 && $now < $visibleFrom) {
+      // Not visible yet; let next_run bump forward
+    } elseif ($visibleUntil > 0 && $now > $visibleUntil) {
+      // Visibility window passed; skip sending
     } else {
       // Insert one banner message per valid room
-      $content = (string)$r['content'];
+      $content = isset($r['content_html']) && $r['content_html'] !== null && $r['content_html'] !== ''
+        ? (string) $r['content_html']
+        : (string) $r['content'];
       foreach ($rooms as $slug) {
         $attempts++;
         $ok = $wpdb->insert($t['messages'], [
@@ -803,9 +863,20 @@ function kkchat_maybe_upgrade_schema() {
     $sql5 = "CREATE TABLE IF NOT EXISTS `{$t['banners']}` (
       `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
       `content` TEXT NOT NULL,
+      `content_html` TEXT NULL,
+      `link_url` TEXT NULL,
+      `image_id` BIGINT UNSIGNED NULL,
       `rooms_csv` TEXT NOT NULL,
       `interval_sec` INT UNSIGNED NOT NULL,
-      `next_run` INT UNSIGNED NOT NULL,
+      `schedule_mode` VARCHAR(16) NOT NULL DEFAULT 'rolling',
+      `weekdays_mask` INT UNSIGNED NOT NULL DEFAULT 0,
+      `daily_start_min` SMALLINT UNSIGNED NULL,
+      `daily_end_min` SMALLINT UNSIGNED NULL,
+      `window_start` INT UNSIGNED NULL,
+      `window_end` INT UNSIGNED NULL,
+      `visible_from` INT UNSIGNED NULL,
+      `visible_until` INT UNSIGNED NULL,
+      `next_run` INT UNSIGNED NULL,
       `active` TINYINT(1) NOT NULL DEFAULT 1,
       `last_run` INT UNSIGNED NULL,
       PRIMARY KEY (`id`),
