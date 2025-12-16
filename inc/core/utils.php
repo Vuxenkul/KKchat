@@ -189,16 +189,16 @@ function kkchat_banner_sanitize_color(?string $value): ?string {
 function kkchat_banner_allowed_tags(): array {
     return [
         'a' => [
-            'href'   => [],
-            'title'  => [],
-            'target' => [],
-            'rel'    => [],
+            'href'   => true,
+            'title'  => true,
+            'target' => true,
+            'rel'    => true,
         ],
-        'br'     => [],
-        'strong' => [],
-        'em'     => [],
-        'b'      => [],
-        'i'      => [],
+        'br'     => true,
+        'strong' => true,
+        'em'     => true,
+        'b'      => true,
+        'i'      => true,
     ];
 }
 
