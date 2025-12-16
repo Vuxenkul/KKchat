@@ -160,6 +160,98 @@ function kkchat_html_esc($s) {
     return htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
 
+function kkchat_banner_default_color(): string {
+    return '#e35754';
+}
+
+function kkchat_banner_sanitize_color(?string $value): ?string {
+    if ($value === null) {
+        return null;
+    }
+
+    $color = trim($value);
+    if ($color === '') {
+        return null;
+    }
+
+    if (!preg_match('/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/', $color)) {
+        return null;
+    }
+
+    // Expand short hex (#abc => #aabbcc) for consistency
+    if (strlen($color) === 4) {
+        $color = '#' . $color[1] . $color[1] . $color[2] . $color[2] . $color[3] . $color[3];
+    }
+
+    return strtolower($color);
+}
+
+function kkchat_banner_allowed_tags(): array {
+    return [
+        'a' => [
+            'href'   => [],
+            'title'  => [],
+            'target' => [],
+            'rel'    => [],
+        ],
+        'br'     => [],
+        'strong' => [],
+        'em'     => [],
+        'b'      => [],
+        'i'      => [],
+    ];
+}
+
+function kkchat_banner_enforce_link_attrs(string $html): string {
+    return preg_replace_callback('/<a\s+([^>]*href=[^>]+)>/i', function ($m) {
+        $attrs = $m[1];
+        if (!preg_match('/\btarget\s*=\s*/i', $attrs)) {
+            $attrs .= ' target="_blank"';
+        }
+        if (!preg_match('/\brel\s*=\s*/i', $attrs)) {
+            $attrs .= ' rel="noreferrer noopener nofollow"';
+        }
+        return '<a ' . trim($attrs) . '>';
+    }, $html);
+}
+
+function kkchat_banner_html(string $input): string {
+    $normalized = str_replace(["\r\n", "\r"], "\n", $input);
+    $normalized = trim($normalized);
+    if ($normalized === '') {
+        return '';
+    }
+
+    $allowed = kkchat_banner_allowed_tags();
+    $clean = wp_kses($normalized, $allowed);
+    $clickable = make_clickable($clean);
+    $clickable = wp_kses($clickable, $allowed);
+    $clickable = kkchat_banner_enforce_link_attrs($clickable);
+    $withBreaks = nl2br($clickable, false);
+
+    return trim($withBreaks);
+}
+
+function kkchat_banner_plain_text(string $input): string {
+    $text = wp_strip_all_tags($input, false);
+    $text = preg_replace('~\s+~', ' ', $text);
+    return trim($text);
+}
+
+function kkchat_banner_prepare_content(string $raw): array {
+    $text = sanitize_textarea_field($raw);
+    $html = kkchat_banner_html($raw);
+    if ($html === '') {
+        $html = kkchat_html_esc($text);
+    }
+
+    return [
+        'text'  => $text,
+        'html'  => $html,
+        'plain' => kkchat_banner_plain_text($html !== '' ? $html : $text),
+    ];
+}
+
 function kkchat_normalize_text(string $s): string {
     // Utgår från råtext (inte HTML-escaped)
     $s = html_entity_decode($s, ENT_NOQUOTES | ENT_SUBSTITUTE, 'UTF-8');

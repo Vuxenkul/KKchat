@@ -1987,8 +1987,14 @@ function msgToHTML(m){
   ];
 
   if (kind === 'banner'){
-    const content = String(m.content||'');
-    return `<li ${attrs.join(' ')} data-body="${escAttr(content)}"><div class="banner-bubble">${esc(content)}</div></li>`;
+    const rawHtml = String(m.banner_html || '').trim();
+    const html = rawHtml !== '' ? rawHtml : esc(String(m.content||''));
+    const bodyText = m.excerpt || m.content || '';
+    const imgUrl = String(m.banner_image_url || '').trim();
+    const hasImage = imgUrl !== '';
+    const bannerStyle = bannerStyleFromColor(m.banner_bg_color || '');
+    const img = hasImage ? `<img class="banner-image" src="${escAttr(imgUrl)}" alt="Bannerbild" loading="lazy">` : '';
+    return `<li ${attrs.join(' ')} data-body="${escAttr(bodyText)}"><div class="banner-bubble"${bannerStyle ? ` style="${escAttr(bannerStyle)}"` : ''}${hasImage?' data-has-image="1"':''}>${html}${img}</div></li>`;
   }
 
   const canReply = sid > 0 && sid !== Number(ME_ID);
@@ -2292,6 +2298,53 @@ function applyCache(key){
         DM_RECENT_VERIFY_INFLIGHT.delete(id);
       }
     }
+  }
+  function clampColor(v){ return Math.max(0, Math.min(255, Math.round(v))); }
+  function normalizeHex(raw){
+    const str = String(raw||'').trim();
+    if (!str) return null;
+    const short = /^#?([0-9a-fA-F]{3})$/.exec(str);
+    if (short) {
+      const [r,g,b] = short[1].split('');
+      return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+    }
+    const full = /^#?([0-9a-fA-F]{6})$/.exec(str);
+    return full ? (`#${full[1]}`).toLowerCase() : null;
+  }
+  function parseHexColor(raw){
+    const hex = normalizeHex(raw);
+    if (!hex) return null;
+    const int = parseInt(hex.slice(1), 16);
+    return { r: (int >> 16) & 255, g: (int >> 8) & 255, b: int & 255 };
+  }
+  function mixColor(rgb, target, amount){
+    return {
+      r: clampColor(rgb.r + (target - rgb.r) * amount),
+      g: clampColor(rgb.g + (target - rgb.g) * amount),
+      b: clampColor(rgb.b + (target - rgb.b) * amount),
+    };
+  }
+  function colorToHex(rgb){
+    const toHex = (v)=>{
+      const h = clampColor(v).toString(16);
+      return h.length === 1 ? '0'+h : h;
+    };
+    return `#${toHex(rgb.r)}${toHex(rgb.g)}${toHex(rgb.b)}`;
+  }
+  function colorToRgba(rgb, alpha){
+    const a = Math.max(0, Math.min(1, Number(alpha) || 0));
+    return `rgba(${clampColor(rgb.r)},${clampColor(rgb.g)},${clampColor(rgb.b)},${a})`;
+  }
+  function bannerStyleFromColor(raw){
+    const parsed = parseHexColor(raw);
+    if (!parsed) return '';
+    const light = mixColor(parsed, 255, 0.08);
+    const dark  = mixColor(parsed, 0, 0.12);
+    const border = mixColor(parsed, 0, 0.18);
+    const shadowBase = mixColor(parsed, 0, 0.25);
+    const gradient = `linear-gradient(135deg, ${colorToHex(light)} 0%, ${colorToHex(dark)} 100%)`;
+    const shadow = colorToRgba(shadowBase, 0.35);
+    return `--kk-banner-gradient:${gradient};--kk-banner-border:${colorToHex(border)};--kk-banner-shadow:${shadow};`;
   }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }

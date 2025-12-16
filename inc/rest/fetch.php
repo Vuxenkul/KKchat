@@ -27,7 +27,7 @@ register_rest_route($ns, '/fetch', [
     $limit = max(1, min($limit, 200));               // 1..500
 
     $blocked = kkchat_blocked_ids($me);
-    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
+    $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, banner_html, banner_image_url, banner_bg_color, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
 
     if ($onlyPublic) {
       if ($since < 0) {
@@ -127,20 +127,29 @@ register_rest_route($ns, '/fetch', [
     if ($rows) {
       foreach ($rows as $r) {
         $mid = (int)$r['id'];
+        $kind = $r['kind'] ?: 'chat';
+        $excerpt = (string) ($r['content'] ?? '');
+        if ($kind === 'banner' && !empty($r['banner_html'])) {
+          $excerpt = kkchat_banner_plain_text($r['banner_html']);
+        }
         $out[] = [
           'id'           => $mid,
           'time'         => (int)$r['created_at'],
-          'kind'         => $r['kind'] ?: 'chat',
+          'kind'         => $kind,
           'room'         => $r['room'] ?: null,
           'sender_id'    => (int)$r['sender_id'],
           'sender_name'  => $r['sender_name'],
           'recipient_id' => isset($r['recipient_id']) ? (int)$r['recipient_id'] : null,
           'recipient_name'=> $r['recipient_name'] ?: null,
           'content'      => $r['content'],
+          'banner_html'  => $r['banner_html'] ?? null,
+          'banner_image_url' => $r['banner_image_url'] ?? null,
+          'banner_bg_color'  => $r['banner_bg_color'] ?? null,
           'reply_to_id'  => isset($r['reply_to_id']) ? (int)$r['reply_to_id'] : null,
           'reply_to_sender_id'   => isset($r['reply_to_sender_id']) ? (int)$r['reply_to_sender_id'] : null,
           'reply_to_sender_name' => $r['reply_to_sender_name'] ?: null,
           'reply_to_excerpt'     => $r['reply_to_excerpt'] ?: null,
+          'excerpt'              => $excerpt,
         ];
       }
     }
@@ -148,4 +157,3 @@ register_rest_route($ns, '/fetch', [
   },
   'permission_callback' => '__return_true',
 ]);
-
