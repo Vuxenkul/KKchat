@@ -1270,29 +1270,78 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .imgpanel {
   position: fixed;
   inset: 0;
-  background: rgba(0,0,0,.85);
+  background:
+    radial-gradient(circle at 18% 12%, rgba(227, 87, 84, 0.22), transparent 42%),
+    radial-gradient(circle at 82% 18%, rgba(124, 133, 188, 0.22), transparent 50%),
+    rgba(0, 0, 0, 0.78);
+  backdrop-filter: var(--frost);
   display: none;
   z-index: 10000;
 }
 #kkchat-root .imgpanel[open] { display: flex; align-items: center; justify-content: center; }
 #kkchat-root .imgbox {
-  max-width: 96vw;
-  max-height: 90vh;
+  width: min(96vw, 880px);
+  max-height: 92vh;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  align-items: center;
+  gap: 12px;
+  align-items: stretch;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(150deg, rgba(14, 17, 27, 0.92) 0%, rgba(8, 10, 17, 0.94) 100%);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
 }
-#kkchat-root .imgbox img { max-width: 96vw; max-height: 85vh; border-radius: 12px; }
+#kkchat-root .imgbox img {
+  max-width: 100%;
+  max-height: 78vh;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(122, 136, 196, 0.32);
+  box-shadow: 0 26px 64px rgba(5, 7, 12, 0.55);
+  background: rgba(6, 8, 14, 0.65);
+}
 #kkchat-root .imgfoot {
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  color: #fff;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--ink);
+  background: rgba(17, 21, 33, 0.85);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(122, 136, 196, 0.24);
+  box-shadow: inset 0 0 0 1px var(--panel-highlight);
 }
-#kkchat-root .imgfoot .btns { font-size: 14px; }
+#kkchat-root .imgfoot #kk-imgCap {
+  font-size: 0.95rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+  max-width: 46%;
+}
+#kkchat-root .imgfoot .btns {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 14px;
+  flex-wrap: wrap;
+}
+#kkchat-root .imgfoot .btns .iconbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, rgba(44, 47, 63, 0.95) 0%, rgba(227, 87, 84, 0.95) 100%) !important;
+  color: #0b0f1c !important;
+  padding: 10px 14px !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 0.95rem !important;
+  border: 0;
+  box-shadow: 0 16px 32px rgba(12, 16, 26, 0.55);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+#kkchat-root .imgfoot .btns .iconbtn:hover { transform: translateY(-1px); box-shadow: 0 20px 40px rgba(12, 16, 26, 0.65); }
+#kkchat-root .imgfoot .btns .iconbtn:focus { outline: 3px solid rgba(122, 136, 196, 0.45); outline-offset: 2px; }
 
 
 /* ===========================
