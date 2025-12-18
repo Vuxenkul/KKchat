@@ -756,7 +756,7 @@ if (!defined('ABSPATH')) exit;
         'latest'  => $unreadLatest,
       ];
       $msgs = [];
-      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
+      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, is_explicit, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
       if ($onlyPub) {
         if ($since < 0) {
           $rows = $wpdb->get_results(
@@ -868,6 +868,7 @@ if (!defined('ABSPATH')) exit;
               'recipient_id'         => isset($r['recipient_id']) ? (int) $r['recipient_id'] : null,
               'recipient_name'       => $r['recipient_name'] ?: null,
               'content'              => $r['content'],
+              'is_explicit'          => !empty($r['is_explicit']),
               'reply_to_id'          => isset($r['reply_to_id']) ? (int) $r['reply_to_id'] : null,
               'reply_to_sender_id'   => isset($r['reply_to_sender_id']) ? (int) $r['reply_to_sender_id'] : null,
               'reply_to_sender_name' => $r['reply_to_sender_name'] ?: null,

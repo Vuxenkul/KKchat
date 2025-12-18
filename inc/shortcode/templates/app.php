@@ -228,6 +228,20 @@
   </div>
 </div>
 
+<!-- Explicit label modal -->
+<div id="kk-explicitModal" class="kk-explicit-modal" role="dialog" aria-modal="true" aria-labelledby="kk-explicitTitle">
+  <form class="kk-explicit-box" id="kk-explicitForm">
+    <strong id="kk-explicitTitle">Märk bilden</strong>
+    <p class="kk-explicit-text">Standard är att bilder är markerade som XXX. Avmarkera endast om bilden inte är explicit.</p>
+    <label class="kk-explicit-check"><input type="checkbox" id="kk-explicitCheck" checked> XXX</label>
+    <div class="kk-explicit-name" id="kk-explicitName"></div>
+    <div class="kk-explicit-actions">
+      <button type="button" class="iconbtn" id="kk-explicitCancel">Avbryt</button>
+      <button type="submit" class="iconbtn primary" id="kk-explicitConfirm">Bekräfta &amp; ladda upp</button>
+    </div>
+  </form>
+</div>
+
 <!-- Multi-tab takeover modal -->
 <div
   id="kk-multiTabModal"
@@ -547,6 +561,14 @@ const camFlip   = document.getElementById('kk-camFlip');
   const imgActDm     = document.getElementById('kk-img-act-dm');
   const imgActReport = document.getElementById('kk-img-act-report');
   const imgActBlock  = document.getElementById('kk-img-act-block');
+
+  const explicitModal   = document.getElementById('kk-explicitModal');
+  const explicitForm    = document.getElementById('kk-explicitForm');
+  const explicitCheck   = document.getElementById('kk-explicitCheck');
+  const explicitName    = document.getElementById('kk-explicitName');
+  const explicitCancel  = document.getElementById('kk-explicitCancel');
+  const explicitConfirm = document.getElementById('kk-explicitConfirm');
+  let explicitResolver  = null;
 
   const h = {'X-WP-Nonce': REST_NONCE};
 
@@ -1712,18 +1734,24 @@ function playNotifOnce() {
     const root = document.getElementById('kkchat-root');
 
     const BLUR_KEY = 'kk_blur_images';
-    let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '0') === '1';
+    let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '1') === '1';
     let SETTINGS_OPEN = false;
     let ADMIN_MENU_OPEN = false;
+
+    function resetInlineImageBlur(){
+      document.querySelectorAll('img.imgmsg').forEach(img => img.removeAttribute('data-unblurred'));
+    }
 
     function applyBlurClass(){ root?.classList.toggle('nsfw-blur', IMG_BLUR); }
     function setImageBlur(on){
       SETTINGS_OPEN = false;
       IMG_BLUR = !!on;
       localStorage.setItem(BLUR_KEY, IMG_BLUR ? '1' : '0');
+      if (IMG_BLUR) resetInlineImageBlur();
       applyBlurClass();
       renderRoomTabs();
     }
+    if (IMG_BLUR) resetInlineImageBlur();
     applyBlurClass();
 
   const ROOM_CACHE = new Map();          
@@ -1963,6 +1991,101 @@ async function doLogout(){
   let BLOCKED = new Set();
   function isBlocked(id){ return BLOCKED.has(Number(id)); }
   
+function parseBannerPayload(content){
+  if (typeof content !== 'string') return { text: '' };
+  try {
+    const data = JSON.parse(content);
+    if (data && typeof data === 'object') return data;
+  } catch(_){ }
+  return { text: String(content) };
+}
+
+function hexToRgba(hex, alpha){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||'').trim());
+  if (!m) return '';
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function normalizeHex(hex){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||''));
+  return m ? `#${m[1].toLowerCase()}` : '';
+}
+
+function shadeHex(hex, factor){
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex||''));
+  if (!m) return '';
+  const int = parseInt(m[1], 16);
+  const r = (int >> 16) & 255;
+  const g = (int >> 8) & 255;
+  const b = int & 255;
+  const shade = (channel) => {
+    const target = factor > 0 ? 255 : 0;
+    const delta = (target - channel) * Math.abs(factor);
+    return Math.max(0, Math.min(255, Math.round(channel + (factor > 0 ? delta : -delta))));
+  };
+  const toHex = (n) => n.toString(16).padStart(2, '0');
+  return `#${toHex(shade(r))}${toHex(shade(g))}${toHex(shade(b))}`;
+}
+
+function bannerAutolink(text){
+  const safe = esc(String(text||''));
+  return safe.replace(/(https?:\/\/[^\s<]+)/gi, m => {
+    const url = escAttr(m);
+    return `<a href="${url}" target="_blank" rel="noopener">${esc(m)}</a>`;
+  });
+}
+
+function normalizeBannerHTML(payload){
+  const rawHtml = typeof payload.html === 'string' ? payload.html : '';
+  const tmp = document.createElement('div');
+  tmp.innerHTML = rawHtml;
+
+  const anchors = tmp.querySelectorAll('a');
+  const hasAnchors = anchors.length > 0;
+
+  if (!hasAnchors) {
+    // If the stored HTML only has basic breaks, auto-link the textual content so custom
+    // anchor markup like <a href="…">Label</a> or pasted URLs become clickable.
+    const text = rawHtml ? tmp.textContent || '' : (payload.text || '');
+    const autolinked = bannerAutolink(text);
+    tmp.innerHTML = autolinked.replace(/\n/g, '<br>');
+  }
+
+  if (payload.link_url && tmp.querySelectorAll('a').length === 0) {
+    const href = escAttr(payload.link_url);
+    tmp.innerHTML = `<a href="${href}" target="_blank" rel="noopener">${tmp.innerHTML || esc(payload.link_url)}</a>`;
+  }
+
+  tmp.querySelectorAll('a').forEach(a => {
+    a.target = '_blank';
+    const rel = new Set((a.rel || '').split(/\s+/).filter(Boolean));
+    rel.add('noopener');
+    a.rel = Array.from(rel).join(' ');
+  });
+  return tmp.innerHTML;
+}
+
+function bannerStyleAttr(payload){
+  const color = normalizeHex(typeof payload.bg_color === 'string' ? payload.bg_color.trim() : '');
+  if (!color) return '';
+  const darker = shadeHex(color, -0.2) || color;
+  const border = hexToRgba(darker, 0.75) || darker;
+  const shadow = hexToRgba(color, 0.35) || color;
+  const bg = `linear-gradient(135deg, ${color} 0%, ${darker} 100%)`;
+  return ` style="--banner-bg:${escAttr(bg)};--banner-border:${escAttr(border)};--banner-shadow:${escAttr(shadow)}"`;
+}
+
+function bannerImageHTML(payload){
+  if (!payload.image_url) return '';
+  const target = escAttr(payload.link_url || payload.image_url);
+  const src = escAttr(payload.image_url);
+  return `<div class="banner-bubble__image"><a href="${target}" target="_blank" rel="noopener"><img class="banner-media" src="${src}" alt="Bannerbild" loading="lazy" decoding="async"></a></div>`;
+}
+
 function msgToHTML(m){
   const mid = Number(m.id);
   if (!Number.isFinite(mid)) return '';
@@ -1974,21 +2097,29 @@ function msgToHTML(m){
   const who = m.sender_name || 'Okänd';
   const when = new Date((m.time||0)*1000).toLocaleTimeString('sv-SE',{hour:'2-digit',minute:'2-digit'});
   const roleClass = isAdminById?.(sid) ? ' admin' : '';
+  const isExplicit = !!m.is_explicit;
   rememberName(sid, m.sender_name);
   const gender = genderById(sid);
   const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
   const attrs = [
-    `class="item ${sid===ME_ID?'me':'them'}${roleClass}"`,
-    `data-id="${mid}"`,
-    `data-sid="${sid}"`,
-    `data-sname="${escAttr(who)}"`,
-    `data-kind="${escAttr(kind)}"`
+    `class=\"item ${sid===ME_ID?'me':'them'}${roleClass}\"`,
+    `data-id=\"${mid}\"`,
+    `data-sid=\"${sid}\"`,
+    `data-sname=\"${escAttr(who)}\"`,
+    `data-kind=\"${escAttr(kind)}\"`
   ];
+  if (kind === 'image') {
+    attrs.push(`data-explicit=\"${isExplicit ? '1' : '0'}\"`);
+  }
 
   if (kind === 'banner'){
-    const content = String(m.content||'');
-    return `<li ${attrs.join(' ')} data-body="${escAttr(content)}"><div class="banner-bubble">${esc(content)}</div></li>`;
+    const payload = parseBannerPayload(m.content);
+    const textHTML = normalizeBannerHTML(payload);
+    const imageHTML = bannerImageHTML(payload);
+    const styleAttr = bannerStyleAttr(payload);
+    const body = payload.text || (typeof payload.html === 'string' ? payload.html : '');
+    return `<li ${attrs.join(' ')} data-body="${escAttr(body)}"><div class="banner-bubble"${styleAttr}>${textHTML}${imageHTML}</div></li>`;
   }
 
   const canReply = sid > 0 && sid !== Number(ME_ID);
@@ -2009,8 +2140,9 @@ function msgToHTML(m){
   if (kind === 'image'){
     const u = String(m.content||'').trim();
     const alt = `Bild från ${sid === ME_ID ? 'dig' : who}`;
+    const badge = isExplicit ? '<span class="imgbadge" aria-label="Markerad som XXX">XXX</span>' : '';
     return `<li ${attrs.join(' ')} data-body="${escAttr('[Bild]')}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}>
-      <div class="bubble img">${replyButtonHTML}${replyPreviewHTML}<img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
+      <div class="bubble img${isExplicit ? ' is-explicit' : ''}">${replyButtonHTML}${replyPreviewHTML}${badge}<img class="imgmsg" src="${escAttr(u)}" data-explicit="${isExplicit ? '1' : '0'}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
       ${metaHTML}
     </li>`;
   }
@@ -2329,6 +2461,10 @@ function applyCache(key){
       excerpt,
     };
 
+    if (m.is_explicit !== undefined) {
+      entry.is_explicit = !!m.is_explicit;
+    }
+
     if (m.reply_to_id != null) {
       const rid = Number(m.reply_to_id);
       entry.reply_to_id = Number.isFinite(rid) && rid > 0 ? rid : null;
@@ -2381,6 +2517,7 @@ function applyCache(key){
         sender_id: senderId,
         sender_name: senderName,
         content: body,
+        is_explicit: li.dataset.explicit === '1',
         reply_to_id: li.dataset.replyId ? Number(li.dataset.replyId) : null,
         reply_to_sender_name: li.dataset.replyName || null,
         reply_to_excerpt: li.dataset.replyExcerpt || null,
@@ -2533,6 +2670,7 @@ function textMentionsName(text, name){
 function watchNewImages(container){
   container.querySelectorAll('img.imgmsg:not([data-watch])').forEach(img=>{
     img.dataset.watch = '1';
+    if (IMG_BLUR && img.dataset.explicit === '1') img.removeAttribute('data-unblurred');
     img.addEventListener('load', ()=>{
       if (AUTO_SCROLL || atBottom(container)) scrollToBottom(container, false);
     }, { once: true });
@@ -2626,10 +2764,14 @@ function renderList(el, items, options = {}){
     li.dataset.kind  = kind || 'chat';
 
     if ((m.kind||'chat') === 'banner'){
+      const payload = parseBannerPayload(m.content);
+      const textHTML = normalizeBannerHTML(payload);
+      const imageHTML = bannerImageHTML(payload);
+      const styleAttr = bannerStyleAttr(payload);
+      const body = payload.text || (typeof payload.html === 'string' ? payload.html : '');
       li.className = 'item banner';
-      const text = String(m.content || '');
-      li.dataset.body = text;
-      li.innerHTML = `<div class="banner-bubble">${esc(text)}</div>`;
+      li.dataset.body = body;
+      li.innerHTML = `<div class="banner-bubble"${styleAttr}>${textHTML}${imageHTML}</div>`;
     } else {
       const roleClass = isAdminById(m.sender_id) ? ' admin' : '';
       li.className = 'item ' + (m.sender_id===ME_ID? 'me':'them') + roleClass;
@@ -2643,10 +2785,14 @@ function renderList(el, items, options = {}){
 
       let bubbleHTML = '';
       const isImage = (m.kind||'chat') === 'image';
+      const isExplicit = isImage ? !!m.is_explicit : false;
       const rawContent = String(m.content || '');
       const senderNum = Number(m.sender_id);
       const canReply = senderNum > 0 && senderNum !== meIdNum;
       li.dataset.body = isImage ? '[Bild]' : rawContent;
+      if (isImage) {
+        li.dataset.explicit = isExplicit ? '1' : '0';
+      }
 
       const replyTargetId = Number(m.reply_to_id || 0) > 0 ? Number(m.reply_to_id) : null;
       let replySenderName = m.reply_to_sender_name || null;
@@ -2706,8 +2852,9 @@ function renderList(el, items, options = {}){
       if (isImage) {
         const u   = rawContent.trim();
         const alt = `Bild från ${m.sender_id === ME_ID ? 'dig' : who}`;
-        bubbleHTML = `<div class="bubble img">${replyButtonHTML}${replyPreviewHTML}
-          <img class="imgmsg" src="${escAttr(u)}" alt="${escAttr(alt)}" loading="lazy" decoding="async">
+        const badge = isExplicit ? '<span class="imgbadge" aria-label="Markerad som XXX">XXX</span>' : '';
+        bubbleHTML = `<div class="bubble img${isExplicit ? ' is-explicit' : ''}">${replyButtonHTML}${replyPreviewHTML}${badge}
+          <img class="imgmsg" src="${escAttr(u)}" data-explicit="${isExplicit ? '1' : '0'}" alt="${escAttr(alt)}" loading="lazy" decoding="async">
         </div>`;
         if (repliesToMe) {
           mentionAdded = true;
@@ -4180,8 +4327,8 @@ function renderRoomTabs(){
     : `${iconMarkup('lock')} Autoscroll av (klicka för att låsa upp)`;
 
   const blurLabel = IMG_BLUR
-    ? `${iconMarkup('visibility')} Visa bilder`
-    : `${iconMarkup('visibility_off')} Censurera bilder`;
+    ? `${iconMarkup('visibility')} Visa XXX-bilder`
+    : `${iconMarkup('visibility_off')} Dölj XXX-bilder`;
 
   const allMuted = allChatsMuted();
   const allMuteLabel = allMuted
@@ -5083,6 +5230,7 @@ async function closeWebcamModal(){
 async function takeWebcamPhoto(){
   if (!camVideo || !__camStream) return;
   if (camShot) camShot.disabled = true;
+  let success = false;
 
   try{
     const v = camVideo;
@@ -5097,31 +5245,24 @@ async function takeWebcamPhoto(){
     const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
     if (!blob) { showToast('Kunde inte ta bild'); return; }
 
-    let file = new File([blob], 'camera.jpg', { type: 'image/jpeg' });
+    const file = new File([blob], 'camera.jpg', { type: 'image/jpeg' });
 
-    showToast('Komprimerar…');
-    file = await compressImageIfNeeded(file);
-
-    showToast('Laddar bild…');
-    const url = await uploadImage(file);
-
-    const ok = await sendImageMessage(url);
-    if (ok) {
-      await pollActive();
-      showToast('Bild skickad');
-      clearComposerReply();
+    success = await handleImageSend(file);
+    if (success) {
+      await closeWebcamModal();
     }
   } catch(e){
     showToast(e?.message || 'Uppladdning misslyckades');
   } finally {
     if (camShot) camShot.disabled = false;
   }
+
+  return success;
 }
 
 // Controls
 camShot?.addEventListener('click', async ()=>{
   await takeWebcamPhoto();
-  await closeWebcamModal();
 });
 camCancel?.addEventListener('click', closeWebcamModal);
 
@@ -5141,6 +5282,30 @@ camModal?.addEventListener('click', (e)=>{
 });
 document.addEventListener('keydown', (e)=>{
   if (e.key === 'Escape' && camModal?.hasAttribute('open')) closeWebcamModal();
+});
+
+function closeExplicitModal(result=null){
+  if (explicitModal) explicitModal.removeAttribute('open');
+  if (explicitResolver) { explicitResolver(result); explicitResolver = null; }
+}
+
+function promptExplicitChoice(file){
+  if (!explicitModal || !explicitForm) return Promise.resolve(true);
+  if (explicitName) explicitName.textContent = file?.name || 'Bilden';
+  if (explicitCheck) explicitCheck.checked = true;
+  explicitModal.setAttribute('open', '');
+  requestAnimationFrame(()=>{ explicitCheck?.focus(); });
+  return new Promise(resolve => { explicitResolver = resolve; });
+}
+
+explicitForm?.addEventListener('submit', (e)=>{
+  e.preventDefault();
+  closeExplicitModal(!!explicitCheck?.checked);
+});
+explicitCancel?.addEventListener('click', (e)=>{ e.preventDefault(); closeExplicitModal(null); });
+explicitModal?.addEventListener('click', (e)=>{ if (e.target === explicitModal) closeExplicitModal(null); });
+document.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape' && explicitModal?.hasAttribute('open')) closeExplicitModal(null);
 });
 
 
@@ -5570,11 +5735,12 @@ async function uploadImage(file){
   }
   return js.url;
 }
-  async function sendImageMessage(url){
+  async function sendImageMessage(url, isExplicit = false){
     const fd = new FormData();
     fd.append('csrf_token', CSRF);
     fd.append('kind', 'image');
     fd.append('image_url', url);
+    fd.append('is_explicit', isExplicit ? '1' : '0');
     if (COMPOSER_REPLY && Number.isFinite(Number(COMPOSER_REPLY.id))) {
       fd.append('reply_to_id', String(COMPOSER_REPLY.id));
       fd.append('reply_excerpt', COMPOSER_REPLY.excerpt || '');
@@ -5588,6 +5754,29 @@ async function uploadImage(file){
     return true;
   }
 
+  async function handleImageSend(file){
+    if (!file) return false;
+    const choice = await promptExplicitChoice(file);
+    if (choice === null || choice === undefined) return false;
+
+    try {
+      showToast('Komprimerar…');
+      const small = await compressImageIfNeeded(file);
+      showToast('Laddar bild…');
+      const url = await uploadImage(small);
+      const ok  = await sendImageMessage(url, !!choice);
+      if (ok) {
+        await pollActive();
+        showToast('Bild skickad');
+        clearComposerReply();
+      }
+      return ok;
+    } catch(e){
+      showToast(e?.message || 'Uppladdning misslyckades');
+      return false;
+    }
+  }
+
 // Upload picker
 pubUpBtn?.addEventListener('click', () => {
   closeAttachmentMenu();
@@ -5597,20 +5786,7 @@ pubUpBtn?.addEventListener('click', () => {
 pubImgInp?.addEventListener('change', async ()=>{
   const file = pubImgInp.files?.[0]; pubImgInp.value='';
   if (!file) return;
-  try{
-    showToast('Komprimerar…');
-    const small = await compressImageIfNeeded(file);
-    showToast('Laddar bild…');
-    const url = await uploadImage(small);
-    const ok  = await sendImageMessage(url);
-    if (ok) {
-      await pollActive();
-      showToast('Bild skickad');
-      clearComposerReply();
-    }
-  }catch(e){
-    showToast(e?.message || 'Uppladdning misslyckades');
-  }
+  await handleImageSend(file);
 });
 
 
@@ -5635,20 +5811,7 @@ pubCamBtn?.addEventListener('click', async ()=>{
 pubCamInp?.addEventListener('change', async ()=>{
   const file = pubCamInp.files?.[0]; pubCamInp.value='';
   if (!file) return;
-  try{
-    showToast('Komprimerar…');
-    const small = await compressImageIfNeeded(file);
-    showToast('Laddar bild…');
-    const url = await uploadImage(small);
-    const ok  = await sendImageMessage(url);
-    if (ok) {
-      await pollActive();
-      showToast('Bild skickad');
-      clearComposerReply();
-    }
-  }catch(e){
-    showToast(e?.message || 'Uppladdning misslyckades');
-  }
+  await handleImageSend(file);
 });
 
 
@@ -5707,6 +5870,11 @@ function openImagePreview(src, alt, sid = null, sname = ''){
     const li    = img.closest('li.item');
     const sid   = Number(li?.dataset.sid || 0);
     const sname = li?.dataset.sname || '';
+    const isExplicit = img.dataset.explicit === '1';
+    if (IMG_BLUR && isExplicit && !img.dataset.unblurred) {
+      img.dataset.unblurred = '1';
+      return;
+    }
     openImagePreview(img.currentSrc || img.src, img.alt || '', sid, sname);
   });
 }

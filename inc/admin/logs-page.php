@@ -136,10 +136,10 @@ function kkchat_admin_logs_page() {
   $sql = "SELECT id,created_at,kind,room,
                  sender_id,sender_name,sender_ip,
                  recipient_id,recipient_name,recipient_ip,
-                 content, hidden_at, hidden_by, hidden_cause
+                 content, is_explicit, hidden_at, hidden_by, hidden_cause
           FROM {$t['messages']} $whereSql
-          ORDER BY id DESC
-          LIMIT %d OFFSET %d";
+      ORDER BY id DESC
+         LIMIT %d OFFSET %d";
   $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$per, $offset])));
 
   // Markera IP-adresser som redan är blockerade
@@ -257,7 +257,7 @@ function kkchat_admin_logs_page() {
   $convRows = [];
   if ($convA > 0 && $convB > 0) {
     $convRows = $wpdb->get_results($wpdb->prepare(
-      "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content
+      "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content,is_explicit
          FROM {$t['messages']}
         WHERE (sender_id=%d AND recipient_id=%d)
            OR (sender_id=%d AND recipient_id=%d)
@@ -270,6 +270,10 @@ function kkchat_admin_logs_page() {
   <div class="wrap">
     <h1>KKchat Loggar</h1>
     <p class="description">Sök i alla chatloggar. ”Dolda” meddelanden finns kvar i databasen men syns inte för användare i frontend.</p>
+    <style>
+      .kk-explicit-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: #be123c; color: #fff; font-weight: 700; font-size: 12px; }
+      .kk-explicit-badge.is-muted { background: #6b7280; color: #f9fafb; }
+    </style>
 
     <!-- Rensa (purge) -->
     <div style="margin:14px 0;padding:12px;border:1px solid #f5c6cb;background:#fff5f5;border-radius:8px">
@@ -446,15 +450,20 @@ function kkchat_admin_logs_page() {
                 <?php foreach ($convRows as $r): ?>
                   <?php $isMe = ($r->sender_id == $convA); ?>
                   <div class="kkconv-row <?php echo $isMe ? 'me' : 'them'; ?>">
-                    <div class="kkconv-msg">
+                  <div class="kkconv-msg">
+                    <div class="kkconv-meta">
+                      <strong><?php echo esc_html($r->sender_name ?: ('#'.$r->sender_id)); ?></strong>
+                      • <?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$r->created_at)); ?>
+                      <?php if ($r->recipient_id): ?> • DM<?php else: ?> • Rum: <code><?php echo esc_html($r->room); ?></code><?php endif; ?>
+                    </div>
+                    <?php if ($r->kind === 'image'): ?>
                       <div class="kkconv-meta">
-                        <strong><?php echo esc_html($r->sender_name ?: ('#'.$r->sender_id)); ?></strong>
-                        • <?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$r->created_at)); ?>
-                        <?php if ($r->recipient_id): ?> • DM<?php else: ?> • Rum: <code><?php echo esc_html($r->room); ?></code><?php endif; ?>
+                        <span class="kk-explicit-badge<?php echo !empty($r->is_explicit) ? '' : ' is-muted'; ?>"><?php echo !empty($r->is_explicit) ? 'XXX' : 'SFW'; ?></span>
                       </div>
-                      <div class="kkchat-msg">
-                        <?php if ($r->kind === 'image' && $is_image_url($r->content)): ?>
-                          <?php $full = esc_url($r->content); ?>
+                    <?php endif; ?>
+                    <div class="kkchat-msg">
+                      <?php if ($r->kind === 'image' && $is_image_url($r->content)): ?>
+                        <?php $full = esc_url($r->content); ?>
                           <img src="<?php echo $full; ?>" alt="Bild #<?php echo (int)$r->id; ?>" class="kkchat-thumb" data-full="<?php echo $full; ?>" loading="lazy">
                         <?php else: ?>
                           <?php echo $r->content; /* redan escapat vid skrivning */ ?>
@@ -476,6 +485,7 @@ function kkchat_admin_logs_page() {
               <th>Samtal</th>
               <th>Tid</th>
               <th>Typ</th>
+              <th>XXX</th>
               <th>Rum/DM</th>
               <th>Avsändare (IP)</th>
               <th>Mottagare (IP)</th>
@@ -501,6 +511,13 @@ function kkchat_admin_logs_page() {
 
               <td><?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$m->created_at)); ?></td>
               <td><?php echo esc_html($m->kind); ?></td>
+              <td>
+                <?php if ($m->kind === 'image'): ?>
+                  <span class="kk-explicit-badge<?php echo !empty($m->is_explicit) ? '' : ' is-muted'; ?>"><?php echo !empty($m->is_explicit) ? 'XXX' : 'SFW'; ?></span>
+                <?php else: ?>
+                  —
+                <?php endif; ?>
+              </td>
               <td>
                 <?php
                 if ($m->recipient_id) {
