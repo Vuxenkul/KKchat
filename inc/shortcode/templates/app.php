@@ -231,8 +231,8 @@
 <!-- Explicit label modal -->
 <div id="kk-explicitModal" class="kk-explicit-modal" role="dialog" aria-modal="true" aria-labelledby="kk-explicitTitle">
   <form class="kk-explicit-box" id="kk-explicitForm">
-    <strong id="kk-explicitTitle">Märk bilden</strong>
-    <p class="kk-explicit-text">Standard är att bilder är markerade som XXX. Avmarkera endast om bilden inte är explicit.</p>
+    <strong id="kk-explicitTitle">Godkänn bilduppladning</strong>
+    <p class="kk-explicit-text">Ladda bara upp lagliga 18+ bilder med samtycke; XXX är förvalt – avmarkera bara om bilden är SFW/inte av sexuell natur - Felaktig märkning kan leda till ban.</p>
     <label class="kk-explicit-check"><input type="checkbox" id="kk-explicitCheck" checked> XXX</label>
     <div class="kk-explicit-name" id="kk-explicitName"></div>
     <div class="kk-explicit-actions">
@@ -6566,4 +6566,5 @@ init();
 
   window.__kkchatScroll = { jumpToBottom };
 })();
+
 </script>
