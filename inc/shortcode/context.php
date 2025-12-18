@@ -60,7 +60,7 @@ function kkchat_shortcode_context() {
   ];
 
   $rest_nonce = esc_js( wp_create_nonce('wp_rest') );
-  $open_dm = isset($_GET['dm']) ? (int) $_GET['dm'] : 'null';
+  $open_dm = isset($_GET['dm']) ? (int) $_GET['dm'] : null;
 
   $plugin_root_url = KKCHAT_URL;
   $audio         = esc_url($plugin_root_url . 'assets/notification.mp3');
