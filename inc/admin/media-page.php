@@ -58,6 +58,8 @@ function kkchat_admin_media_page() {
   $recipient  = sanitize_text_field($_GET['recipient'] ?? '');
   $from       = sanitize_text_field($_GET['from'] ?? '');
   $to         = sanitize_text_field($_GET['to'] ?? '');
+  $gender     = sanitize_text_field($_GET['gender'] ?? '');
+  $explicit   = in_array(($_GET['explicit'] ?? ''), ['sfw','xxx'], true) ? $_GET['explicit'] : '';
   $per        = max(12, min(1000, (int)($_GET['per'] ?? 50))); // 50 per page, max 1000
   $page       = max(1, (int)($_GET['paged'] ?? 1));
   $offset     = ($page - 1) * $per;
@@ -68,49 +70,54 @@ function kkchat_admin_media_page() {
   if ($q !== '' && filter_var($q, FILTER_VALIDATE_IP)) $parsed_ip = $q;
   if ($q !== '' && preg_match('/^#?(\d{1,20})$/', $q, $m)) $id_exact = (int)$m[1];
 
-  $where = ["kind = 'image'"];  // only images
+  $where = ["m.kind = 'image'"];  // only images
   $params = [];
 
-  if ($room !== '') { $where[] = "room = %s"; $params[] = $room; }
-  if ($sender !== '') { $where[] = "sender_name LIKE %s"; $params[] = '%'.$wpdb->esc_like($sender).'%'; }
-  if ($recipient !== '') { $where[] = "recipient_name LIKE %s"; $params[] = '%'.$wpdb->esc_like($recipient).'%'; }
+  if ($room !== '') { $where[] = "m.room = %s"; $params[] = $room; }
+  if ($sender !== '') { $where[] = "m.sender_name LIKE %s"; $params[] = '%'.$wpdb->esc_like($sender).'%'; }
+  if ($recipient !== '') { $where[] = "m.recipient_name LIKE %s"; $params[] = '%'.$wpdb->esc_like($recipient).'%'; }
+  if ($gender !== '') { $where[] = "u.gender = %s"; $params[] = $gender; }
+  if ($explicit === 'sfw') { $where[] = "m.is_explicit = 0"; }
+  if ($explicit === 'xxx') { $where[] = "m.is_explicit = 1"; }
 
   if ($from !== '') {
     $ts = strtotime($from.' 00:00:00');
-    if ($ts) { $where[] = "created_at >= %d"; $params[] = $ts; }
+    if ($ts) { $where[] = "m.created_at >= %d"; $params[] = $ts; }
   }
   if ($to !== '') {
     $ts = strtotime($to.' 23:59:59');
-    if ($ts) { $where[] = "created_at <= %d"; $params[] = $ts; }
+    if ($ts) { $where[] = "m.created_at <= %d"; $params[] = $ts; }
   }
 
   if ($id_exact > 0) {
-    $where[] = "id = %d"; $params[] = $id_exact;
+    $where[] = "m.id = %d"; $params[] = $id_exact;
   } elseif ($parsed_ip !== '') {
     // search both sides by IP
-    $where[] = "(sender_ip = %s OR recipient_ip = %s)"; $params[] = $parsed_ip; $params[] = $parsed_ip;
+    $where[] = "(m.sender_ip = %s OR m.recipient_ip = %s)"; $params[] = $parsed_ip; $params[] = $parsed_ip;
   } elseif ($q !== '') {
     // plain text search across url-content + names + room
     $like = '%'.$wpdb->esc_like($q).'%';
-    $where[] = "(content LIKE %s OR sender_name LIKE %s OR recipient_name LIKE %s OR room LIKE %s)";
+    $where[] = "(m.content LIKE %s OR m.sender_name LIKE %s OR m.recipient_name LIKE %s OR m.room LIKE %s)";
     array_push($params, $like, $like, $like, $like);
   }
 
   $whereSql = $where ? ('WHERE ' . implode(' AND ', array_map(fn($w)=>"($w)", $where))) : '';
+  $fromSql  = "{$t['messages']} m LEFT JOIN {$t['users']} u ON u.id = m.sender_id";
 
   // total count
   $total = (int)$wpdb->get_var($wpdb->prepare(
-    "SELECT COUNT(*) FROM {$t['messages']} $whereSql", ...$params
+    "SELECT COUNT(*) FROM $fromSql $whereSql", ...$params
   ));
 
   // page rows
-  $sql = "SELECT id,created_at,kind,room,
-                 sender_id,sender_name,sender_ip,
-                 recipient_id,recipient_name,recipient_ip,
-                 content,hidden_at,hidden_cause
-            FROM {$t['messages']}
+  $sql = "SELECT m.id,m.created_at,m.kind,m.room,
+                 m.sender_id,m.sender_name,m.sender_ip,
+                 m.recipient_id,m.recipient_name,m.recipient_ip,
+                 m.content,m.hidden_at,m.hidden_cause,m.is_explicit,
+                 u.gender AS sender_gender
+            FROM $fromSql
             $whereSql
-        ORDER BY id DESC
+        ORDER BY m.id DESC
            LIMIT %d OFFSET %d";
   $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$per, $offset]))) ?: [];
 
@@ -199,6 +206,9 @@ function kkchat_admin_media_page() {
   // rooms for filter dropdown
   $rooms = $wpdb->get_col("SELECT DISTINCT room FROM {$t['messages']} WHERE room IS NOT NULL AND room<>'' ORDER BY room ASC") ?: [];
 
+  // genders for dropdown
+  $genders = $wpdb->get_col("SELECT DISTINCT gender FROM {$t['users']} WHERE gender IS NOT NULL AND gender<>'' ORDER BY gender ASC") ?: [];
+
   // ------ render ------
   ?>
   <div class="wrap">
@@ -214,6 +224,17 @@ function kkchat_admin_media_page() {
           <option value="<?php echo esc_attr($r); ?>" <?php selected($room, $r); ?>><?php echo esc_html($r); ?></option>
         <?php endforeach; ?>
       </select>
+      <select name="gender" style="margin-right:8px">
+        <option value="">Alla kön</option>
+        <?php foreach ($genders as $g): ?>
+          <option value="<?php echo esc_attr($g); ?>" <?php selected($gender, $g); ?>><?php echo esc_html($g); ?></option>
+        <?php endforeach; ?>
+      </select>
+      <select name="explicit" style="margin-right:8px">
+        <option value="">SFW + XXX</option>
+        <option value="sfw" <?php selected($explicit, 'sfw'); ?>>Endast SFW</option>
+        <option value="xxx" <?php selected($explicit, 'xxx'); ?>>Endast XXX</option>
+      </select>
       <input type="text" name="sender" placeholder="Avsändare" value="<?php echo esc_attr($sender); ?>" style="width:140px;margin-right:8px">
       <input type="text" name="recipient" placeholder="Mottagare" value="<?php echo esc_attr($recipient); ?>" style="width:140px;margin-right:8px">
       <input type="date" name="from" value="<?php echo esc_attr($from); ?>" style="margin-right:4px">
@@ -222,7 +243,7 @@ function kkchat_admin_media_page() {
   <input type="number" name="per" min="12" max="1000" value="<?php echo (int)$per; ?>" style="width:90px;margin-left:4px">
 </label>
       <button class="button button-primary" style="margin-left:8px">Filtrera</button>
-      <?php if ($q || $room || $sender || $recipient || $from || $to): ?>
+      <?php if ($q || $room || $sender || $recipient || $from || $to || $gender || $explicit): ?>
         <a class="button" href="<?php echo esc_url(admin_url('admin.php?page=kkchat_media')); ?>">Rensa</a>
       <?php endif; ?>
     </form>
@@ -252,6 +273,8 @@ function kkchat_admin_media_page() {
       .kkactions .button { height:auto; line-height:20px; padding:3px 8px; }
       .kkrow { margin:3px 0; }
       .kkrow strong { font-weight:600; }
+      .kk-explicit-badge { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; background:#be123c; color:#fff; font-weight:700; font-size:12px; }
+      .kk-explicit-badge.is-muted { background:#6b7280; color:#f9fafb; }
       /* simple lightbox */
       #kkchatLightbox { position:fixed; inset:0; background:rgba(0,0,0,.8); display:none; align-items:center; justify-content:center; z-index:9999; }
       #kkchatLightbox.open { display:flex; }
@@ -274,9 +297,13 @@ function kkchat_admin_media_page() {
             <?php if (!empty($m->hidden_at)): ?>
               <div class="badge">Dolt</div>
             <?php endif; ?>
+            <div class="kkrow">
+              <span class="kk-explicit-badge<?php echo !empty($m->is_explicit) ? '' : ' is-muted'; ?>"><?php echo !empty($m->is_explicit) ? 'XXX' : 'SFW'; ?></span>
+            </div>
             <div class="kkrow"><strong>#<?php echo (int)$m->id; ?></strong> <span class="muted">• <?php echo esc_html(date_i18n('Y-m-d H:i', (int)$m->created_at)); ?></span></div>
             <?php if ($m->room): ?><div class="kkrow"><strong>Rum:</strong> <?php echo $h($m->room); ?></div><?php endif; ?>
             <div class="kkrow"><strong>Avs:</strong> <?php echo $h($m->sender_name ?: ('ID '.$m->sender_id)); ?></div>
+            <?php if (!empty($m->sender_gender)): ?><div class="kkrow"><strong>Kön:</strong> <?php echo $h($m->sender_gender); ?></div><?php endif; ?>
             <?php if ($m->recipient_id): ?><div class="kkrow"><strong>→</strong> <?php echo $h($m->recipient_name ?: ('ID '.$m->recipient_id)); ?></div><?php endif; ?>
             <?php if ($m->sender_ip): ?>
               <?php
@@ -344,6 +371,8 @@ if ($pages > 1):
     'room'      => $room,
     'sender'    => $sender,
     'recipient' => $recipient,
+    'gender'    => $gender,
+    'explicit'  => $explicit,
     'from'      => $from,
     'to'        => $to,
     'per'       => $per,
