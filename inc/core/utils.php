@@ -60,13 +60,24 @@ add_action('init', 'kkchat_ensure_users_table', 1);
 // Enqueue late so our CSS overrides theme CSS.
 add_action('wp_enqueue_scripts', function () {
     $css_path = KKCHAT_PATH . 'assets/css/kkchat.css';
-    $ver      = file_exists($css_path) ? filemtime($css_path) : null;
+    $css_ver  = file_exists($css_path) ? filemtime($css_path) : null;
 
     wp_register_style(
         'kkchat',
         KKCHAT_URL . 'assets/css/kkchat.css',
         [],
-        $ver
+        $css_ver
+    );
+
+    $js_path = KKCHAT_PATH . 'assets/js/kkchat.js';
+    $js_ver  = file_exists($js_path) ? filemtime($js_path) : null;
+
+    wp_register_script(
+        'kkchat',
+        KKCHAT_URL . 'assets/js/kkchat.js',
+        [],
+        $js_ver,
+        true
     );
 }, 100);
 
