@@ -4596,6 +4596,84 @@ function handleStreamSync(js, context){
   const active = desiredStreamState();
   if (!active) return;
 
+  const dmDeltasFromUnread = () => {
+    const unread = js?.unread || {};
+    const src = unread.dm_deltas || unread.dmDeltas || null;
+    if (!src || typeof src !== 'object') return {};
+    const out = {};
+    Object.entries(src).forEach(([key, list]) => {
+      const pid = Number(key);
+      if (!Number.isFinite(pid) || pid <= 0) return;
+      if (!Array.isArray(list) || !list.length) return;
+      const normalized = list.map(m => ({
+        ...m,
+        id: Number(m?.id),
+        sender_id: Number(m?.sender_id),
+        recipient_id: m?.recipient_id == null ? null : Number(m.recipient_id),
+        time: Number(m?.time ?? m?.created_at ?? 0)
+      })).filter(m => Number.isFinite(m.id) && Number.isFinite(m.sender_id));
+      if (!normalized.length) return;
+      normalized.sort((a, b) => a.id - b.id);
+      out[pid] = normalized;
+    });
+    return out;
+  };
+
+  const dmDeltas = dmDeltasFromUnread();
+
+  const mergeDmDeltasIntoCache = () => {
+    Object.entries(dmDeltas).forEach(([peerKey, items]) => {
+      const peerId = Number(peerKey);
+      if (!Number.isFinite(peerId) || peerId <= 0) return;
+      if (isBlocked(peerId)) return;
+
+      const cacheKey = cacheKeyForDM(peerId);
+      const cached = ROOM_CACHE.get(cacheKey);
+      const last = cached ? (Number(cached.last) || -1) : -1;
+
+      const filtered = items.filter(m => {
+        const sid = Number(m.sender_id);
+        const rid = m.recipient_id == null ? null : Number(m.recipient_id);
+        const inThread = (sid === ME_ID && rid === peerId) || (sid === peerId && rid === ME_ID);
+        const isNew = Number(m.id) > last;
+        return inThread && isNew;
+      }).map(m => ({
+        ...m,
+        id: Number(m.id),
+        sender_id: Number(m.sender_id),
+        recipient_id: m.recipient_id == null ? null : Number(m.recipient_id)
+      }));
+
+      if (!filtered.length) return;
+
+      const addHTML = msgsToHTML(filtered);
+      const combined = clampHTML((cached?.html || '') + addHTML);
+      const nextLast = filtered.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), last);
+      writeCache(cacheKey, {
+        last: nextLast,
+        html: combined,
+        isFull: cached?.isFull === true
+      });
+    });
+  };
+
+  // Inject deltas for the active DM into the live payload so they render.
+  if (context?.kind === 'dm') {
+    const peerId = Number(context.to);
+    const deltas = dmDeltas?.[peerId] || null;
+    if (deltas && deltas.length) {
+      const existing = Array.isArray(js.messages) ? js.messages : [];
+      const seen = new Set(existing.map(m => Number(m?.id)));
+      const additions = deltas.filter(m => !seen.has(Number(m.id)));
+      if (additions.length) {
+        js.messages = existing.concat(additions).sort((a, b) => Number(a?.id) - Number(b?.id));
+      }
+    }
+  }
+
+  // Always merge DM deltas into caches, even when the current view is different.
+  mergeDmDeltasIntoCache();
+
   const maybeQueueDmPrefetch = () => {
     if (!context || context.kind !== 'dm') return false;
     const peerId = Number(context.to);

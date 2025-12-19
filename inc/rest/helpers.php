@@ -663,6 +663,9 @@ if (!defined('ABSPATH')) exit;
       $latestPerId  = 0;
       $latestRoomId = 0;
       $roomLastSeen = [];
+      $dmLastSeen   = [];
+      $msgs = [];
+      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, is_explicit, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
 
       $blkPer = '';
       $paramsPer = [$me];
@@ -699,6 +702,7 @@ if (!defined('ABSPATH')) exit;
         } else {
           $per[$peer] = 0;
         }
+        $dmLastSeen[$peer] = $lastSeen;
         $latestPerId = max($latestPerId, $maxId);
       }
 
@@ -748,15 +752,103 @@ if (!defined('ABSPATH')) exit;
 
       $unreadLatest = max($latestPerId, $latestRoomId);
 
+      $dmDeltaPerPeer = min(3, max(0, (int) apply_filters('kkchat_sync_dm_delta_per_peer', 2)));
+      $dmDeltaTotal   = min($limit, max(0, (int) apply_filters('kkchat_sync_dm_delta_total', 12)));
+      $dmDeltas       = [];
+
+      if ($dmDeltaPerPeer > 0 && $dmDeltaTotal > 0) {
+        $dmUnreadPeers = array_keys(array_filter($per, fn($v) => (int) $v > 0));
+        $remaining     = $dmDeltaTotal;
+        $deltaRows     = [];
+
+        foreach ($dmUnreadPeers as $peerId) {
+          if ($remaining <= 0) { break; }
+
+          $peerId   = (int) $peerId;
+          $lastSeen = (int) ($dmLastSeen[$peerId] ?? 0);
+          $take     = min($dmDeltaPerPeer, $remaining);
+
+          $rowsDelta = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT $msgColumns FROM {$t['messages']}\n                 WHERE hidden_at IS NULL\n                   AND ((sender_id = %d AND recipient_id = %d) OR\n                        (sender_id = %d AND recipient_id = %d))\n                   AND id > %d\n               ORDER BY id DESC\n               LIMIT %d",
+              $peerId,
+              $me,
+              $me,
+              $peerId,
+              $lastSeen,
+              $take
+            ),
+            ARRAY_A
+          ) ?: [];
+
+          if (!empty($rowsDelta)) {
+            foreach ($rowsDelta as $row) {
+              $row['_peer_id'] = $peerId;
+              $deltaRows[] = $row;
+            }
+            $remaining -= count($rowsDelta);
+          }
+        }
+
+        if (!empty($deltaRows)) {
+          $deltaIds = array_values(array_filter(array_map(fn($r) => (int) ($r['id'] ?? 0), $deltaRows)));
+          $deltaReadMap = [];
+
+          if (!empty($deltaIds)) {
+            $placeholders = implode(',', array_fill(0, count($deltaIds), '%d'));
+            $deltaReadRows = $wpdb->get_results(
+              $wpdb->prepare("SELECT message_id, user_id FROM {$t['reads']} WHERE message_id IN ($placeholders)", ...$deltaIds),
+              ARRAY_A
+            ) ?: [];
+
+            foreach ($deltaReadRows as $dr) {
+              $mid = (int) ($dr['message_id'] ?? 0);
+              $uid = (int) ($dr['user_id'] ?? 0);
+              if ($mid > 0 && $uid > 0) {
+                $deltaReadMap[$mid][] = $uid;
+              }
+            }
+          }
+
+          foreach ($deltaRows as $row) {
+            $mid    = (int) ($row['id'] ?? 0);
+            $peerId = (int) ($row['_peer_id'] ?? 0);
+            if ($mid <= 0 || $peerId <= 0) { continue; }
+
+            $dmDeltas[$peerId][] = [
+              'id'                   => $mid,
+              'time'                 => (int) $row['created_at'],
+              'kind'                 => $row['kind'] ?: 'chat',
+              'room'                 => $row['room'] ?: null,
+              'sender_id'            => (int) $row['sender_id'],
+              'sender_name'          => (string) ($row['sender_name'] ?? ''),
+              'recipient_id'         => isset($row['recipient_id']) ? (int) $row['recipient_id'] : null,
+              'recipient_name'       => $row['recipient_name'] ?: null,
+              'content'              => $row['content'],
+              'is_explicit'          => !empty($row['is_explicit']),
+              'reply_to_id'          => isset($row['reply_to_id']) ? (int) $row['reply_to_id'] : null,
+              'reply_to_sender_id'   => isset($row['reply_to_sender_id']) ? (int) $row['reply_to_sender_id'] : null,
+              'reply_to_sender_name' => $row['reply_to_sender_name'] ?: null,
+              'reply_to_excerpt'     => $row['reply_to_excerpt'] ?: null,
+              'read_by'              => isset($deltaReadMap[$mid]) ? array_values(array_map('intval', $deltaReadMap[$mid])) : [],
+            ];
+          }
+
+          foreach ($dmDeltas as &$deltaList) {
+            usort($deltaList, fn($a, $b) => ($a['id'] ?? 0) <=> ($b['id'] ?? 0));
+          }
+          unset($deltaList);
+        }
+      }
+
       $unread = [
         'totPriv' => $totPriv,
         'totPub'  => $totPub,
         'per'     => (object) $per,
         'rooms'   => (object) $perRoom,
         'latest'  => $unreadLatest,
+        'dm_deltas' => (object) $dmDeltas,
       ];
-      $msgs = [];
-      $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, is_explicit, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
       if ($onlyPub) {
         if ($since < 0) {
           $rows = $wpdb->get_results(
@@ -1051,4 +1143,3 @@ if (!defined('ABSPATH')) exit;
       return 0;
     }
   }
-
