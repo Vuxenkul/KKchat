@@ -610,6 +610,8 @@ const PREFETCH_KEYS = new Set();
 const PREFETCH_INFLIGHT = new Map();
 let PREFETCH_TIMER = null;
 let PREFETCH_BUSY = false;
+const PREFETCH_DM_DEFAULT_LIMIT = 10;
+const PREFETCH_DM_LIGHT_LIMIT = 6;
 
 const DM_RECENT_VERIFY_COUNT = 5;
 const DM_RECENT_VERIFY_INFLIGHT = new Map();
@@ -913,12 +915,13 @@ const previousWait = Number(POLL_LAST_SCHEDULED_MS) || 0;
   }, wait);
 }
 
-function enqueuePrefetch(kind, value){
+function enqueuePrefetch(kind, value, options = {}){
   if (value == null) return;
   const key = `${kind}:${value}`;
   if (PREFETCH_KEYS.has(key)) return;
+  const limit = Number.isFinite(Number(options.limit)) && Number(options.limit) > 0 ? Number(options.limit) : undefined;
   PREFETCH_KEYS.add(key);
-  PREFETCH_QUEUE.push({ kind, value, key });
+  PREFETCH_QUEUE.push({ kind, value, key, limit });
   schedulePrefetchTick();
 }
 
@@ -928,10 +931,10 @@ function queuePrefetchRoom(slug){
   enqueuePrefetch('room', room);
 }
 
-function queuePrefetchDM(userId){
+function queuePrefetchDM(userId, options = {}){
   const id = Number(userId);
   if (!Number.isFinite(id) || id <= 0) return;
-  enqueuePrefetch('dm', id);
+  enqueuePrefetch('dm', id, options);
 }
 
 function schedulePrefetchTick(){
@@ -953,7 +956,7 @@ async function runPrefetchTick(){
     if (next.kind === 'room') {
       promise = prefetchRoom(next.value);
     } else if (next.kind === 'dm') {
-      promise = prefetchDM(next.value);
+      promise = prefetchDM(next.value, { limit: next.limit });
     }
 
     if (promise && typeof promise.then === 'function') {
@@ -971,7 +974,7 @@ async function runPrefetchTick(){
   }
 }
 
-async function ensurePrefetched(kind, value){
+async function ensurePrefetched(kind, value, options = {}){
   const key = `${kind}:${value}`;
 
   const inflight = PREFETCH_INFLIGHT.get(key);
@@ -997,7 +1000,7 @@ async function ensurePrefetched(kind, value){
   PREFETCH_KEYS.delete(key);
 
   try {
-    const promise = kind === 'room' ? prefetchRoom(value) : prefetchDM(value);
+    const promise = kind === 'room' ? prefetchRoom(value) : prefetchDM(value, options);
     if (promise && typeof promise.then === 'function') {
       PREFETCH_INFLIGHT.set(key, promise);
       await promise.catch(()=>{});
@@ -1027,10 +1030,10 @@ async function ensurePrefetchedRoom(slug){
   return ensurePrefetched('room', room);
 }
 
-async function ensurePrefetchedDM(userId){
+async function ensurePrefetchedDM(userId, options = {}){
   const id = Number(userId);
   if (!Number.isFinite(id) || id <= 0) return false;
-  return ensurePrefetched('dm', id);
+  return ensurePrefetched('dm', id, options);
 }
 
 function openStream(forceCold = false){
@@ -1930,14 +1933,16 @@ async function prefetchRoom(slug){
   }catch(_){}
 }
 
-async function prefetchDM(userId){
+async function prefetchDM(userId, options = {}){
   try{
     const key    = cacheKeyForDM(userId);
     const cached = ROOM_CACHE.get(key);
     const since  = cached ? (Number(cached.last) || -1) : -1;
+    const limitOpt = Number(options.limit);
+    const limit = Number.isFinite(limitOpt) && limitOpt > 0 ? limitOpt : PREFETCH_DM_DEFAULT_LIMIT;
 
     const params = new URLSearchParams({
-      to: String(userId), since: String(since), limit:'10'
+      to: String(userId), since: String(since), limit:String(limit)
     });
     const items = await fetchJSON(`${API}/fetch?${params}`);
 
@@ -4591,8 +4596,41 @@ function handleStreamSync(js, context){
   const active = desiredStreamState();
   if (!active) return;
 
+  const maybeQueueDmPrefetch = () => {
+    if (!context || context.kind !== 'dm') return false;
+    const peerId = Number(context.to);
+    if (!Number.isFinite(peerId) || peerId <= 0) return false;
+    if (isBlocked(peerId)) return true;
+
+    let perMap = js?.unread?.per;
+    if (!perMap && Array.isArray(js?.events)) {
+      for (let i = js.events.length - 1; i >= 0; i--) {
+        const ev = js.events[i];
+        if (ev && ev.unread && typeof ev.unread.per === 'object') {
+          perMap = ev.unread.per;
+          break;
+        }
+      }
+    }
+    if (!perMap || typeof perMap !== 'object') return false;
+
+    const nextCount = Number(perMap?.[peerId] ?? perMap?.[String(peerId)] ?? 0);
+    const prevCount = Number(UNREAD_PER?.[peerId] ?? UNREAD_PER?.[String(peerId)] ?? 0);
+    if (!(nextCount > prevCount)) return false;
+
+    const key = `dm:${peerId}`;
+    if (hasPendingPrefetch(key)) return true;
+
+    queuePrefetchDM(peerId, { limit: PREFETCH_DM_LIGHT_LIMIT });
+    return true;
+  };
+
   if (context?.kind === 'dm') {
-    if (active.kind !== 'dm' || Number(active.to) !== Number(context.to)) return;
+    const isActiveDM = active.kind === 'dm' && Number(active.to) === Number(context.to);
+    if (!isActiveDM) {
+      maybeQueueDmPrefetch();
+      return;
+    }
   } else {
     if (active.kind !== 'room' || active.room !== context.room) return;
   }
