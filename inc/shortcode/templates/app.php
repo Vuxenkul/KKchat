@@ -4565,6 +4565,7 @@ roomTabs.addEventListener('click', async e => {
   if (!JOINED.has(slug)) return;
   if (!room.allowed) { showToast('Endast för medlemmar'); return; }
 
+  const unreadBeforeOpen = ROOM_UNREAD[slug] || 0;
   flushPendingReads();
   muteFor(1200);
   stopStream();
@@ -4593,8 +4594,14 @@ roomTabs.addEventListener('click', async e => {
   setComposerAccess();
   showView('vPublic');
 
+  const forceSnapshot = unreadBeforeOpen > 0;
+  if (forceSnapshot && cacheEntry?.isFull) {
+    cacheEntry = { ...cacheEntry, isFull: false };
+    writeCache(cacheKey, cacheEntry);
+  }
+  const shouldSnapshot = !cacheHit || !cacheEntry?.isFull || forceSnapshot;
   let snapshotPromise = null;
-  if (cacheHit && cacheEntry?.isFull) {
+  if (!shouldSnapshot && cacheHit && cacheEntry?.isFull) {
     markVisible(pubList);
   } else {
     snapshotPromise = loadHistorySnapshot({ kind: 'room', room: slug });
@@ -4715,6 +4722,7 @@ roomsListEl?.addEventListener('click', async (e) => {
     saveJoined(JOINED);
 
     if (!currentDM && currentRoom === slug) {
+      const unreadBeforeOpen = ROOM_UNREAD[currentRoom] || 0;
       ensureJoinedBaseline();
       const next = ROOMS.find(r => JOINED.has(r.slug) && r.allowed)?.slug || defaultRoomSlug();
       if (next && next !== currentRoom) {
@@ -4727,8 +4735,15 @@ roomsListEl?.addEventListener('click', async (e) => {
         setComposerAccess();
         showView('vPublic');
 
+        const forceSnapshot = unreadBeforeOpen > 0;
+        let adjustedCache = cacheEntry;
+        if (forceSnapshot && adjustedCache?.isFull) {
+          adjustedCache = { ...adjustedCache, isFull: false };
+          writeCache(cacheKeyForRoom(currentRoom), adjustedCache);
+        }
+        const shouldSnapshot = !cacheHit || !adjustedCache?.isFull || forceSnapshot;
         let snapshotPromise = null;
-        if (cacheHit && cacheEntry?.isFull) {
+        if (!shouldSnapshot && cacheHit && adjustedCache?.isFull) {
           // ✅ mark reads immediately on cache hit
           markVisible(pubList);
         } else {
