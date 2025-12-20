@@ -2164,6 +2164,18 @@ function msgsToHTML(items, cap=180){
   return arr.map(msgToHTML).join('');
 }
 
+function maxMessageTime(items, seed = -1){
+  const base = Number.isFinite(Number(seed)) ? Number(seed) : -1;
+  if (!Array.isArray(items) || !items.length) return base;
+  return items.reduce((mx, m) => {
+    const raw = m && typeof m === 'object'
+      ? (m.time ?? m.created_at ?? m.createdAt ?? m.timestamp ?? m.ts)
+      : null;
+    const t = Number(raw);
+    return Number.isFinite(t) ? Math.max(mx, t) : mx;
+  }, base);
+}
+
 
 
 function writeCache(key, patch){
@@ -2190,7 +2202,8 @@ async function prefetchRoom(slug){
 
     const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    writeCache(key, { last: maxId, html: combined, isFull: false });
+    const maxTime = maxMessageTime(items, cached?.lastTime);
+    writeCache(key, { last: maxId, html: combined, isFull: false, lastTime: maxTime });
   }catch(_){}
 }
 
@@ -2212,7 +2225,8 @@ async function prefetchDM(userId){
 
     const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    writeCache(key, { last: maxId, html: combined, isFull: false });
+    const maxTime = maxMessageTime(items, cached?.lastTime);
+    writeCache(key, { last: maxId, html: combined, isFull: false, lastTime: maxTime });
   }catch(_){}
 }
 
@@ -2235,19 +2249,26 @@ function applyCache(key){
     hydrateMessageIndexFromList(pubList);
 
     const dist = Number.isFinite(cached.bottomDist) ? cached.bottomDist : 0;
+    const mergedLastTime = Number.isFinite(Number(cached.lastTime)) ? Number(cached.lastTime) : undefined;
 
     const merged = {
       ...cached,
       last: Number(cached.last) || -1,
       html: pubList.innerHTML,
       bottomDist: dist,
-      isFull: trimmed ? false : cached.isFull === true
+      isFull: trimmed ? false : cached.isFull === true,
+      lastTime: mergedLastTime
     };
 
     // 🔁 re-stash the trimmed HTML so the cache doesn't bloat
     writeCache(key, merged);
 
     pubList.dataset.last = String(merged.last);
+    if (Number.isFinite(merged.lastTime)) {
+      pubList.dataset.lastTime = String(merged.lastTime);
+    } else {
+      delete pubList.dataset.lastTime;
+    }
 
     requestAnimationFrame(()=>{
       pubList.scrollTop = Math.max(0, pubList.scrollHeight - pubList.clientHeight - dist);
@@ -2260,6 +2281,7 @@ function applyCache(key){
   }
   pubList.innerHTML = '';
   pubList.dataset.last = '-1';
+  pubList.dataset.lastTime = '-1';
   hydrateMessageIndexFromList(pubList);
   return null;
 }
@@ -2273,7 +2295,10 @@ function applyCache(key){
     writeCache(activeCacheKey(), {
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML,
-      bottomDist
+      bottomDist,
+      lastTime: Number.isFinite(Number(pubList.dataset.lastTime))
+        ? Number(pubList.dataset.lastTime)
+        : undefined
     });
   }catch(_){}
 }
@@ -2740,7 +2765,10 @@ function renderList(el, items, options = {}){
             try {
               writeCache(activeCacheKey(), {
                 last: +pubList.dataset.last || -1,
-                html: pubList.innerHTML
+                html: pubList.innerHTML,
+                lastTime: Number.isFinite(Number(pubList.dataset.lastTime))
+                  ? Number(pubList.dataset.lastTime)
+                  : undefined
               });
             } catch(_) {}
           }
@@ -3596,6 +3624,7 @@ function coerceLastMessage(raw){
     ? raw.last_message
     : raw;
 
+  const idVal = src.id ?? src.message_id ?? src.mid ?? src.last_id ?? src.last_message_id;
   const roomVal = src.room ?? src.last_room ?? null;
   const toVal = src.to ?? src.recipient_id ?? src.last_recipient_id ?? null;
   const kindVal = src.kind ?? src.last_kind ?? 'chat';
@@ -3610,6 +3639,7 @@ function coerceLastMessage(raw){
     recipient_name: recipName ? String(recipName) : null,
     kind: String(kindVal || 'chat'),
     time: Number.isFinite(Number(timeVal)) ? Math.floor(Number(timeVal)) : null,
+    id: Number.isFinite(Number(idVal)) && Number(idVal) > 0 ? Number(idVal) : null,
   };
 
   const meaningfulText = normalized.text.trim();
@@ -4093,7 +4123,10 @@ actHide?.addEventListener('click', async ()=>{
 
         writeCache(activeCacheKey(), {
           last: +pubList.dataset.last || -1,
-          html: pubList.innerHTML
+          html: pubList.innerHTML,
+          lastTime: Number.isFinite(Number(pubList.dataset.lastTime))
+            ? Number(pubList.dataset.lastTime)
+            : undefined
         });
       } catch(_) {}
 
@@ -4886,14 +4919,21 @@ function handleStreamSync(js, context){
     const currentLast = +pubList.dataset.last || -1;
     const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
-
     const cacheKey = cacheKeyForRoom(context.room);
     const prevCache = ROOM_CACHE.get(cacheKey);
+    const allTime = maxMessageTime(items, prevCache?.lastTime);
+    if (Number.isFinite(allTime)) {
+      pubList.dataset.lastTime = String(allTime);
+    } else {
+      delete pubList.dataset.lastTime;
+    }
+
     const isFull = isSnapshot ? true : prevCache?.isFull === true;
     writeCache(cacheKey, {
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML,
-      isFull
+      isFull,
+      lastTime: allTime
     });
   } else {
     const raw = Array.isArray(js?.messages) ? js.messages : [];
@@ -4930,11 +4970,18 @@ function handleStreamSync(js, context){
 
     const cacheKey = cacheKeyForDM(context.to);
     const prevCache = ROOM_CACHE.get(cacheKey);
+    const allTime = maxMessageTime(items, prevCache?.lastTime);
+    if (Number.isFinite(allTime)) {
+      pubList.dataset.lastTime = String(allTime);
+    } else {
+      delete pubList.dataset.lastTime;
+    }
     const isFull = isSnapshot ? true : prevCache?.isFull === true;
     writeCache(cacheKey, {
       last: +pubList.dataset.last || -1,
       html: pubList.innerHTML,
-      isFull
+      isFull,
+      lastTime: allTime
     });
   }
 }
@@ -5000,6 +5047,7 @@ async function openDM(id) {
 
   // Ensure the DM appears in the sidebar/tabs (don't render yet)
   const numericId = Number(id);
+  const unreadBeforeOpen = UNREAD_PER[numericId] || 0;
   const alreadyActive = ACTIVE_DMS.has(numericId);
   ACTIVE_DMS.add(numericId);
   saveDMActive(ACTIVE_DMS);
@@ -5050,11 +5098,30 @@ async function openDM(id) {
     }
   }
 
+  const cacheLastId = Number(cacheEntry?.last) || -1;
+  const cacheLastTime = Number.isFinite(Number(cacheEntry?.lastTime))
+    ? Number(cacheEntry.lastTime)
+    : null;
+  const peer = Array.isArray(USERS) ? USERS.find(u => Number(u.id) === currentDM) : null;
+  const peerLast = resolveLastMessage(peer || { id: currentDM, last_message: LAST_MESSAGE_CACHE.get(currentDM) }) || null;
+  const peerLastIdRaw = peerLast?.id ?? peerLast?.message_id ?? peerLast?.mid ?? peerLast?.last_id ?? peerLast?.last_message_id;
+  const peerLastId = Number.isFinite(Number(peerLastIdRaw)) ? Number(peerLastIdRaw) : null;
+  const peerLastTime = Number.isFinite(Number(peerLast?.time)) ? Number(peerLast.time) : null;
+  const peerAheadById = peerLastId != null && peerLastId > cacheLastId;
+  const peerAheadByTime = peerLastTime != null && (cacheLastTime == null || peerLastTime > cacheLastTime);
+  const forceSnapshot = unreadBeforeOpen > 0 || peerAheadById || peerAheadByTime;
+
+  if (forceSnapshot && cacheEntry?.isFull) {
+    cacheEntry = { ...cacheEntry, isFull: false };
+    writeCache(cacheKey, cacheEntry);
+  }
+
   setComposerAccess();
   showView('vPublic');
 
+  const shouldSnapshot = !cacheHit || !cacheEntry?.isFull || forceSnapshot;
   let snapshotPromise = null;
-  if (cacheHit && cacheEntry?.isFull) {
+  if (!shouldSnapshot && cacheHit && cacheEntry?.isFull) {
     markVisible(pubList);
   } else {
     snapshotPromise = loadHistorySnapshot({ kind: 'dm', to: currentDM });
@@ -5069,6 +5136,45 @@ async function openDM(id) {
   await syncPromise;
   await verifyPromise;
 
+  if (unreadBeforeOpen > 0) {
+    const latestRenderedId = Array.from(pubList.querySelectorAll('li.item'))
+      .reduce((mx, li) => Math.max(mx, Number(li.dataset.id) || -1), -1);
+    const latestRenderedTimeRaw = Number(pubList.dataset.lastTime);
+    const latestRenderedTime = Number.isFinite(latestRenderedTimeRaw) ? latestRenderedTimeRaw : null;
+    const dmOpenTestHook = (window.__kkchatTestHooks && typeof window.__kkchatTestHooks.dmOpenFlow === 'function')
+      ? window.__kkchatTestHooks.dmOpenFlow
+      : null;
+
+    if (dmOpenTestHook) {
+      try {
+        dmOpenTestHook({
+          peer: currentDM,
+          unreadBeforeOpen,
+          snapshotRequested: shouldSnapshot,
+          latestRenderedId,
+          cacheLastId,
+          peerLastId: peerLastId ?? null,
+          latestRenderedTime,
+          cacheLastTime,
+          peerLastTime: peerLastTime ?? null,
+        });
+      } catch (_) {}
+    }
+
+    const missingLatestId = Number.isFinite(peerLastId) && latestRenderedId < peerLastId;
+    const missingLatestTime = peerLastTime != null && latestRenderedTime != null && latestRenderedTime < peerLastTime;
+    if (!shouldSnapshot || missingLatestId || missingLatestTime) {
+      console.warn('DM open flow did not refresh to the latest message despite unread count', {
+        snapshotRequested: shouldSnapshot,
+        latestRenderedId,
+        cacheLastId,
+        peerLastId,
+        latestRenderedTime,
+        cacheLastTime,
+        peerLastTime,
+      });
+    }
+  }
 
 
   // Keep the scroll feeling nice
@@ -5454,7 +5560,10 @@ function finalizePendingMessage(pending, payload){
     try {
       writeCache(activeCacheKey(), {
         last: +pubList.dataset.last || -1,
-        html: pubList.innerHTML
+        html: pubList.innerHTML,
+        lastTime: Number.isFinite(Number(pubList.dataset.lastTime))
+          ? Number(pubList.dataset.lastTime)
+          : undefined
       });
     } catch(_) {}
   }
