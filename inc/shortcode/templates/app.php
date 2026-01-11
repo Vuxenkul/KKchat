@@ -795,7 +795,10 @@ const POLL_LEADER_KEY   = 'kkchat:poll:leader';
 const POLL_SYNC_KEY     = 'kkchat:poll:last';
 const POLL_POKE_KEY     = 'kkchat:poll:poke';
 const POLL_HEARTBEAT_MS = 7000;
-const POLL_LEADER_TTL_MS = POLL_HEARTBEAT_MS * 3;
+const POLL_LEADER_TTL_MS = Math.max(60000, POLL_HEARTBEAT_MS * 12);
+const POLL_SYNC_GRACE_MS = Math.max(30000, Math.round(POLL_LEADER_TTL_MS * 0.85));
+const POLL_SYNC_STALE_MS = Math.max(45000, Math.round(POLL_LEADER_TTL_MS * 0.75));
+const POLL_LEADER_RECHECK_MS = Math.max(4000, Math.round(POLL_HEARTBEAT_MS * 2));
 let POLL_TIMER = null;
 let POLL_BUSY = false;
 let POLL_SUSPENDED = false;
@@ -803,6 +806,7 @@ let POLL_IS_LEADER = false;
 let POLL_HEARTBEAT_TIMER = null;
 let POLL_HOT_UNTIL = 0;
 let POLL_LAST_EVENT_AT = 0;
+let POLL_LAST_SYNC_AT = 0;
 let POLL_HIDDEN_SINCE = 0;
 let BACKGROUND_POLL_TIMER = null;
 let POLL_LAST_ACTIVITY_AT = Date.now();
@@ -813,6 +817,7 @@ let POLL_LAST_INTERACTIVE = null;
 let POLL_INFLIGHT_PROMISE = null;
 let POLL_ABORT_CONTROLLER = null;
 let POLL_REQUEST_SERIAL = 0;
+let POLL_LEADER_RECHECK_TIMER = null;
 
 function isInteractive(){
   return document.visibilityState === 'visible' && WINDOW_FOCUSED;
@@ -1387,15 +1392,41 @@ function readLeaderRecord(){
   }
 }
 
+// Leader-election stability:
+// - Heartbeat TTL is intentionally long to tolerate background throttling.
+// - Recent sync payloads act as a grace window so we don't steal leadership while
+//   another tab is still broadcasting updates.
+// - Non-leader interactive tabs can force a re-election if syncs stall.
+function hasRecentLeaderSync(now = Date.now()){
+  if (!POLL_LAST_SYNC_AT) return false;
+  return now - POLL_LAST_SYNC_AT <= POLL_SYNC_GRACE_MS;
+}
+
+function scheduleLeaderRecheck(){
+  if (POLL_LEADER_RECHECK_TIMER) return;
+  POLL_LEADER_RECHECK_TIMER = setTimeout(() => {
+    POLL_LEADER_RECHECK_TIMER = null;
+    ensureLeader(false);
+  }, POLL_LEADER_RECHECK_MS);
+}
+
 function leaderExpired(rec){
   if (!rec) return true;
   const ts = Number(rec.ts || 0);
   if (!Number.isFinite(ts)) return true;
-  return Date.now() - ts > POLL_LEADER_TTL_MS;
+  const now = Date.now();
+  if (now - ts <= POLL_LEADER_TTL_MS) return false;
+  // If we're still getting sync payloads, assume the leader is alive even if its
+  // heartbeat write paused (e.g. background throttling).
+  return !hasRecentLeaderSync(now);
 }
 
 function becomeLeader(){
   POLL_IS_LEADER = true;
+  if (POLL_LEADER_RECHECK_TIMER) {
+    clearTimeout(POLL_LEADER_RECHECK_TIMER);
+    POLL_LEADER_RECHECK_TIMER = null;
+  }
   try {
     localStorage.setItem(POLL_LEADER_KEY, JSON.stringify({ id: POLL_CLIENT_ID, ts: Date.now() }));
   } catch (_) {}
@@ -1405,6 +1436,17 @@ function becomeLeader(){
 
 function ensureLeader(force = false){
   const rec = readLeaderRecord();
+  const now = Date.now();
+  // Avoid premature leader takeovers: if another tab is still broadcasting syncs,
+  // keep the current leader and recheck after a short delay.
+  if (!force && (!rec || leaderExpired(rec)) && hasRecentLeaderSync(now)) {
+    POLL_IS_LEADER = false;
+    stopLeaderHeartbeat();
+    stopStream();
+    scheduleLeaderRecheck();
+    return false;
+  }
+
   if (force || !rec || leaderExpired(rec) || rec.id === POLL_CLIENT_ID) {
     becomeLeader();
     return true;
@@ -1573,6 +1615,7 @@ function handlePollMessage(msg){
     if (msg.key && msg.key !== pollContextKey(state)) return;
     const data = msg.data;
     if (!data) return;
+    POLL_LAST_SYNC_AT = Date.now();
     if (data && Number.isFinite(+data.now)) {
       LAST_SERVER_NOW = +data.now;
     } else {
@@ -5098,6 +5141,17 @@ async function pollActive(forceCold = false, options = {}){
   }
 
   if (!POLL_IS_LEADER) {
+    const now = Date.now();
+    const syncAge = POLL_LAST_SYNC_AT ? now - POLL_LAST_SYNC_AT : null;
+    if (isInteractive() && syncAge != null && syncAge > POLL_SYNC_STALE_MS) {
+      const claimed = ensureLeader(true);
+      if (claimed && POLL_IS_LEADER) {
+        try {
+          await performPoll(forceCold, { allowSuspended });
+        } catch (_) {}
+        return;
+      }
+    }
     requestLeaderSync(forceCold);
     return;
   }
