@@ -10,7 +10,7 @@ function kkchat_admin_settings_page() {
     check_admin_referer($nonce_key);
 
     $sync_enabled            = !empty($_POST['sync_enabled']) ? 1 : 0;
-    $sync_concurrency        = max(1, (int) ($_POST['sync_concurrency'] ?? 1));
+    $sync_concurrency        = max(1, (int) ($_POST['sync_concurrency_per_actor'] ?? 4));
     $sync_breaker_threshold  = max(1, (int) ($_POST['sync_breaker_threshold'] ?? 5));
     $sync_breaker_window     = max(5, (int) ($_POST['sync_breaker_window'] ?? 60));
     $sync_breaker_cooldown   = max(10, (int) ($_POST['sync_breaker_cooldown'] ?? 90));
@@ -39,7 +39,7 @@ function kkchat_admin_settings_page() {
     $poll_slow_interval    = max($poll_medium_interval, $poll_slow_interval);
 
     update_option('kkchat_sync_enabled',            $sync_enabled);
-    update_option('kkchat_sync_concurrency',        $sync_concurrency);
+    update_option('kkchat_sync_concurrency_per_actor', $sync_concurrency);
     update_option('kkchat_sync_breaker_threshold',  $sync_breaker_threshold);
     update_option('kkchat_sync_breaker_window',     $sync_breaker_window);
     update_option('kkchat_sync_breaker_cooldown',   $sync_breaker_cooldown);
@@ -67,7 +67,11 @@ function kkchat_admin_settings_page() {
 
   // Värden
   $v_sync_enabled            = (int) get_option('kkchat_sync_enabled', 1);
-  $v_sync_concurrency        = max(1, (int) get_option('kkchat_sync_concurrency', 1));
+  $stored_sync_concurrency   = get_option('kkchat_sync_concurrency_per_actor', null);
+  if ($stored_sync_concurrency === null || $stored_sync_concurrency === '') {
+    $stored_sync_concurrency = get_option('kkchat_sync_concurrency', 4);
+  }
+  $v_sync_concurrency        = max(1, (int) $stored_sync_concurrency);
   $v_sync_breaker_threshold  = (int) get_option('kkchat_sync_breaker_threshold', 5);
   $v_sync_breaker_window     = (int) get_option('kkchat_sync_breaker_window', 60);
   $v_sync_breaker_cooldown   = (int) get_option('kkchat_sync_breaker_cooldown', 90);
@@ -140,10 +144,10 @@ function kkchat_admin_settings_page() {
           </td>
         </tr>
         <tr>
-          <th><label for="sync_concurrency">Max samtidiga synkar</label></th>
+          <th><label for="sync_concurrency_per_actor">Max samtidiga synkar per användare/IP</label></th>
           <td>
-            <input id="sync_concurrency" name="sync_concurrency" type="number" class="small-text" min="1" step="1" value="<?php echo (int) $v_sync_concurrency; ?>">
-            <p class="description">Tillåt så här många samtidiga byggen av synk-payload. Fler försök får svar med "try again".</p>
+            <input id="sync_concurrency_per_actor" name="sync_concurrency_per_actor" type="number" class="small-text" min="1" step="1" value="<?php echo (int) $v_sync_concurrency; ?>">
+            <p class="description">Tillåt så här många samtidiga byggen av synk-payload per användare/IP. Fler försök får svar med "try again".</p>
           </td>
         </tr>
         <tr>

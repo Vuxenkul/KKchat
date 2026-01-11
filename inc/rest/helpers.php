@@ -471,16 +471,61 @@ if (!defined('ABSPATH')) exit;
 
   if (!function_exists('kkchat_sync_concurrency_limit')) {
     function kkchat_sync_concurrency_limit(): int {
-      $limit = (int) apply_filters('kkchat_sync_concurrency_limit', (int) get_option('kkchat_sync_concurrency', 1));
+      $stored = get_option('kkchat_sync_concurrency_per_actor', null);
+      if ($stored === null || $stored === '') {
+        $stored = get_option('kkchat_sync_concurrency', 4);
+      }
+      $limit = (int) apply_filters('kkchat_sync_concurrency_limit', (int) $stored);
       return max(1, $limit);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_inflight_scope_key')) {
+    function kkchat_sync_inflight_scope_key(): string {
+      $userId = (int) kkchat_current_user_id();
+      if ($userId > 0) {
+        return 'user:' . $userId;
+      }
+
+      $ip = kkchat_client_ip();
+      if ($ip === '') { $ip = '0.0.0.0'; }
+      return 'ip:' . md5($ip);
+    }
+  }
+
+  if (!function_exists('kkchat_sync_use_object_cache')) {
+    function kkchat_sync_use_object_cache(): bool {
+      return function_exists('wp_using_ext_object_cache')
+        && wp_using_ext_object_cache()
+        && function_exists('wp_cache_add')
+        && function_exists('wp_cache_incr')
+        && function_exists('wp_cache_decr');
     }
   }
 
   if (!function_exists('kkchat_sync_acquire_slot')) {
     function kkchat_sync_acquire_slot(): ?string {
       $limit = kkchat_sync_concurrency_limit();
-      $key   = 'kkchat_sync_inflight';
       $ttl   = max(10, (int) apply_filters('kkchat_sync_slot_ttl', 20));
+      $scope = kkchat_sync_inflight_scope_key();
+      $useCache = kkchat_sync_use_object_cache();
+
+      if ($useCache) {
+        $cacheKey = 'sync_inflight:' . $scope;
+        wp_cache_add($cacheKey, 0, 'kkchat', $ttl);
+        $count = wp_cache_incr($cacheKey, 1, 'kkchat');
+        if (!is_int($count)) { return null; }
+        if ($count > $limit) {
+          wp_cache_decr($cacheKey, 1, 'kkchat');
+          return null;
+        }
+        if (function_exists('wp_cache_set')) {
+          wp_cache_set($cacheKey, $count, 'kkchat', $ttl);
+        }
+        return 'cache|' . $cacheKey;
+      }
+
+      $key = 'kkchat_sync_inflight:' . $scope;
       $now   = microtime(true);
       $slots = get_transient($key);
       if (!is_array($slots)) { $slots = []; }
@@ -498,18 +543,33 @@ if (!defined('ABSPATH')) exit;
       $token = wp_generate_uuid4();
       $slots[$token] = $now;
       set_transient($key, $slots, $ttl);
-      return $token;
+      return 'transient|' . $key . '|' . $token;
     }
   }
 
   if (!function_exists('kkchat_sync_release_slot')) {
     function kkchat_sync_release_slot(?string $token): void {
       if ($token === null) { return; }
-      $key   = 'kkchat_sync_inflight';
+      if (strncmp($token, 'cache|', 6) === 0) {
+        $cacheKey = substr($token, 6);
+        if ($cacheKey !== '' && function_exists('wp_cache_decr')) {
+          $count = wp_cache_decr($cacheKey, 1, 'kkchat');
+          if (is_int($count) && $count <= 0 && function_exists('wp_cache_delete')) {
+            wp_cache_delete($cacheKey, 'kkchat');
+          }
+        }
+        return;
+      }
+
+      if (strncmp($token, 'transient|', 10) !== 0) { return; }
+      $parts = explode('|', $token, 3);
+      if (count($parts) < 3) { return; }
+      $key = $parts[1];
+      $id  = $parts[2];
       $ttl   = max(10, (int) apply_filters('kkchat_sync_slot_ttl', 20));
       $slots = get_transient($key);
       if (!is_array($slots)) { return; }
-      if (isset($slots[$token])) { unset($slots[$token]); }
+      if (isset($slots[$id])) { unset($slots[$id]); }
       set_transient($key, $slots, $ttl);
     }
   }
@@ -1051,4 +1111,3 @@ if (!defined('ABSPATH')) exit;
       return 0;
     }
   }
-
