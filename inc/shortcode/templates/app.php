@@ -1598,6 +1598,9 @@ function handlePollMessage(msg){
   }
 }
 
+// performPoll includes a bounded catch-up loop: if the server returns >= limit messages,
+// immediately re-poll with an updated `since` to avoid falling behind. The loop stops on
+// suspend/leader changes/abort so tab blur or leadership shifts do not spin endlessly.
 async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
   const previousPromise = POLL_INFLIGHT_PROMISE;
@@ -1635,7 +1638,6 @@ async function performPoll(forceCold = false, options = {}){
     headers.set('If-None-Match', etag);
   }
 
-  const url = `${API}/sync?${params.toString()}`;
   logDbActivity(`starting sync poll${forceCold ? ' (force cold start)' : ''} for key ${key}`);
 
   abortActivePoll();
@@ -1645,78 +1647,116 @@ async function performPoll(forceCold = false, options = {}){
 
   const pollPromise = (async () => {
     POLL_BUSY = true;
+    const baseParams = new URLSearchParams(params);
+    const baseLimit = Number(baseParams.get('limit')) || 0;
+    const maxCatchupPolls = 4;
+    let catchupCount = 0;
+    let nextSince = null;
+    let useCold = forceCold;
+    let reconnectDelayMs = null;
+    let shouldSchedule = true;
+
     try {
-      const resp = await fetch(url, { credentials: 'include', headers, signal: controller.signal });
-      const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
-
-      if (requestSerial !== POLL_REQUEST_SERIAL) {
-        return;
-      }
-
-      if (resp.status === 204 || resp.status === 304) {
-        if (retryHeader != null) {
-          POLL_RETRY_HINT.set(key, retryHeader * 1000);
+      while (true) {
+        if ((POLL_SUSPENDED && !allowSuspended) || !POLL_IS_LEADER || controller.signal.aborted || !POLL_BUSY) {
+          shouldSchedule = false;
+          break;
         }
-        logDbActivity(`sync poll returned no changes (${resp.status})`);
-        scheduleStreamReconnect(retryHeader != null ? retryHeader * 1000 : undefined);
-        return;
-      }
 
-      if (resp.status === 429) {
-        if (retryHeader != null) {
-          POLL_RETRY_HINT.set(key, retryHeader * 1000);
-          scheduleStreamReconnect(retryHeader * 1000);
+        const loopParams = new URLSearchParams(baseParams);
+        if (useCold) {
+          loopParams.set('since', '-1');
+          loopParams.set('limit', String(FIRST_LOAD_LIMIT));
+        } else if (nextSince != null) {
+          loopParams.set('since', String(nextSince));
+        }
+        useCold = false;
+
+        const loopUrl = `${API}/sync?${loopParams.toString()}`;
+        const resp = await fetch(loopUrl, { credentials: 'include', headers, signal: controller.signal });
+        const retryHeader = parseRetryAfter(resp.headers.get('Retry-After'));
+
+        if (requestSerial !== POLL_REQUEST_SERIAL) {
+          shouldSchedule = false;
+          break;
+        }
+
+        if (resp.status === 204 || resp.status === 304) {
+          if (retryHeader != null) {
+            reconnectDelayMs = retryHeader * 1000;
+            POLL_RETRY_HINT.set(key, reconnectDelayMs);
+          }
+          logDbActivity(`sync poll returned no changes (${resp.status})`);
+          break;
+        }
+
+        if (resp.status === 429) {
+          reconnectDelayMs = retryHeader != null ? retryHeader * 1000 : 15000;
+          if (retryHeader != null) {
+            POLL_RETRY_HINT.set(key, reconnectDelayMs);
+          }
+          logDbActivity('sync poll throttled (HTTP 429)');
+          break;
+        }
+
+        if (!resp.ok) {
+          throw new Error(`sync ${resp.status}`);
+        }
+
+        const payload = await resp.json();
+        if (requestSerial !== POLL_REQUEST_SERIAL) {
+          shouldSchedule = false;
+          break;
+        }
+
+        const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
+        const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
+        if (retryMs != null) {
+          POLL_RETRY_HINT.set(key, retryMs);
+        }
+
+        const headerEtag = resp.headers.get('ETag');
+        if (headerEtag) {
+          POLL_ETAGS.set(key, headerEtag);
+        }
+
+        if (payload && Number.isFinite(+payload.now)) {
+          LAST_SERVER_NOW = +payload.now;
         } else {
-          scheduleStreamReconnect(15000);
+          LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
         }
-        logDbActivity('sync poll throttled (HTTP 429)');
-        return;
+
+        handleStreamSync(payload, state);
+        updateListLastFromPayload(payload, state);
+
+        let hadMessages = false;
+        if (Array.isArray(payload?.events)) {
+          hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
+        } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
+          hadMessages = true;
+        }
+
+        if (hadMessages) {
+          POLL_LAST_EVENT_AT = Date.now();
+          POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
+        }
+
+        const msgCount = Array.isArray(payload?.messages) ? payload.messages.length : 0;
+        logDbActivity(`sync poll completed with status ${resp.status}${msgCount ? ` and ${msgCount} messages` : ''}`);
+        broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
+
+        const effectiveLimit = Number(loopParams.get('limit')) || baseLimit;
+        if (msgCount >= effectiveLimit && effectiveLimit > 0 && catchupCount < maxCatchupPolls) {
+          const maxId = extractMaxMessageId(payload, state);
+          const currentSince = Number(loopParams.get('since'));
+          if (Number.isFinite(maxId) && maxId > currentSince) {
+            nextSince = maxId;
+            catchupCount += 1;
+            continue;
+          }
+        }
+        break;
       }
-
-      if (!resp.ok) {
-        throw new Error(`sync ${resp.status}`);
-      }
-
-      const payload = await resp.json();
-      if (requestSerial !== POLL_REQUEST_SERIAL) {
-        return;
-      }
-
-      const bodyRetry = Number(payload?.retryAfter || payload?.retry_after || 0);
-      const retryMs = bodyRetry > 0 ? bodyRetry * 1000 : (retryHeader != null ? retryHeader * 1000 : null);
-      if (retryMs != null) {
-        POLL_RETRY_HINT.set(key, retryMs);
-      }
-
-      const headerEtag = resp.headers.get('ETag');
-      if (headerEtag) {
-        POLL_ETAGS.set(key, headerEtag);
-      }
-
-      if (payload && Number.isFinite(+payload.now)) {
-        LAST_SERVER_NOW = +payload.now;
-      } else {
-        LAST_SERVER_NOW = Math.floor(Date.now() / 1000);
-      }
-
-      handleStreamSync(payload, state);
-      updateListLastFromPayload(payload, state);
-
-      let hadMessages = false;
-      if (Array.isArray(payload?.events)) {
-        hadMessages = payload.events.some(ev => Array.isArray(ev?.messages) && ev.messages.length > 0);
-      } else if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
-        hadMessages = true;
-      }
-
-      if (hadMessages) {
-        POLL_LAST_EVENT_AT = Date.now();
-        POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
-      }
-
-      const msgCount = Array.isArray(payload?.messages) ? payload.messages.length : 0;
-      logDbActivity(`sync poll completed with status ${resp.status}${msgCount ? ` and ${msgCount} messages` : ''}`);
-      broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
     } catch (err) {
       if (err?.name === 'AbortError') {
         return;
@@ -1732,8 +1772,8 @@ async function performPoll(forceCold = false, options = {}){
         POLL_ABORT_CONTROLLER = null;
       }
       POLL_BUSY = false;
-      if (requestSerial === POLL_REQUEST_SERIAL) {
-        scheduleStreamReconnect();
+      if (requestSerial === POLL_REQUEST_SERIAL && shouldSchedule) {
+        scheduleStreamReconnect(reconnectDelayMs != null ? reconnectDelayMs : undefined);
       }
     }
   })();
