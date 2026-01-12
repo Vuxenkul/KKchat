@@ -34,6 +34,7 @@ function kkchat_admin_settings_page() {
     $poll_extra_2g         = max(0, (int)($_POST['poll_extra_2g'] ?? 20));
     $poll_extra_3g         = max(0, (int)($_POST['poll_extra_3g'] ?? 10));
     $admin_auto_incognito  = !empty($_POST['admin_auto_incognito']) ? 1 : 0;
+    $presence_cleanup_interval_minutes = max(1, (int)($_POST['presence_cleanup_interval_minutes'] ?? 2));
 
     $poll_medium_interval  = max($poll_hot_interval, $poll_medium_interval);
     $poll_slow_interval    = max($poll_medium_interval, $poll_slow_interval);
@@ -61,6 +62,11 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_poll_extra_2g',         $poll_extra_2g);
     update_option('kkchat_poll_extra_3g',         $poll_extra_3g);
     update_option('kkchat_admin_auto_incognito',  $admin_auto_incognito);
+    update_option('kkchat_presence_cleanup_interval_minutes', $presence_cleanup_interval_minutes);
+
+    if (function_exists('kkchat_presence_cleanup_reschedule')) {
+      kkchat_presence_cleanup_reschedule();
+    }
 
     echo '<div class="updated"><p>Inställningar sparade.</p></div>';
   }
@@ -89,6 +95,7 @@ function kkchat_admin_settings_page() {
   $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
   $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
   $v_admin_auto_incognito  = (int)get_option('kkchat_admin_auto_incognito', 0);
+  $v_presence_cleanup_interval_minutes = (int)get_option('kkchat_presence_cleanup_interval_minutes', 2);
 
   $sync_metrics_defaults = [
     'total_requests'     => 0,
@@ -296,6 +303,16 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="poll_extra_3g" name="poll_extra_3g" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_extra_3g; ?>"> sekunder
             <p class="description">Addera så här många sekunder om anslutningen är 3G.</p>
+          </td>
+        </tr>
+      </table>
+      <h2>Närvarorensning</h2>
+      <table class="form-table">
+        <tr>
+          <th><label for="presence_cleanup_interval_minutes">Rensningsintervall</label></th>
+          <td>
+            <input id="presence_cleanup_interval_minutes" name="presence_cleanup_interval_minutes" type="number" class="small-text" min="1" step="1" value="<?php echo (int) $v_presence_cleanup_interval_minutes; ?>"> minuter
+            <p class="description">Hur ofta vi rensar gamla närvarorader och nollställer watch-flag (körs via cron).</p>
           </td>
         </tr>
       </table>
