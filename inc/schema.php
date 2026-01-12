@@ -25,6 +25,8 @@ function kkchat_activate() {
     'kkchat_report_autoban_threshold' => 0,
     'kkchat_report_autoban_window_days' => 0,
     'kkchat_presence_cleanup_interval_minutes' => 2,
+    'kkchat_public_presence_cache_ttl' => 8,
+    'kkchat_admin_presence_cache_ttl' => 10,
   ] as $k => $def) {
     if (get_option($k) === false) add_option($k, $def);
   }
