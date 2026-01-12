@@ -24,6 +24,7 @@ function kkchat_activate() {
     'kkchat_dedupe_window'         => 10,
     'kkchat_report_autoban_threshold' => 0,
     'kkchat_report_autoban_window_days' => 0,
+    'kkchat_presence_cleanup_interval_minutes' => 2,
   ] as $k => $def) {
     if (get_option($k) === false) add_option($k, $def);
   }
@@ -432,9 +433,12 @@ function kkchat_deactivate(){
   // Remove *all* scheduled events for this hook
   if (function_exists('wp_clear_scheduled_hook')) {
     wp_clear_scheduled_hook('kkchat_cron_tick');
+    wp_clear_scheduled_hook('kkchat_presence_cleanup');
   } else {
     $ts = wp_next_scheduled('kkchat_cron_tick');
     if ($ts) wp_unschedule_event($ts, 'kkchat_cron_tick');
+    $ts = wp_next_scheduled('kkchat_presence_cleanup');
+    if ($ts) wp_unschedule_event($ts, 'kkchat_presence_cleanup');
   }
 }
 

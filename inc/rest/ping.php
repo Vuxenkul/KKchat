@@ -23,38 +23,6 @@ register_rest_route($ns, '/ping', [
     $t   = kkchat_tables();
     $now = time();
 
-    // Clear expired watch flags
-    $cleared = (int) $wpdb->query(
-      $wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET watch_flag = 0, watch_flag_at = NULL
-          WHERE watch_flag = 1
-            AND watch_flag_at IS NOT NULL
-            AND %d - watch_flag_at > %d",
-        $now,
-        kkchat_watch_reset_after()
-      )
-    );
-
-    if ($cleared > 0) {
-      kkchat_admin_presence_cache_flush();
-    }
-
-    // (Optional) light, probabilistic purge of very stale presences
-    if (mt_rand(1, 20) === 1) {
-      $deleted = (int) $wpdb->query(
-        $wpdb->prepare(
-          "DELETE FROM {$t['users']}
-            WHERE %d - last_seen > %d",
-          $now,
-          kkchat_user_ttl()
-        )
-      );
-      if ($deleted > 0) {
-        kkchat_admin_presence_cache_flush();
-      }
-    }
-
     // --- Admin-only: open report count + rising-edge anchor (cheap) ---
     $reports_open   = 0; // NEW
     $reports_max_id = 0; // NEW
@@ -74,4 +42,3 @@ register_rest_route($ns, '/ping', [
   },
   'permission_callback' => '__return_true',
 ]);
-

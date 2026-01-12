@@ -603,6 +603,42 @@ if (!defined('ABSPATH')) exit;
     }
   }
 
+  if (!function_exists('kkchat_presence_cleanup_interval_minutes')) {
+    function kkchat_presence_cleanup_interval_minutes(): int {
+      $interval = (int) get_option('kkchat_presence_cleanup_interval_minutes', 2);
+      return max(1, $interval);
+    }
+  }
+
+  if (!function_exists('kkchat_presence_cleanup_cron_schedules')) {
+    function kkchat_presence_cleanup_cron_schedules(array $schedules): array {
+      $minutes = kkchat_presence_cleanup_interval_minutes();
+      $schedules['kkchat_presence_cleanup'] = [
+        'interval' => $minutes * MINUTE_IN_SECONDS,
+        'display'  => sprintf('KKchat presence cleanup (%d min)', $minutes),
+      ];
+      return $schedules;
+    }
+    add_filter('cron_schedules', 'kkchat_presence_cleanup_cron_schedules');
+  }
+
+  if (!function_exists('kkchat_presence_cleanup_schedule')) {
+    function kkchat_presence_cleanup_schedule(): void {
+      if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) { return; }
+      if (wp_next_scheduled('kkchat_presence_cleanup')) { return; }
+      wp_schedule_event(time() + MINUTE_IN_SECONDS, 'kkchat_presence_cleanup', 'kkchat_presence_cleanup');
+    }
+    add_action('init', 'kkchat_presence_cleanup_schedule');
+  }
+
+  if (!function_exists('kkchat_presence_cleanup_reschedule')) {
+    function kkchat_presence_cleanup_reschedule(): void {
+      if (!function_exists('wp_clear_scheduled_hook') || !function_exists('wp_schedule_event')) { return; }
+      wp_clear_scheduled_hook('kkchat_presence_cleanup');
+      wp_schedule_event(time() + MINUTE_IN_SECONDS, 'kkchat_presence_cleanup', 'kkchat_presence_cleanup');
+    }
+  }
+
   if (!function_exists('kkchat_sync_run_housekeeping')) {
     function kkchat_sync_run_housekeeping(): void {
       kkchat_wpdb_reconnect_if_needed();
@@ -625,6 +661,7 @@ if (!defined('ABSPATH')) exit;
     }
   }
   add_action('kkchat_sync_housekeeping', 'kkchat_sync_run_housekeeping');
+  add_action('kkchat_presence_cleanup', 'kkchat_sync_run_housekeeping');
 
   if (!function_exists('kkchat_sync_build_payload')) {
     function kkchat_sync_build_payload(array $ctx): array {
@@ -1051,4 +1088,3 @@ if (!defined('ABSPATH')) exit;
       return 0;
     }
   }
-

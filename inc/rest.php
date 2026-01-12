@@ -6,11 +6,11 @@ if (!defined('ABSPATH')) exit;
  *
  * Namespace: kkchat/v1
  */
-add_action('rest_api_init', function () {
-  $ns = 'kkchat/v1';
-  $base = __DIR__ . '/rest';
+$base = __DIR__ . '/rest';
+require_once $base . '/helpers.php';
 
-  require_once $base . '/helpers.php';
+add_action('rest_api_init', function () use ($base) {
+  $ns = 'kkchat/v1';
   require_once $base . '/auth.php';
   require_once $base . '/upload.php';
   require_once $base . '/sync.php';
