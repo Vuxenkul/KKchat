@@ -34,7 +34,8 @@ if (!defined('ABSPATH')) exit;
 
       $select = implode(',', $cols);
 
-      $cacheTtl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', 2));
+      $cacheTtlOption = (int) get_option('kkchat_public_presence_cache_ttl', 2);
+      $cacheTtl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', $cacheTtlOption));
       $cacheKey = null;
       if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
         $bucket   = max(1, $cacheTtl);
@@ -106,7 +107,8 @@ if (!defined('ABSPATH')) exit;
     function kkchat_public_presence_cache_flush(): void {
       if (!function_exists('wp_cache_delete')) { return; }
 
-      $ttl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', 2));
+      $ttlOption = (int) get_option('kkchat_public_presence_cache_ttl', 2);
+      $ttl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', $ttlOption));
       if ($ttl <= 0) { return; }
 
       $bucketSize = max(1, $ttl);
@@ -173,7 +175,8 @@ if (!defined('ABSPATH')) exit;
     function kkchat_admin_presence_cache_flush(?array $opts = null): void {
       if (!function_exists('wp_cache_delete')) { return; }
 
-      $ttl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+      $ttlOption = (int) get_option('kkchat_admin_presence_cache_ttl', 2);
+      $ttl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', $ttlOption));
       if ($ttl <= 0) { return; }
 
       $bucketSize = max(1, $ttl);
@@ -221,7 +224,8 @@ if (!defined('ABSPATH')) exit;
 
       $cfg = kkchat_admin_presence_normalize_opts($opts);
 
-      $cacheTtl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+      $cacheTtlOption = (int) get_option('kkchat_admin_presence_cache_ttl', 2);
+      $cacheTtl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', $cacheTtlOption));
       $cacheKey = null;
       if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
         $bucketSize = max(1, $cacheTtl);
@@ -1051,4 +1055,3 @@ if (!defined('ABSPATH')) exit;
       return 0;
     }
   }
-

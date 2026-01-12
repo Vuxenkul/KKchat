@@ -34,6 +34,8 @@ function kkchat_admin_settings_page() {
     $poll_extra_2g         = max(0, (int)($_POST['poll_extra_2g'] ?? 20));
     $poll_extra_3g         = max(0, (int)($_POST['poll_extra_3g'] ?? 10));
     $admin_auto_incognito  = !empty($_POST['admin_auto_incognito']) ? 1 : 0;
+    $presence_public_ttl   = max(0, (int) ($_POST['presence_public_ttl'] ?? 2));
+    $presence_admin_ttl    = max(0, (int) ($_POST['presence_admin_ttl'] ?? 2));
 
     $poll_medium_interval  = max($poll_hot_interval, $poll_medium_interval);
     $poll_slow_interval    = max($poll_medium_interval, $poll_slow_interval);
@@ -61,6 +63,8 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_poll_extra_2g',         $poll_extra_2g);
     update_option('kkchat_poll_extra_3g',         $poll_extra_3g);
     update_option('kkchat_admin_auto_incognito',  $admin_auto_incognito);
+    update_option('kkchat_public_presence_cache_ttl', $presence_public_ttl);
+    update_option('kkchat_admin_presence_cache_ttl',  $presence_admin_ttl);
 
     echo '<div class="updated"><p>Inställningar sparade.</p></div>';
   }
@@ -89,6 +93,8 @@ function kkchat_admin_settings_page() {
   $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
   $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
   $v_admin_auto_incognito  = (int)get_option('kkchat_admin_auto_incognito', 0);
+  $v_presence_public_ttl   = (int)get_option('kkchat_public_presence_cache_ttl', 2);
+  $v_presence_admin_ttl    = (int)get_option('kkchat_admin_presence_cache_ttl', 2);
 
   $sync_metrics_defaults = [
     'total_requests'     => 0,
@@ -306,6 +312,23 @@ function kkchat_admin_settings_page() {
           <td>
             <label><input id="admin_auto_incognito" name="admin_auto_incognito" type="checkbox" value="1" <?php checked($v_admin_auto_incognito, 1); ?>> Logga in administratörer som dolda</label>
             <p class="description">Aktivera för att låta administratörer starta sessioner som gömda i användarlistan. De kan fortfarande växla synlighet manuellt i appen.</p>
+          </td>
+        </tr>
+      </table>
+      <h2>Närvarocache</h2>
+      <table class="form-table">
+        <tr>
+          <th><label for="presence_public_ttl">Publik närvarocache (s)</label></th>
+          <td>
+            <input id="presence_public_ttl" name="presence_public_ttl" type="number" class="small-text" min="0" step="1" value="<?php echo (int) $v_presence_public_ttl; ?>">
+            <p class="description">Hur länge (sekunder) publika närvarosnapshots cachas. 0 = av.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="presence_admin_ttl">Admin närvarocache (s)</label></th>
+          <td>
+            <input id="presence_admin_ttl" name="presence_admin_ttl" type="number" class="small-text" min="0" step="1" value="<?php echo (int) $v_presence_admin_ttl; ?>">
+            <p class="description">Hur länge (sekunder) admin-snapshots cachas. 0 = av.</p>
           </td>
         </tr>
       </table>
