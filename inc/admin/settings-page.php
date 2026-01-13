@@ -34,6 +34,7 @@ function kkchat_admin_settings_page() {
     $poll_extra_2g         = max(0, (int)($_POST['poll_extra_2g'] ?? 20));
     $poll_extra_3g         = max(0, (int)($_POST['poll_extra_3g'] ?? 10));
     $first_load_limit      = max(1, min(200, (int)($_POST['first_load_limit'] ?? 20)));
+    $first_load_exclude_banners = !empty($_POST['first_load_exclude_banners']) ? 1 : 0;
     $public_presence_cache_ttl = max(0, (int)($_POST['public_presence_cache_ttl'] ?? 8));
     $admin_presence_cache_ttl  = max(0, (int)($_POST['admin_presence_cache_ttl'] ?? 10));
     $admin_auto_incognito  = !empty($_POST['admin_auto_incognito']) ? 1 : 0;
@@ -65,6 +66,7 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_poll_extra_2g',         $poll_extra_2g);
     update_option('kkchat_poll_extra_3g',         $poll_extra_3g);
     update_option('kkchat_first_load_limit',      $first_load_limit);
+    update_option('kkchat_first_load_exclude_banners', $first_load_exclude_banners);
     update_option('kkchat_public_presence_cache_ttl', $public_presence_cache_ttl);
     update_option('kkchat_admin_presence_cache_ttl',  $admin_presence_cache_ttl);
     update_option('kkchat_admin_auto_incognito',  $admin_auto_incognito);
@@ -101,6 +103,7 @@ function kkchat_admin_settings_page() {
   $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
   $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
   $v_first_load_limit      = max(1, min(200, (int)get_option('kkchat_first_load_limit', 20)));
+  $v_first_load_exclude_banners = (int) get_option('kkchat_first_load_exclude_banners', 1);
   $v_public_presence_cache_ttl = (int) get_option('kkchat_public_presence_cache_ttl', 8);
   $v_admin_presence_cache_ttl  = (int) get_option('kkchat_admin_presence_cache_ttl', 10);
   $v_admin_auto_incognito  = (int)get_option('kkchat_admin_auto_incognito', 0);
@@ -322,6 +325,13 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="first_load_limit" name="first_load_limit" type="number" class="small-text" min="1" max="200" step="1" value="<?php echo (int) $v_first_load_limit; ?>">
             <p class="description">Antal meddelanden som laddas när chatten öppnas första gången.</p>
+          </td>
+        </tr>
+        <tr>
+          <th>Första laddningen</th>
+          <td>
+            <label><input id="first_load_exclude_banners" name="first_load_exclude_banners" type="checkbox" value="1" <?php checked($v_first_load_exclude_banners, 1); ?>> Hoppa över banderoller vid första laddningen</label>
+            <p class="description">Om markerad räknas inte banderoller in i första laddningens meddelandegräns.</p>
           </td>
         </tr>
       </table>

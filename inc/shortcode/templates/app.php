@@ -1799,7 +1799,8 @@ function playNotifOnce() {
     applyBlurClass();
 
   const ROOM_CACHE = new Map();          
-  const FIRST_LOAD_LIMIT = Number(<?= (int) $first_load_limit ?>);          
+  const FIRST_LOAD_LIMIT = Number(<?= (int) $first_load_limit ?>);
+  const FIRST_LOAD_EXCLUDE_BANNERS = <?= $first_load_exclude_banners ? 'true' : 'false' ?>;
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
 
@@ -5029,7 +5030,7 @@ function handleStreamSync(js, context){
 
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
-    const nonBanner = isCold
+    const nonBanner = (isCold && FIRST_LOAD_EXCLUDE_BANNERS)
       ? payload.filter(m => (m?.kind || 'chat') !== 'banner')
       : payload;
     const items   = isCold ? nonBanner.slice(-FIRST_LOAD_LIMIT) : payload;
