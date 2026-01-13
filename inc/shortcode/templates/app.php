@@ -2237,7 +2237,7 @@ async function prefetchRoom(slug){
     const params = new URLSearchParams({
       public:'1', room: slug, since: String(since), limit:'30'
     });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+    const items = await fetchMessagesPreferSync(params);
 
     if (!Array.isArray(items) || items.length === 0) return;
 
@@ -2260,7 +2260,7 @@ async function prefetchDM(userId){
     const params = new URLSearchParams({
       to: String(userId), since: String(since), limit:'10'
     });
-    const items = await fetchJSON(`${API}/fetch?${params}`);
+    const items = await fetchMessagesPreferSync(params);
 
     if (!Array.isArray(items) || items.length === 0) return;
 
@@ -2390,6 +2390,66 @@ function applyCache(key){
     return r.json();
   }
 
+  async function fetchSyncPayload(params){
+    const url = `${API}/sync?${params.toString()}`;
+    const r = await fetch(url, { credentials: 'include', cache: 'no-cache', headers: h });
+
+    if (r.status === 204 || r.status === 304) {
+      return null;
+    }
+
+    if(!r.ok){
+      let js = {};
+      try{ js = await r.json(); }catch(_){}
+      if (js.err === 'kicked' || js.err === 'ip_banned') {
+        const base = js.err === 'ip_banned' ? 'Regelbrott - Bannad' : 'Regelbrott - Kickad';
+        const code = Number(js.block_id);
+        const suffix = (Number.isFinite(code) && code > 0) ? ` (Felkod: ${code})` : '';
+        alert(base + suffix);
+        location.reload();
+        return null;
+      }
+      throw new Error(`sync ${r.status}`);
+    }
+
+    return r.json();
+  }
+
+  function extractSyncMessages(payload){
+    if (!payload || typeof payload !== 'object') return [];
+    let merged = [];
+    if (Array.isArray(payload.messages)) {
+      merged = merged.concat(payload.messages);
+    }
+    if (Array.isArray(payload.events)) {
+      payload.events.forEach(ev => {
+        if (ev && Array.isArray(ev.messages) && ev.messages.length) {
+          merged = merged.concat(ev.messages);
+        }
+      });
+    }
+    if (!merged.length) return [];
+
+    const dedup = new Map();
+    merged.forEach(msg => {
+      const id = Number(msg?.id);
+      if (!Number.isFinite(id)) return;
+      if (!dedup.has(id)) dedup.set(id, msg);
+    });
+    return Array.from(dedup.values());
+  }
+
+  async function fetchMessagesPreferSync(params){
+    try{
+      const payload = await fetchSyncPayload(params);
+      const messages = extractSyncMessages(payload);
+      if (payload === null) return [];
+      return Array.isArray(messages) ? messages : [];
+    }catch(_){
+      return fetchJSON(`${API}/fetch?${params.toString()}`);
+    }
+  }
+
   async function loadHistorySnapshot(state){
     try {
       const target = state || desiredStreamState();
@@ -2403,7 +2463,7 @@ function applyCache(key){
         params.set('room', target.room);
       }
 
-      const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
+      const items = await fetchMessagesPreferSync(params);
       if (!Array.isArray(items)) return false;
 
       handleStreamSync({ __snapshot: true, messages: items }, target);
@@ -2431,7 +2491,7 @@ function applyCache(key){
           limit: '12',
         });
 
-        const items = await fetchJSON(`${API}/fetch?${params.toString()}`);
+        const items = await fetchMessagesPreferSync(params);
         if (!Array.isArray(items) || !items.length) return false;
 
         if (currentDM !== id) return false;
@@ -3768,7 +3828,12 @@ function normalizeUsersPayload(raw){
 }
 async function roomHasMentionSince(slug){
   try{
-    const js = await fetchJSON(`${API}/fetch?public=1&room=${encodeURIComponent(slug)}&limit=30`);
+    const params = new URLSearchParams({
+      public: '1',
+      room: slug,
+      limit: '30',
+    });
+    const js = await fetchMessagesPreferSync(params);
     if (!Array.isArray(js)) return false;
 
     return js.some(m => {
