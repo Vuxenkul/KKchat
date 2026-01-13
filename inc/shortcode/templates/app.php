@@ -5029,7 +5029,10 @@ function handleStreamSync(js, context){
 
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
-    const items   = isCold ? payload.slice(-FIRST_LOAD_LIMIT) : payload;
+    const nonBanner = isCold
+      ? payload.filter(m => (m?.kind || 'chat') !== 'banner')
+      : payload;
+    const items   = isCold ? nonBanner.slice(-FIRST_LOAD_LIMIT) : payload;
 
     renderList(pubList, items, renderOpts);
     markVisible(pubList);
@@ -5041,7 +5044,7 @@ function handleStreamSync(js, context){
     }
 
     const currentLast = +pubList.dataset.last || -1;
-    const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
+    const allMax = payload.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
     const cacheKey = cacheKeyForRoom(context.room);
     const prevCache = ROOM_CACHE.get(cacheKey);
