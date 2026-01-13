@@ -1799,7 +1799,8 @@ function playNotifOnce() {
     applyBlurClass();
 
   const ROOM_CACHE = new Map();          
-  const FIRST_LOAD_LIMIT = Number(<?= (int) $first_load_limit ?>);          
+  const FIRST_LOAD_LIMIT = Number(<?= (int) $first_load_limit ?>);
+  const FIRST_LOAD_EXCLUDE_BANNERS = <?= $first_load_exclude_banners ? 'true' : 'false' ?>;
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
 
@@ -5029,7 +5030,10 @@ function handleStreamSync(js, context){
 
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
-    const items   = isCold ? payload.slice(-FIRST_LOAD_LIMIT) : payload;
+    const nonBanner = (isCold && FIRST_LOAD_EXCLUDE_BANNERS)
+      ? payload.filter(m => (m?.kind || 'chat') !== 'banner')
+      : payload;
+    const items   = isCold ? nonBanner.slice(-FIRST_LOAD_LIMIT) : payload;
 
     renderList(pubList, items, renderOpts);
     markVisible(pubList);
@@ -5041,7 +5045,7 @@ function handleStreamSync(js, context){
     }
 
     const currentLast = +pubList.dataset.last || -1;
-    const allMax = items.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
+    const allMax = payload.reduce((mx, m) => Math.max(mx, Number(m.id) || -1), currentLast);
     pubList.dataset.last = String(allMax);
     const cacheKey = cacheKeyForRoom(context.room);
     const prevCache = ROOM_CACHE.get(cacheKey);
