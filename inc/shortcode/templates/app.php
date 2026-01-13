@@ -2147,8 +2147,11 @@ function msgToHTML(m){
   const gender = genderById(sid);
   const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
+  const className = (kind === 'banner')
+    ? 'item banner'
+    : `item ${sid===ME_ID?'me':'them'}${roleClass}`;
   const attrs = [
-    `class=\"item ${sid===ME_ID?'me':'them'}${roleClass}\"`,
+    `class=\"${className}\"`,
     `data-id=\"${mid}\"`,
     `data-sid=\"${sid}\"`,
     `data-sname=\"${escAttr(who)}\"`,
