@@ -2240,6 +2240,30 @@ function writeCache(key, patch){
   ROOM_CACHE.set(key, { ...prev, ...patch });
 }
 
+function filterRoomMessages(items, slug) {
+  if (!Array.isArray(items)) return [];
+  const roomKey = String(slug || '').trim();
+  return items.filter(m => {
+    const rid = m?.recipient_id == null ? null : Number(m.recipient_id);
+    if (rid != null && rid !== 0) return false;
+    if (!roomKey) return true;
+    const msgRoom = String(m?.room || m?.room_slug || m?.roomSlug || '').trim();
+    return msgRoom === roomKey;
+  });
+}
+
+function filterDMThreadMessages(items, peerId) {
+  if (!Array.isArray(items)) return [];
+  const meId = Number(ME_ID);
+  const peer = Number(peerId);
+  if (!Number.isFinite(meId) || !Number.isFinite(peer)) return [];
+  return items.filter(m => {
+    const sid = Number(m?.sender_id);
+    const rid = m?.recipient_id == null ? null : Number(m.recipient_id);
+    return (sid === meId && rid === peer) || (sid === peer && rid === meId);
+  });
+}
+
 async function prefetchRoom(slug){
   try{
     const key    = cacheKeyForRoom(slug);
@@ -2250,15 +2274,16 @@ async function prefetchRoom(slug){
       public:'1', room: slug, since: String(since), limit:'30'
     });
     const items = await fetchMessagesPreferSync(params);
+    const filtered = filterRoomMessages(items, slug);
 
-    if (!Array.isArray(items) || items.length === 0) return;
+    if (!Array.isArray(filtered) || filtered.length === 0) return;
 
     let maxId = cached?.last || -1;
-    maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
+    maxId = filtered.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
 
-    const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
+    const addHTML  = msgsToHTML(filtered.filter(m => Number(m.id) > since));
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    const maxTime = maxMessageTime(items, cached?.lastTime);
+    const maxTime = maxMessageTime(filtered, cached?.lastTime);
     writeCache(key, { last: maxId, html: combined, isFull: false, lastTime: maxTime });
   }catch(_){}
 }
@@ -2273,15 +2298,16 @@ async function prefetchDM(userId){
       to: String(userId), since: String(since), limit:'10'
     });
     const items = await fetchMessagesPreferSync(params);
+    const filtered = filterDMThreadMessages(items, userId);
 
-    if (!Array.isArray(items) || items.length === 0) return;
+    if (!Array.isArray(filtered) || filtered.length === 0) return;
 
     let maxId = cached?.last || -1;
-    maxId = items.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
+    maxId = filtered.reduce((mx, m) => Math.max(mx, Number(m.id)||-1), maxId);
 
-    const addHTML  = msgsToHTML(items.filter(m => Number(m.id) > since));
+    const addHTML  = msgsToHTML(filtered.filter(m => Number(m.id) > since));
     const combined = clampHTML((cached?.html || '') + addHTML);   // ⬅️ clamp
-    const maxTime = maxMessageTime(items, cached?.lastTime);
+    const maxTime = maxMessageTime(filtered, cached?.lastTime);
     writeCache(key, { last: maxId, html: combined, isFull: false, lastTime: maxTime });
   }catch(_){}
 }
@@ -3296,7 +3322,12 @@ function normalizeUnreadMap(map) {
   const out = {};
   if (map && typeof map === 'object') {
     for (const [key, value] of Object.entries(map)) {
-      out[key] = value ? 1 : 0;
+      const num = Number(value);
+      if (Number.isFinite(num)) {
+        out[key] = num > 0 ? 1 : 0;
+      } else {
+        out[key] = value === true ? 1 : 0;
+      }
     }
   }
   return out;
