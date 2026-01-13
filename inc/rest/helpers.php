@@ -982,7 +982,7 @@ if (!defined('ABSPATH')) exit;
 
             $rowsMB = $wpdb->get_results(
               $wpdb->prepare(
-                "SELECT m.content
+                "SELECT m.content, m.reply_to_sender_id, m.reply_to_sender_name
                    FROM {$t['messages']} m
               LEFT JOIN {$t['rooms']} rr ON rr.slug = m.room
                   WHERE m.recipient_id IS NULL
@@ -1001,8 +1001,19 @@ if (!defined('ABSPATH')) exit;
             ) ?: [];
 
             $hit = false;
+            $nameMatches = array_values(array_filter([
+              strtolower($dispName),
+              $wpUser !== '' ? strtolower($wpUser) : null,
+            ]));
             foreach ($rowsMB as $rowMB) {
               $content = (string) ($rowMB['content'] ?? '');
+              $replySenderId = isset($rowMB['reply_to_sender_id']) ? (int) $rowMB['reply_to_sender_id'] : 0;
+              if ($replySenderId === $me) { $hit = true; break; }
+              $replySenderName = trim((string) ($rowMB['reply_to_sender_name'] ?? ''));
+              if ($replySenderName !== '' && $nameMatches) {
+                $replyNameLower = strtolower($replySenderName);
+                if (in_array($replyNameLower, $nameMatches, true)) { $hit = true; break; }
+              }
               if ($content !== '' && preg_match($mentionRe, $content)) { $hit = true; break; }
             }
             $mention_bumps[$slug] = $hit ? true : false;
