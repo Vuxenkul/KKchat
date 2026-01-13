@@ -3956,6 +3956,27 @@ function applySyncPayload(js){
   if (!window.__kkMentionCooldownUntil) window.__kkMentionCooldownUntil = 0;
   const canRingMention = () => Date.now() >= window.__kkMentionCooldownUntil;
 
+  function activeRoomHasMention(payloadMessages){
+    if (!currentRoom || currentDM != null) return false;
+    if (!Array.isArray(payloadMessages) || !payloadMessages.length) return false;
+    const meId = Number(ME_ID);
+    const meName = typeof ME_NM === 'string' ? ME_NM : '';
+    return payloadMessages.some(m => {
+      if (!m || m.room !== currentRoom) return false;
+      const sid = Number(m.sender_id);
+      if (Number.isFinite(meId) && sid === meId) return false;
+      const replyToId = Number(m.reply_to_sender_id || 0);
+      if (Number.isFinite(replyToId) && replyToId === meId) return true;
+      const replyToName = String(m.reply_to_sender_name || '').trim();
+      if (replyToName && meName && replyToName === meName) return true;
+      const txt = String(m.content || m.text || m.body || '');
+      if (meName && typeof textMentionsName === 'function') {
+        try { if (textMentionsName(txt, meName)) return true; } catch (_) {}
+      }
+      return false;
+    });
+  }
+
   if (js && Array.isArray(js.presence)) {
     USERS = normalizeUsersPayload(js.presence);
     maybePrefetchInitialOnlineDMs();
@@ -4043,9 +4064,11 @@ function applySyncPayload(js){
           (ROOM_UNREAD[slug]||0) > (prevRooms[slug]||0)
         );
 
+      const activeRoomMentioned = activeRoomHasMention(js?.messages);
+
       if (mentionPassiveBumped && canRingMention()) {
         playMentionOnce();
-      } else if (shouldRing) {
+      } else if (shouldRing && !activeRoomMentioned) {
         playNotifOnce();
       }
 
