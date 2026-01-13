@@ -1799,7 +1799,7 @@ function playNotifOnce() {
     applyBlurClass();
 
   const ROOM_CACHE = new Map();          
-  const FIRST_LOAD_LIMIT = 20;          
+  const FIRST_LOAD_LIMIT = Number(<?= (int) $first_load_limit ?>);          
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
 
