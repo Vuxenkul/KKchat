@@ -740,13 +740,16 @@ let _lastPublicSeenSent = 0;
 async function markDMSeen(peerId, lastId) {
   const peer = Number(peerId);
   const mid  = Number(lastId);
-  if (!peer || !mid) return;
+  if (!peer) return;
   try {
-    logDbActivity(`marking DM read up to message ${mid} for peer ${peer}`);
+    const logId = Number.isFinite(mid) && mid > 0 ? mid : 'auto';
+    logDbActivity(`marking DM read up to message ${logId} for peer ${peer}`);
     const fd = new FormData();
     fd.append('csrf_token', CSRF);
     fd.append('dm_peer', String(peer));
-    fd.append('dm_last_id', String(mid));
+    if (Number.isFinite(mid) && mid > 0) {
+      fd.append('dm_last_id', String(mid));
+    }
     await fetch(`${API}/reads/mark`, {
       method: 'POST',
       credentials: 'include',
@@ -5344,6 +5347,10 @@ async function openDM(id) {
         cacheLastTime,
         peerLastTime,
       });
+    }
+
+    if (latestRenderedId <= 0) {
+      markDMSeen(currentDM, 0).catch(() => {});
     }
   }
 

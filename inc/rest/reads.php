@@ -33,21 +33,39 @@ register_rest_route($ns, '/reads/mark', [
     $roomUpdates = [];
     $roomSeenAt  = [];
 
-    if ($dm_peer > 0 && $dm_last_id > 0) {
-      $row = $wpdb->get_row(
-        $wpdb->prepare(
-          "SELECT sender_id, recipient_id FROM {$t['messages']} WHERE id = %d LIMIT 1",
-          $dm_last_id
-        ),
-        ARRAY_A
-      );
+    if ($dm_peer > 0) {
+      $dmTargetId = $dm_last_id;
+      if ($dmTargetId <= 0) {
+        $dmTargetId = (int) $wpdb->get_var(
+          $wpdb->prepare(
+            "SELECT MAX(id) FROM {$t['messages']}
+             WHERE hidden_at IS NULL
+               AND ((sender_id = %d AND recipient_id = %d) OR
+                    (sender_id = %d AND recipient_id = %d))",
+            $me,
+            $dm_peer,
+            $dm_peer,
+            $me
+          )
+        );
+      }
 
-      if ($row) {
-        $sender    = (int) ($row['sender_id'] ?? 0);
-        $recipient = (int) ($row['recipient_id'] ?? 0);
-        $isPeer    = ($sender === $me && $recipient === $dm_peer) || ($sender === $dm_peer && $recipient === $me);
-        if ($isPeer) {
-          $dmUpdates[$dm_peer] = max($dmUpdates[$dm_peer] ?? 0, $dm_last_id);
+      if ($dmTargetId > 0) {
+        $row = $wpdb->get_row(
+          $wpdb->prepare(
+            "SELECT sender_id, recipient_id FROM {$t['messages']} WHERE id = %d LIMIT 1",
+            $dmTargetId
+          ),
+          ARRAY_A
+        );
+
+        if ($row) {
+          $sender    = (int) ($row['sender_id'] ?? 0);
+          $recipient = (int) ($row['recipient_id'] ?? 0);
+          $isPeer    = ($sender === $me && $recipient === $dm_peer) || ($sender === $dm_peer && $recipient === $me);
+          if ($isPeer) {
+            $dmUpdates[$dm_peer] = max($dmUpdates[$dm_peer] ?? 0, $dmTargetId);
+          }
         }
       }
     }
@@ -227,5 +245,4 @@ register_rest_route($ns, '/reads/mark', [
   },
   'permission_callback' => '__return_true',
 ]);
-
 
