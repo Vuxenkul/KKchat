@@ -2171,11 +2171,21 @@ function msgToHTML(m){
   const replyTargetId = Number(m.reply_to_id || 0) > 0 ? Number(m.reply_to_id) : null;
   let replySenderName = m.reply_to_sender_name || null;
   let replyExcerpt = m.reply_to_excerpt || null;
+  const replyParentHint = Number(m.reply_to_sender_id || 0);
   if (replyTargetId) {
     const preview = messagePreviewById(replyTargetId);
     if (preview) {
       if (!replySenderName && preview.sender_name) replySenderName = preview.sender_name;
       if ((!replyExcerpt || replyExcerpt === '') && preview.excerpt) replyExcerpt = preview.excerpt;
+    }
+  }
+
+  let repliesToMe = false;
+  if (replyTargetId && sid !== ME_ID) {
+    if (Number.isFinite(replyParentHint) && replyParentHint > 0) {
+      repliesToMe = replyParentHint === Number(ME_ID);
+    } else if (replySenderName && typeof ME_NM === 'string' && ME_NM !== '') {
+      repliesToMe = replySenderName === ME_NM;
     }
   }
 
@@ -2187,7 +2197,7 @@ function msgToHTML(m){
     const alt = `Bild från ${sid === ME_ID ? 'dig' : who}`;
     const badge = isExplicit ? '<span class="imgbadge" aria-label="Markerad som XXX">XXX</span>' : '';
     return `<li ${attrs.join(' ')} data-body="${escAttr('[Bild]')}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}>
-      <div class="bubble img${isExplicit ? ' is-explicit' : ''}">${replyButtonHTML}${replyPreviewHTML}${badge}<img class="imgmsg" src="${escAttr(u)}" data-explicit="${isExplicit ? '1' : '0'}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
+      <div class="bubble img${isExplicit ? ' is-explicit' : ''}${repliesToMe ? ' reply-to-me' : ''}">${replyButtonHTML}${replyPreviewHTML}${badge}<img class="imgmsg" src="${escAttr(u)}" data-explicit="${isExplicit ? '1' : '0'}" alt="${escAttr(alt)}" loading="lazy" decoding="async"></div>
       ${metaHTML}
     </li>`;
   }
@@ -2195,10 +2205,11 @@ function msgToHTML(m){
   const txt = String(m.content||'');
   const isMention = textMentionsName?.(txt, ME_NM) && sid !== ME_ID;
   const mentionClass = isMention ? ' mention' : '';
+  const replyToMeClass = repliesToMe ? ' reply-to-me' : '';
   const mentionAttr = isMention ? ' data-mention="1"' : '';
 
   return `<li ${attrs.join(' ')} data-body="${escAttr(txt)}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}${mentionAttr}>
-    <div class="bubble${mentionClass}">${replyButtonHTML}${replyPreviewHTML}<div class="bubble-text">${esc(txt)}</div></div>
+    <div class="bubble${mentionClass}${replyToMeClass}">${replyButtonHTML}${replyPreviewHTML}<div class="bubble-text">${esc(txt)}</div></div>
     ${metaHTML}
   </li>`;
 }
@@ -2981,12 +2992,13 @@ function renderList(el, items, options = {}){
 
       const replyPreviewHTML = replyTargetId ? replyPreviewMarkup(replyTargetId, replySenderName, replyExcerpt) : '';
       const replyButtonHTML = canReply ? `<button type="button" class="bubble-reply-btn" data-reply-source="${mid}" aria-label="Svara"><span class="${MATERIAL_ICON_CLASS}" aria-hidden="true">reply</span></button>` : '';
+      const replyToMeClass = repliesToMe ? ' reply-to-me' : '';
 
       if (isImage) {
         const u   = rawContent.trim();
         const alt = `Bild från ${m.sender_id === ME_ID ? 'dig' : who}`;
         const badge = isExplicit ? '<span class="imgbadge" aria-label="Markerad som XXX">XXX</span>' : '';
-        bubbleHTML = `<div class="bubble img${isExplicit ? ' is-explicit' : ''}">${replyButtonHTML}${replyPreviewHTML}${badge}
+        bubbleHTML = `<div class="bubble img${isExplicit ? ' is-explicit' : ''}${replyToMeClass}">${replyButtonHTML}${replyPreviewHTML}${badge}
           <img class="imgmsg" src="${escAttr(u)}" data-explicit="${isExplicit ? '1' : '0'}" alt="${escAttr(alt)}" loading="lazy" decoding="async">
         </div>`;
         if (repliesToMe) {
@@ -2996,7 +3008,7 @@ function renderList(el, items, options = {}){
         const txt = rawContent;
         const isMentionToMe = textMentionsName(txt, ME_NM) && m.sender_id !== ME_ID;
         const mentionClass = isMentionToMe ? ' mention' : '';
-        bubbleHTML = `<div class="bubble${mentionClass}">${replyButtonHTML}${replyPreviewHTML}<div class="bubble-text">${esc(txt)}</div></div>`;
+        bubbleHTML = `<div class="bubble${mentionClass}${replyToMeClass}">${replyButtonHTML}${replyPreviewHTML}<div class="bubble-text">${esc(txt)}</div></div>`;
         if (isMentionToMe) {
           li.dataset.mention = '1';
         }

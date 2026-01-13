@@ -343,6 +343,14 @@ a#kk-imgOpen {
   border-bottom-right-radius: 8px;
   color: #0d111e;
 }
+#kkchat-root .bubble.reply-to-me:not(.mention) {
+  background: linear-gradient(135deg, rgba(23, 32, 52, 0.95) 0%, rgba(32, 48, 78, 0.95) 100%);
+  border-color: rgba(112, 170, 255, 0.6);
+  box-shadow: 0 18px 34px rgba(64, 140, 240, 0.28);
+}
+#kkchat-root .bubble.reply-to-me:not(.mention) .bubble-reply-preview {
+  border-color: rgba(112, 170, 255, 0.45);
+}
 
 
 /* ===========================
