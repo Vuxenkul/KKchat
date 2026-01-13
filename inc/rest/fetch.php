@@ -20,6 +20,7 @@ register_rest_route($ns, '/fetch', [
     $roomParam  = kkchat_sanitize_room_slug((string)$req->get_param('room'));
     if ($roomParam === '') $roomParam = 'general';
     $peer = $req->get_param('to') !== null ? (int)$req->get_param('to') : null;
+    $allowLegacyDm = (string) $req->get_param('legacy_dm') === '1';
 
     // Soft cap to keep payloads small on first load
     $limit = (int)$req->get_param('limit');
@@ -100,19 +101,23 @@ register_rest_route($ns, '/fetch', [
           ) ?: [];
         }
       } else {
-        // Legacy: all DMs to/from me (kept for backward compatibility)
-        $rows = $wpdb->get_results(
-          $wpdb->prepare(
-            "SELECT $msgColumns FROM {$t['messages']}
-             WHERE id > %d
-               AND (recipient_id = %d OR sender_id = %d)
-               AND hidden_at IS NULL
-             ORDER BY id ASC
-             LIMIT %d",
-            $since, $me, $me, $limit
-          ),
-          ARRAY_A
-        ) ?: [];
+        if ($allowLegacyDm) {
+          // Legacy: all DMs to/from me (opt-in only)
+          $rows = $wpdb->get_results(
+            $wpdb->prepare(
+              "SELECT $msgColumns FROM {$t['messages']}
+               WHERE id > %d
+                 AND (recipient_id = %d OR sender_id = %d)
+                 AND hidden_at IS NULL
+               ORDER BY id ASC
+               LIMIT %d",
+              $since, $me, $me, $limit
+            ),
+            ARRAY_A
+          ) ?: [];
+        } else {
+          $rows = [];
+        }
       }
       if ($blocked) {
         $rows = array_values(array_filter($rows, function($r) use ($blocked, $me){
@@ -149,4 +154,3 @@ register_rest_route($ns, '/fetch', [
   },
   'permission_callback' => '__return_true',
 ]);
-

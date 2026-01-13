@@ -373,6 +373,7 @@ if (!defined('ABSPATH')) exit;
       if ($room === '') { $room = 'general'; }
       $peer  = $req->get_param('to') !== null ? (int) $req->get_param('to') : null;
       $onlyPub = $req->get_param('public') !== null;
+      $allowLegacyDm = (string) $req->get_param('legacy_dm') === '1';
 
       $limit = (int) $req->get_param('limit');
       if ($limit <= 0) { $limit = 200; }
@@ -388,6 +389,7 @@ if (!defined('ABSPATH')) exit;
         'room'            => $room,
         'peer'            => $peer,
         'only_public'     => $onlyPub,
+        'allow_legacy_dm' => $allowLegacyDm,
         'limit'           => $limit,
       ];
     }
@@ -705,6 +707,7 @@ if (!defined('ABSPATH')) exit;
       $room    = (string) ($ctx['room'] ?? 'general');
       $peer    = $ctx['peer'] !== null ? (int) $ctx['peer'] : null;
       $onlyPub = !empty($ctx['only_public']);
+      $allowLegacyDm = !empty($ctx['allow_legacy_dm']);
       $limit   = (int) ($ctx['limit'] ?? 200);
       $limit   = max(1, min($limit, 200));
       $since_pub = (int) ($ctx['since_pub'] ?? 0);
@@ -886,18 +889,22 @@ if (!defined('ABSPATH')) exit;
             ) ?: [];
           }
         } else {
-          $rows = $wpdb->get_results(
-            $wpdb->prepare(
-              "SELECT $msgColumns FROM {$t['messages']}
-               WHERE id > %d
-                 AND (recipient_id = %d OR sender_id = %d)
-                 AND hidden_at IS NULL
-               ORDER BY id ASC
-               LIMIT %d",
-              $since, $me, $me, $limit
-            ),
-            ARRAY_A
-          ) ?: [];
+          if ($allowLegacyDm) {
+            $rows = $wpdb->get_results(
+              $wpdb->prepare(
+                "SELECT $msgColumns FROM {$t['messages']}
+                 WHERE id > %d
+                   AND (recipient_id = %d OR sender_id = %d)
+                   AND hidden_at IS NULL
+                 ORDER BY id ASC
+                 LIMIT %d",
+                $since, $me, $me, $limit
+              ),
+              ARRAY_A
+            ) ?: [];
+          } else {
+            $rows = [];
+          }
         }
       }
 
