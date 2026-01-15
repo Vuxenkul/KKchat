@@ -24,6 +24,8 @@ function kkchat_activate() {
     'kkchat_dedupe_window'         => 10,
     'kkchat_report_autoban_threshold' => 0,
     'kkchat_report_autoban_window_days' => 0,
+    'kkchat_first_load_limit' => 20,
+    'kkchat_first_load_exclude_banners' => 0,
   ] as $k => $def) {
     if (get_option($k) === false) add_option($k, $def);
   }

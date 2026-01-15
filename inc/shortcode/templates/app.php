@@ -322,6 +322,8 @@
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode($gender_icon_base) ?>;
   const POLL_SETTINGS = Object.freeze(<?= wp_json_encode($poll_settings) ?>);
+  const FIRST_LOAD_LIMIT = Math.max(1, Math.min(200, Number(<?= (int) $first_load_limit ?>) || 20));
+  const FIRST_LOAD_EXCLUDE_BANNERS = <?= !empty($first_load_exclude_banners) ? 'true' : 'false' ?>;
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -1799,7 +1801,6 @@ function playNotifOnce() {
     applyBlurClass();
 
   const ROOM_CACHE = new Map();          
-  const FIRST_LOAD_LIMIT = 20;          
   const AUTO_OPEN_DM_ON_NEW = false; 
   const JOIN_KEY = 'kk_joined_rooms_v1';
 
@@ -4918,6 +4919,15 @@ function extractMaxMessageId(payload, context) {
   return maxId;
 }
 
+function applyFirstLoadLimit(list) {
+  if (!Array.isArray(list)) return [];
+  let items = list;
+  if (FIRST_LOAD_EXCLUDE_BANNERS) {
+    items = items.filter(m => (m?.kind || 'chat') !== 'banner');
+  }
+  return items.slice(-FIRST_LOAD_LIMIT);
+}
+
 function updateListLastFromPayload(payload, context) {
       const active = desiredStreamState();
   if (!active || !context) return;
@@ -4964,7 +4974,7 @@ function handleStreamSync(js, context){
 
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
-    const items   = isCold ? payload.slice(-FIRST_LOAD_LIMIT) : payload;
+    const items   = isCold ? applyFirstLoadLimit(payload) : payload;
 
     renderList(pubList, items, renderOpts);
     markVisible(pubList);
@@ -5007,7 +5017,8 @@ function handleStreamSync(js, context){
       return !isBlocked(sid) || sid === ME_ID;
     });
 
-    const items = (isCold ? mine.slice(-FIRST_LOAD_LIMIT) : mine).map(m => ({
+    const limited = isCold ? applyFirstLoadLimit(mine) : mine;
+    const items = limited.map(m => ({
       ...m,
       id: Number(m.id),
       sender_id: Number(m.sender_id),
