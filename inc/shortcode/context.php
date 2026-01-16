@@ -46,6 +46,9 @@ function kkchat_shortcode_context() {
   $poll_slow_after       = max($poll_medium_after, (int) get_option('kkchat_poll_slow_after', 5));
   $poll_extra_2g         = max(0, (int) get_option('kkchat_poll_extra_2g', 20));
   $poll_extra_3g         = max(0, (int) get_option('kkchat_poll_extra_3g', 10));
+  $first_load_limit_raw  = (int) get_option('kkchat_first_load_limit', 20);
+  $first_load_limit      = max(1, min(200, $first_load_limit_raw));
+  $first_load_exclude_banners = !empty(get_option('kkchat_first_load_exclude_banners', 0));
 
   $poll_settings = [
     'hiddenThresholdMs' => $poll_hidden_threshold * 1000,
@@ -80,6 +83,8 @@ function kkchat_shortcode_context() {
     'is_admin'        => $is_admin,
     'admin_links'     => $admin_links,
     'poll_settings'   => $poll_settings,
+    'first_load_limit' => $first_load_limit,
+    'first_load_exclude_banners' => $first_load_exclude_banners,
     'rest_nonce'      => $rest_nonce,
     'open_dm'         => $open_dm,
     'audio'           => $audio,
