@@ -1,0 +1,119 @@
+.kkchat-admin-dark {
+  color: #d7dce2;
+  background: #11161f;
+}
+
+.kkchat-admin-dark .wrap h1,
+.kkchat-admin-dark .wrap h2,
+.kkchat-admin-dark .wrap h3,
+.kkchat-admin-dark .wrap p,
+.kkchat-admin-dark .wrap label,
+.kkchat-admin-dark .wrap th,
+.kkchat-admin-dark .wrap td,
+.kkchat-admin-dark .wrap legend {
+  color: #d7dce2;
+}
+
+.kkchat-admin-dark .wrap a {
+  color: #8ab4f8;
+}
+
+.kkchat-admin-dark .wrap a:hover,
+.kkchat-admin-dark .wrap a:focus {
+  color: #b3d1ff;
+}
+
+.kkchat-admin-dark .wrap .form-table th,
+.kkchat-admin-dark .wrap .form-table td {
+  border-color: #232a36;
+}
+
+.kkchat-admin-dark .wrap .form-table th {
+  color: #c2c8d0;
+}
+
+.kkchat-admin-dark .wrap input[type="text"],
+.kkchat-admin-dark .wrap input[type="number"],
+.kkchat-admin-dark .wrap input[type="search"],
+.kkchat-admin-dark .wrap textarea,
+.kkchat-admin-dark .wrap select {
+  background: #151b26;
+  border-color: #2a3342;
+  color: #e3e7ec;
+}
+
+.kkchat-admin-dark .wrap input[type="text"]::placeholder,
+.kkchat-admin-dark .wrap input[type="number"]::placeholder,
+.kkchat-admin-dark .wrap input[type="search"]::placeholder,
+.kkchat-admin-dark .wrap textarea::placeholder {
+  color: #93a1b2;
+}
+
+.kkchat-admin-dark .wrap input[type="checkbox"] {
+  accent-color: #5c9ded;
+}
+
+.kkchat-admin-dark .wrap .button,
+.kkchat-admin-dark .wrap .button-secondary {
+  background: #1d2432;
+  border-color: #2a3342;
+  color: #d7dce2;
+}
+
+.kkchat-admin-dark .wrap .button:hover,
+.kkchat-admin-dark .wrap .button:focus,
+.kkchat-admin-dark .wrap .button-secondary:hover,
+.kkchat-admin-dark .wrap .button-secondary:focus {
+  background: #253048;
+  border-color: #38465c;
+  color: #eef2f6;
+}
+
+.kkchat-admin-dark .wrap .button-primary {
+  background: #2d5db3;
+  border-color: #2d5db3;
+  color: #ffffff;
+}
+
+.kkchat-admin-dark .wrap .button-primary:hover,
+.kkchat-admin-dark .wrap .button-primary:focus {
+  background: #376fd1;
+  border-color: #376fd1;
+  color: #ffffff;
+}
+
+.kkchat-admin-dark .wrap .widefat {
+  background: #151b26;
+  border-color: #2a3342;
+  color: #d7dce2;
+}
+
+.kkchat-admin-dark .wrap .widefat thead th,
+.kkchat-admin-dark .wrap .widefat tfoot th {
+  color: #c2c8d0;
+}
+
+.kkchat-admin-dark .wrap .widefat td,
+.kkchat-admin-dark .wrap .widefat th {
+  border-color: #232a36;
+}
+
+.kkchat-admin-dark .wrap .widefat.striped > tbody > :nth-child(odd) {
+  background: #121823;
+}
+
+.kkchat-admin-dark .wrap .description {
+  color: #9aa5b3;
+}
+
+.kkchat-admin-dark .wrap .updated,
+.kkchat-admin-dark .wrap .notice.notice-success {
+  background: #1c2b1f;
+  border-left-color: #2f7d32;
+  color: #cfe8d1;
+}
+
+.kkchat-admin-dark .wrap .updated p,
+.kkchat-admin-dark .wrap .notice.notice-success p {
+  color: #cfe8d1;
+}

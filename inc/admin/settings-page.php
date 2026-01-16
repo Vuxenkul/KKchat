@@ -117,7 +117,7 @@ function kkchat_admin_settings_page() {
   $sync_last_duration_ms = number_format_i18n((float) $sync_metrics['last_duration_ms'], 1);
   $sync_avg_duration_ms  = number_format_i18n((float) $sync_metrics['avg_duration_ms'], 1);
   ?>
-  <div class="wrap">
+  <div class="wrap kkchat-admin-dark">
     <h1>KKchat – Inställningar</h1>
     <h2>Synk-status</h2>
     <table class="widefat striped">
