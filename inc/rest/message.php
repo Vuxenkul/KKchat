@@ -7,6 +7,12 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
     if ($kind === 'image') {
       return '[Bild]';
     }
+    if ($kind === 'stream_invite') {
+      return '[Streaminbjudan]';
+    }
+    if ($kind === 'stream_signal') {
+      return '';
+    }
 
     $text = wp_strip_all_tags($content);
     $text = preg_replace('/\s+/u', ' ', (string) $text);
@@ -38,9 +44,10 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
       $me_id = kkchat_current_user_id();
       $me_nm = kkchat_current_user_name();
 
-      // Kind: 'chat' (default) or 'image'
-      $kind = (string)$req->get_param('kind');
-      $kind = ($kind === 'image') ? 'image' : 'chat';
+      // Kind: 'chat' (default), 'image', or stream types
+      $kind = strtolower(trim((string)$req->get_param('kind')));
+      $allowed_kinds = ['chat', 'image', 'stream_invite', 'stream_signal'];
+      $kind = in_array($kind, $allowed_kinds, true) ? $kind : 'chat';
 
       $normalize_bool = function($raw, bool $fallback = false): bool {
         if ($raw === null || $raw === '') return $fallback;
@@ -86,7 +93,8 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
 
       } else {
         $txt = trim((string)$req->get_param('content'));
-        if ($txt==='' || mb_strlen($txt) > 2000) kkchat_json(['ok'=>false], 400);
+        $max_len = ($kind === 'stream_signal') ? 12000 : 2000;
+        if ($txt==='' || mb_strlen($txt) > $max_len) kkchat_json(['ok'=>false], 400);
         $is_explicit = false;
       }
 
@@ -284,12 +292,15 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
       $ctx = ($recipient !== null) ? ('dm:' . $recipient) : ('room:' . $room);
       $content_hash = sha1($ctx . '|' . $raw);
       $window = max(1, kkchat_dedupe_window());
-      $dupe_id = (int)$wpdb->get_var($wpdb->prepare(
-        "SELECT id FROM {$t['messages']}
-         WHERE sender_id=%d AND content_hash=%s AND created_at > %d
-         ORDER BY id DESC LIMIT 1",
-        $me_id, $content_hash, $now - max(1,$window)
-      ));
+      $dupe_id = 0;
+      if ($kind !== 'stream_signal') {
+        $dupe_id = (int)$wpdb->get_var($wpdb->prepare(
+          "SELECT id FROM {$t['messages']}
+           WHERE sender_id=%d AND content_hash=%s AND created_at > %d
+           ORDER BY id DESC LIMIT 1",
+          $me_id, $content_hash, $now - max(1,$window)
+        ));
+      }
       if ($dupe_id > 0) {
         // Auto-kick repeated duplicate attempts (non-admins)
         if (!kkchat_is_admin()) {
@@ -397,4 +408,3 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
     },
     'permission_callback' => '__return_true',
   ]);
-
