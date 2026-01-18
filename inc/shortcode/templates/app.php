@@ -239,6 +239,19 @@
   </div>
 </div>
 
+<!-- Stream invite modal -->
+<div id="kk-streamModal" class="kk-stream-modal" role="dialog" aria-modal="false" aria-labelledby="kk-streamTitle">
+  <div class="kk-stream-modal__header" id="kk-streamHeader">
+    <strong id="kk-streamTitle">Stream</strong>
+    <button type="button" class="iconbtn" id="kk-streamClose" aria-label="Stäng stream">
+      <span class="material-symbols-rounded" aria-hidden="true">close</span>
+    </button>
+  </div>
+  <div class="kk-stream-modal__body">
+    <iframe id="kk-streamFrame" title="P2P stream" allow="camera; microphone; autoplay" loading="lazy"></iframe>
+  </div>
+</div>
+
 <!-- Webcam capture modal (desktop fallback) -->
 <div id="kk-camModal" role="dialog" aria-modal="true" aria-labelledby="kk-camTitle">
   <div id="kk-camBox">
@@ -599,6 +612,10 @@ const camVideo  = document.getElementById('kk-camVideo');
 const camShot   = document.getElementById('kk-camShot');
 const camCancel = document.getElementById('kk-camCancel');
 const camFlip   = document.getElementById('kk-camFlip');
+const streamModal = document.getElementById('kk-streamModal');
+const streamHeader = document.getElementById('kk-streamHeader');
+const streamClose = document.getElementById('kk-streamClose');
+const streamFrame = document.getElementById('kk-streamFrame');
 
 
   const imgPanel  = document.getElementById('kk-imgPanel');
@@ -2136,7 +2153,7 @@ function bannerImageHTML(payload){
 const STREAM_INVITE_PREFIX = '[Streaminbjudan]';
 const STREAM_INVITE_LABEL = 'Streaminbjudan';
 const STREAM_INVITE_BUTTON_LABEL = 'Öppna stream';
-const STREAM_INVITE_BASE = window.KKCHAT_STREAM_URL || window.KKCHAT_P2P_URL || `${window.location.origin}/p2p`;
+const STREAM_INVITE_BASE = chatRoot?.dataset?.streamUrl || window.KKCHAT_STREAM_URL || window.KKCHAT_P2P_URL || `${window.location.origin}/p2p`;
 
 function buildStreamInviteUrl(peerId){
   const base = STREAM_INVITE_BASE || `${window.location.origin}/p2p`;
@@ -2176,6 +2193,53 @@ function streamInviteBubbleHTML(invite, { replyPreviewHTML = '', replyButtonHTML
       ${iconMarkup('videocam')} ${esc(STREAM_INVITE_BUTTON_LABEL)}
     </button>
   </div>`;
+}
+
+function sanitizeStreamUrl(rawUrl){
+  if (!rawUrl) return '';
+  try {
+    const url = new URL(rawUrl, window.location.origin);
+    if (!/^https?:$/.test(url.protocol)) return '';
+    return url.toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+function ensureStreamModalBounds(){
+  if (!streamModal) return;
+  const rect = streamModal.getBoundingClientRect();
+  const maxLeft = Math.max(0, window.innerWidth - rect.width);
+  const maxTop = Math.max(0, window.innerHeight - rect.height);
+  const left = Math.min(Math.max(rect.left, 0), maxLeft);
+  const top = Math.min(Math.max(rect.top, 0), maxTop);
+  streamModal.style.left = `${left}px`;
+  streamModal.style.top = `${top}px`;
+}
+
+function openStreamModal(rawUrl){
+  if (!streamModal || !streamFrame) return;
+  const url = sanitizeStreamUrl(rawUrl);
+  if (!url) {
+    showToast('Ogiltig streamlänk.');
+    return;
+  }
+  if (!streamModal.dataset.positioned) {
+    streamModal.style.width = '520px';
+    streamModal.style.height = '360px';
+    streamModal.style.left = `${Math.max(20, (window.innerWidth - 520) / 2)}px`;
+    streamModal.style.top = `${Math.max(20, (window.innerHeight - 360) / 2)}px`;
+    streamModal.dataset.positioned = '1';
+  }
+  streamFrame.src = url;
+  streamModal.setAttribute('open', '');
+  ensureStreamModalBounds();
+}
+
+function closeStreamModal(){
+  if (!streamModal || !streamFrame) return;
+  streamModal.removeAttribute('open');
+  streamFrame.src = 'about:blank';
 }
 
 function msgToHTML(m){
@@ -4291,11 +4355,7 @@ pubList.addEventListener('click', (e)=>{
     e.preventDefault();
     e.stopPropagation();
     const rawUrl = inviteBtn.getAttribute('data-stream-url') || '';
-    try {
-      const url = new URL(rawUrl, window.location.origin);
-      if (!/^https?:$/.test(url.protocol)) return;
-      window.open(url.href, '_blank', 'noopener');
-    } catch (_) {}
+    openStreamModal(rawUrl);
     return;
   }
 
@@ -5538,6 +5598,40 @@ camModal?.addEventListener('click', (e)=>{
 document.addEventListener('keydown', (e)=>{
   if (e.key === 'Escape' && camModal?.hasAttribute('open')) closeWebcamModal();
 });
+
+streamClose?.addEventListener('click', closeStreamModal);
+document.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape' && streamModal?.hasAttribute('open')) closeStreamModal();
+});
+
+let streamDrag = null;
+streamHeader?.addEventListener('pointerdown', (e)=>{
+  if (e.button !== 0) return;
+  if (e.target.closest('button')) return;
+  if (!streamModal) return;
+  const rect = streamModal.getBoundingClientRect();
+  streamDrag = {
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top
+  };
+  streamModal.setPointerCapture?.(e.pointerId);
+});
+
+document.addEventListener('pointermove', (e)=>{
+  if (!streamDrag || !streamModal) return;
+  const left = e.clientX - streamDrag.offsetX;
+  const top = e.clientY - streamDrag.offsetY;
+  streamModal.style.left = `${left}px`;
+  streamModal.style.top = `${top}px`;
+});
+
+document.addEventListener('pointerup', ()=>{
+  if (!streamDrag) return;
+  streamDrag = null;
+  ensureStreamModalBounds();
+});
+
+window.addEventListener('resize', ensureStreamModalBounds);
 
 function closeExplicitModal(result=null){
   if (explicitModal) explicitModal.removeAttribute('open');

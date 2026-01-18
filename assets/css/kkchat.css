@@ -123,6 +123,51 @@ a#kk-imgOpen {
   justify-content: center;
 }
 
+#kkchat-root .kk-stream-modal {
+  position: fixed;
+  top: 12vh;
+  left: 12vw;
+  width: 520px;
+  height: 360px;
+  background: rgba(18, 22, 34, 0.96);
+  border: 1px solid rgba(122, 136, 196, 0.35);
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  display: none;
+  flex-direction: column;
+  z-index: 10005;
+  resize: both;
+  overflow: hidden;
+}
+#kkchat-root .kk-stream-modal[open] {
+  display: flex;
+}
+#kkchat-root .kk-stream-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  cursor: move;
+  background: rgba(24, 28, 44, 0.95);
+  border-bottom: 1px solid rgba(122, 136, 196, 0.25);
+}
+#kkchat-root .kk-stream-modal__header strong {
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+#kkchat-root .kk-stream-modal__body {
+  flex: 1;
+  position: relative;
+}
+#kkchat-root .kk-stream-modal__body iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0b0e18;
+}
+
 #kkchat-root .kk-explicit-modal {
   display: none;
   position: fixed;
