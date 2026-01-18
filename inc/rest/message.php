@@ -7,6 +7,12 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
     if ($kind === 'image') {
       return '[Bild]';
     }
+    if ($kind === 'stream_invite') {
+      return '[Streaminbjudan]';
+    }
+    if ($kind === 'stream_signal') {
+      return '[Streamsignal]';
+    }
 
     $text = wp_strip_all_tags($content);
     $text = preg_replace('/\s+/u', ' ', (string) $text);
@@ -38,9 +44,12 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
       $me_id = kkchat_current_user_id();
       $me_nm = kkchat_current_user_name();
 
-      // Kind: 'chat' (default) or 'image'
-      $kind = (string)$req->get_param('kind');
-      $kind = ($kind === 'image') ? 'image' : 'chat';
+      // Kind: 'chat' (default), 'image', or stream signaling
+      $kind = strtolower(trim((string) $req->get_param('kind')));
+      $allowed_kinds = ['chat', 'image', 'stream_invite', 'stream_signal'];
+      if (!in_array($kind, $allowed_kinds, true)) {
+        $kind = 'chat';
+      }
 
       $normalize_bool = function($raw, bool $fallback = false): bool {
         if ($raw === null || $raw === '') return $fallback;
@@ -86,7 +95,8 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
 
       } else {
         $txt = trim((string)$req->get_param('content'));
-        if ($txt==='' || mb_strlen($txt) > 2000) kkchat_json(['ok'=>false], 400);
+        $max_len = ($kind === 'stream_signal') ? 10000 : 2000;
+        if ($txt==='' || mb_strlen($txt) > $max_len) kkchat_json(['ok'=>false], 400);
         $is_explicit = false;
       }
 
@@ -186,6 +196,9 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
         $recipient_name = $urow['name'] ?? null;
         $recipient_ip   = $urow['ip']   ?? null;
       } else {
+        if ($kind === 'stream_invite' || $kind === 'stream_signal') {
+          kkchat_json(['ok'=>false,'err'=>'dm_only'], 400);
+        }
         $room = kkchat_sanitize_room_slug((string)$req->get_param('room'));
         if ($room === '') $room = 'general';
         if (!kkchat_can_access_room($room)) kkchat_json(['ok'=>false,'err'=>'no_room_access'], 403);
@@ -397,4 +410,3 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
     },
     'permission_callback' => '__return_true',
   ]);
-
