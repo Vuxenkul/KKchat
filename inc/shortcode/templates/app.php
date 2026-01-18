@@ -2153,17 +2153,19 @@ function bannerImageHTML(payload){
 const STREAM_INVITE_PREFIX = '[Streaminbjudan]';
 const STREAM_INVITE_LABEL = 'Streaminbjudan';
 const STREAM_INVITE_BUTTON_LABEL = 'Öppna stream';
-const STREAM_INVITE_BASE = chatRoot?.dataset?.streamUrl || window.KKCHAT_STREAM_URL || window.KKCHAT_P2P_URL || `${window.location.origin}/p2p`;
+const STREAM_INVITE_BASE = chatRoot?.dataset?.streamUrl || window.KKCHAT_STREAM_URL || window.KKCHAT_P2P_URL || '';
+const STREAM_INVITE_ENABLED = !!STREAM_INVITE_BASE;
 
 function buildStreamInviteUrl(peerId){
-  const base = STREAM_INVITE_BASE || `${window.location.origin}/p2p`;
+  const base = STREAM_INVITE_BASE;
+  if (!base) return '';
   try {
     const url = new URL(base, window.location.origin);
     if (peerId) url.searchParams.set('peer', String(peerId));
     if (ME_ID) url.searchParams.set('from', String(ME_ID));
     return url.toString();
   } catch (_) {
-    return base;
+    return '';
   }
 }
 
@@ -2206,6 +2208,22 @@ function sanitizeStreamUrl(rawUrl){
   }
 }
 
+function resolveStreamInviteUrl(rawUrl){
+  const sanitized = sanitizeStreamUrl(rawUrl);
+  if (!sanitized) return '';
+  if (!STREAM_INVITE_BASE) return sanitized;
+  try {
+    const baseUrl = new URL(STREAM_INVITE_BASE, window.location.origin);
+    const rawUrlObj = new URL(sanitized, window.location.origin);
+    rawUrlObj.searchParams.forEach((value, key) => {
+      baseUrl.searchParams.set(key, value);
+    });
+    return baseUrl.toString();
+  } catch (_) {
+    return sanitized;
+  }
+}
+
 function ensureStreamModalBounds(){
   if (!streamModal) return;
   const rect = streamModal.getBoundingClientRect();
@@ -2219,7 +2237,7 @@ function ensureStreamModalBounds(){
 
 function openStreamModal(rawUrl){
   if (!streamModal || !streamFrame) return;
-  const url = sanitizeStreamUrl(rawUrl);
+  const url = resolveStreamInviteUrl(rawUrl);
   if (!url) {
     showToast('Ogiltig streamlänk.');
     return;
@@ -2306,8 +2324,9 @@ function msgToHTML(m){
 
   const streamInvite = parseStreamInvite(rawContent);
   if (streamInvite) {
+    const inviteUrl = resolveStreamInviteUrl(streamInvite.url);
     return `<li ${attrs.join(' ')} data-body="${escAttr(STREAM_INVITE_LABEL)}"${replyTargetId ? ` data-reply-id="${replyTargetId}" data-reply-name="${escAttr(replySenderName || '')}" data-reply-excerpt="${escAttr(replyExcerpt || '')}"` : ''}>
-      ${streamInviteBubbleHTML(streamInvite, { replyPreviewHTML, replyButtonHTML })}
+      ${streamInviteBubbleHTML({ ...streamInvite, url: inviteUrl }, { replyPreviewHTML, replyButtonHTML })}
       ${metaHTML}
     </li>`;
   }
@@ -3056,8 +3075,9 @@ function renderList(el, items, options = {}){
           mentionAdded = true;
         }
       } else if (streamInvite) {
+        const inviteUrl = resolveStreamInviteUrl(streamInvite.url);
         li.dataset.body = STREAM_INVITE_LABEL;
-        bubbleHTML = streamInviteBubbleHTML(streamInvite, { replyPreviewHTML, replyButtonHTML });
+        bubbleHTML = streamInviteBubbleHTML({ ...streamInvite, url: inviteUrl }, { replyPreviewHTML, replyButtonHTML });
         if (repliesToMe) {
           mentionAdded = true;
         }
@@ -4607,7 +4627,7 @@ function renderRoomTabs(){
       ta.disabled = false; btn.disabled = false;
       if (imgB) imgB.disabled = false;
       if (camB) camB.disabled = false;
-      if (streamB) streamB.disabled = false;
+      if (streamB) streamB.disabled = !STREAM_INVITE_ENABLED;
       if (mentionB) mentionB.disabled = false;
       if (toggleB) toggleB.disabled = false;
       const n = nameById(currentDM);
@@ -5769,7 +5789,7 @@ function appendPendingStreamInvite(content, inviteUrl){
     : esc(who);
 
   const replyPreviewHTML = reply ? replyPreviewMarkup(reply.id, reply.name, reply.excerpt) : '';
-  const inviteMarkup = streamInviteBubbleHTML({ url: inviteUrl }, { replyPreviewHTML });
+  const inviteMarkup = streamInviteBubbleHTML({ url: resolveStreamInviteUrl(inviteUrl) }, { replyPreviewHTML });
 
   li.innerHTML = `
     <button type="button" class="retry-btn" data-retry title="Försök igen" aria-label="Försök skicka igen">↻</button>
@@ -6001,8 +6021,16 @@ streamInviteBtn?.addEventListener('click', async (e) => {
     showToast('Streaminbjudan kan bara skickas i privata chattar.');
     return;
   }
+  if (!STREAM_INVITE_ENABLED) {
+    showToast('Streamtjänst är inte konfigurerad.');
+    return;
+  }
 
   const inviteUrl = buildStreamInviteUrl(currentDM);
+  if (!inviteUrl) {
+    showToast('Streamlänk kunde inte skapas.');
+    return;
+  }
   const content = buildStreamInviteContent(inviteUrl);
   const entries = [['content', content], ['recipient_id', String(currentDM)]];
   if (COMPOSER_REPLY && Number.isFinite(Number(COMPOSER_REPLY.id))) {
