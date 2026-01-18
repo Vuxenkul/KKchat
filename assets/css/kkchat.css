@@ -123,6 +123,100 @@ a#kk-imgOpen {
   justify-content: center;
 }
 
+#kkchat-root .kk-stream-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 10005;
+  pointer-events: none;
+}
+#kkchat-root .kk-stream-modal[open] {
+  display: block;
+}
+#kkchat-root .kk-stream-modal__dialog {
+  position: fixed;
+  width: 360px;
+  height: 260px;
+  min-width: 260px;
+  min-height: 200px;
+  max-width: 90vw;
+  max-height: 80vh;
+  background: #0f1115;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  overflow: hidden;
+  resize: both;
+  pointer-events: auto;
+}
+#kkchat-root .kk-stream-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.06);
+  cursor: move;
+  user-select: none;
+}
+#kkchat-root .kk-stream-modal__header strong {
+  font-size: 14px;
+  color: #f8f8f8;
+}
+#kkchat-root .kk-stream-modal__actions {
+  display: flex;
+  gap: 6px;
+}
+#kkchat-root .kk-stream-modal__body {
+  position: relative;
+  width: 100%;
+  height: calc(100% - 42px);
+  background: #0a0b0f;
+}
+#kkchat-root .kk-stream-modal__body video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0a0b0f;
+}
+#kkchat-root #kk-streamLocal {
+  position: absolute;
+  width: 120px;
+  height: 90px;
+  right: 10px;
+  bottom: 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+}
+
+#kkchat-root .bubble.stream-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#kkchat-root .stream-invite__text {
+  font-weight: 600;
+}
+#kkchat-root .stream-invite__hint {
+  font-size: 12px;
+  color: rgba(255,255,255,0.7);
+}
+#kkchat-root .stream-invite__action {
+  align-self: flex-start;
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+#kkchat-root .stream-invite__action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 #kkchat-root .kk-explicit-modal {
   display: none;
   position: fixed;
