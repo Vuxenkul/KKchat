@@ -280,6 +280,114 @@ a#kk-imgOpen {
 }
 #kk-camBtns button:hover { transform: translateY(-2px); }
 
+/* Stream modal (DM, one-way video) */
+.kk-stream-modal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 20px;
+  z-index: 9999;
+  pointer-events: none;
+}
+.kk-stream-modal.is-open {
+  display: flex;
+}
+.kk-stream-window {
+  position: absolute;
+  right: 20px;
+  bottom: 20px;
+  width: 320px;
+  height: 240px;
+  min-width: 220px;
+  min-height: 180px;
+  background: #141623;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+  overflow: hidden;
+  resize: both;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+}
+.kk-stream-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: move;
+  user-select: none;
+}
+.kk-stream-head strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.kk-stream-close {
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 8px;
+}
+.kk-stream-close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.kk-stream-body {
+  flex: 1 1 auto;
+  position: relative;
+  background: #0c0f1a;
+}
+.kk-stream-body video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  background: #0c0f1a;
+}
+.kk-stream-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+  text-align: center;
+  padding: 12px;
+  pointer-events: none;
+}
+
+#kkchat-root .bubble.stream-invite {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#kkchat-root .bubble.stream-invite .stream-invite-actions {
+  display: flex;
+  gap: 8px;
+}
+#kkchat-root .bubble.stream-invite .stream-invite-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #3b82f6;
+  color: #fff;
+  cursor: pointer;
+}
+#kkchat-root .bubble.stream-invite .stream-invite-btn:hover {
+  filter: brightness(1.05);
+}
+#kkchat-root .bubble.stream-invite .stream-invite-note {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
 /* Admin bubbles */
 #kkchat-root .list .item.them.admin .bubble:not(.img),
 #kkchat-root .list .item.me.admin  .bubble:not(.img) {
