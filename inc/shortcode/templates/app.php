@@ -141,6 +141,7 @@
                   <div class="input-actions-menu" data-attach-menu hidden role="menu" aria-hidden="true">
                     <button type="button" class="input-actions-item" id="kk-pubUpBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">image</span> Ladda upp bild</button>
                     <button type="button" class="input-actions-item" id="kk-pubCamBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">photo_camera</span> Öppna kamera</button>
+                    <button type="button" class="input-actions-item" id="kk-streamInviteBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">video_call</span> Bjud in till stream</button>
                     <button type="button" class="input-actions-item" id="kk-mentionBtn" data-attach-item role="menuitem"><span class="material-symbols-rounded" aria-hidden="true">alternate_email</span> Nämn någon</button>
                   </div>
                 </div>
@@ -248,6 +249,30 @@
       <button id="kk-camShot" type="button" title="Ta bild"><span class="material-symbols-rounded" aria-hidden="true">photo_camera</span> Ta bild</button>
       <button id="kk-camCancel" type="button" title="Avbryt">Stäng</button>
     </div>
+  </div>
+</div>
+
+<!-- Stream invite modal -->
+<div id="kk-streamModal" class="kk-stream-modal" role="dialog" aria-modal="true" aria-labelledby="kk-streamTitle" aria-hidden="true" hidden>
+  <div class="kk-stream-modal__header" id="kk-streamHeader">
+    <div class="kk-stream-modal__title">
+      <span class="material-symbols-rounded" aria-hidden="true">videocam</span>
+      <strong id="kk-streamTitle">Stream</strong>
+    </div>
+    <span class="kk-stream-modal__status" id="kk-streamStatus">Väntar…</span>
+    <button type="button" class="iconbtn kk-stream-modal__close" id="kk-streamClose" aria-label="Stäng stream">
+      <span class="material-symbols-rounded" aria-hidden="true">close</span>
+    </button>
+  </div>
+  <div class="kk-stream-modal__body">
+    <div class="kk-stream-video">
+      <video id="kk-streamRemote" autoplay playsinline></video>
+      <video id="kk-streamLocal" autoplay playsinline muted></video>
+    </div>
+  </div>
+  <div class="kk-stream-modal__footer">
+    <button type="button" class="iconbtn" id="kk-streamCamToggle"><span class="material-symbols-rounded" aria-hidden="true">videocam</span> Kamera</button>
+    <button type="button" class="iconbtn" id="kk-streamMicToggle"><span class="material-symbols-rounded" aria-hidden="true">mic</span> Mikrofon</button>
   </div>
 </div>
 
@@ -377,6 +402,11 @@
   const MESSAGE_INDEX = new Map();
   const MESSAGE_INDEX_LIMIT = 800;
   let COMPOSER_REPLY = null;
+  const STREAM_INVITE_KIND = 'stream_invite';
+  const STREAM_SIGNAL_KIND = 'stream_signal';
+  const STREAM_SIGNAL_QUEUE = new Map();
+  let ACTIVE_STREAM = null;
+  let STREAM_DRAG_STATE = null;
 
   multiTabUseHere?.addEventListener('click', (ev)=>{
     ev.preventDefault();
@@ -540,6 +570,7 @@ const pubImgInp = document.getElementById('kk-pubImg');
 const pubCamInp = document.getElementById('kk-pubCam');
 const pubTA     = pubForm?.querySelector('textarea');
 const mentionBtn = document.getElementById('kk-mentionBtn');
+const streamInviteBtn = document.getElementById('kk-streamInviteBtn');
 
 const attachRoot   = pubForm?.querySelector('[data-attach-root]');
 const attachToggle = attachRoot?.querySelector('[data-attach-toggle]');
@@ -597,6 +628,15 @@ const camVideo  = document.getElementById('kk-camVideo');
 const camShot   = document.getElementById('kk-camShot');
 const camCancel = document.getElementById('kk-camCancel');
 const camFlip   = document.getElementById('kk-camFlip');
+
+const streamModal = document.getElementById('kk-streamModal');
+const streamHeader = document.getElementById('kk-streamHeader');
+const streamStatus = document.getElementById('kk-streamStatus');
+const streamClose = document.getElementById('kk-streamClose');
+const streamLocalVideo = document.getElementById('kk-streamLocal');
+const streamRemoteVideo = document.getElementById('kk-streamRemote');
+const streamCamToggle = document.getElementById('kk-streamCamToggle');
+const streamMicToggle = document.getElementById('kk-streamMicToggle');
 
 
   const imgPanel  = document.getElementById('kk-imgPanel');
@@ -2497,6 +2537,52 @@ function applyCache(key){
   }
   function esc(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
   function escAttr(s){ return (s==null?'':String(s)).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function safeJsonParse(raw){
+    if (!raw || typeof raw !== 'string') return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function generateStreamId(){
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return `stream_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
+  }
+
+  function parseStreamInvitePayload(raw){
+    const data = safeJsonParse(raw);
+    if (!data) return null;
+    const id = data.id || data.stream_id || data.streamId;
+    if (!id) return null;
+    return {
+      id: String(id),
+      title: typeof data.title === 'string' ? data.title : 'Videochatt',
+      note: typeof data.note === 'string' ? data.note : 'Bjud in till direkt webcam-chat.',
+      created_at: data.created_at || data.createdAt || null,
+    };
+  }
+
+  function streamInviteBubbleHTML(payload, { replyPreviewHTML = '', replyButtonHTML = '', disabled = false, peerId = null } = {}){
+    const streamId = payload?.id ? String(payload.id) : '';
+    const title = payload?.title || 'Videochatt';
+    const note = payload?.note || 'Bjud in till direkt webcam-chat.';
+    const peerAttr = Number.isFinite(Number(peerId)) ? ` data-stream-peer="${Number(peerId)}"` : '';
+    const buttonState = disabled ? ' disabled' : '';
+    return `<div class="bubble stream-invite">${replyButtonHTML}${replyPreviewHTML}
+      <div class="bubble-text">
+        <strong>${esc(title)}</strong>
+        <span class="stream-invite-text">${esc(note)}</span>
+      </div>
+      <button type="button" class="stream-invite-btn" data-stream-open="${escAttr(streamId)}"${peerAttr}${buttonState}>
+        ${iconMarkup('videocam')} Öppna stream
+      </button>
+    </div>`;
+  }
 
   function truncateText(str, limit = 160){
     const arr = Array.from(String(str || ''));
@@ -2507,6 +2593,8 @@ function applyCache(key){
   function messageExcerptFromContent(text, kind){
     const normalizedKind = String(kind || 'chat').toLowerCase();
     if (normalizedKind === 'image') return '[Bild]';
+    if (normalizedKind === 'stream_invite') return '[Streaminbjudan]';
+    if (normalizedKind === 'stream_signal') return '';
     const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
     if (!cleaned) return '';
     return truncateText(cleaned, 160);
@@ -2799,6 +2887,9 @@ function renderList(el, items, options = {}){
     if (mid > maxId) maxId = mid;
     // 🔔 moderation events (wake-only, do not render)
     const kind = (m.kind || 'chat');
+    if (kind === STREAM_SIGNAL_KIND) {
+      return;
+    }
     if (kind.indexOf('mod_') === 0) {
       try {
         const data = JSON.parse(m.content || '{}');
@@ -2858,6 +2949,7 @@ function renderList(el, items, options = {}){
 
       let bubbleHTML = '';
       const isImage = (m.kind||'chat') === 'image';
+      const isStreamInvite = (m.kind || 'chat') === STREAM_INVITE_KIND;
       const isExplicit = isImage ? !!m.is_explicit : false;
       const rawContent = String(m.content || '');
       const senderNum = Number(m.sender_id);
@@ -2932,6 +3024,17 @@ function renderList(el, items, options = {}){
         if (repliesToMe) {
           mentionAdded = true;
         }
+      } else if (isStreamInvite) {
+        const payload = parseStreamInvitePayload(rawContent) || { id: '', title: 'Videochatt', note: 'Bjud in till direkt webcam-chat.' };
+        const peerId = Number(m.sender_id) === Number(ME_ID)
+          ? Number(m.recipient_id)
+          : Number(m.sender_id);
+        bubbleHTML = streamInviteBubbleHTML(payload, {
+          replyPreviewHTML,
+          replyButtonHTML,
+          disabled: !payload.id,
+          peerId: Number.isFinite(peerId) && peerId > 0 ? peerId : null,
+        });
       } else {
         const txt = rawContent;
         const isMentionToMe = textMentionsName(txt, ME_NM) && m.sender_id !== ME_ID;
@@ -3370,8 +3473,10 @@ function normalizeUnreadMap(map) {
   if (!info) return '';
 
   const kind = String(info.kind || 'chat').toLowerCase();
+  if (kind === STREAM_SIGNAL_KIND) return '';
   const isImage = kind === 'image';
-  const icon = iconMarkup(isImage ? 'photo_camera' : 'chat');
+  const isStreamInvite = kind === STREAM_INVITE_KIND;
+  const icon = iconMarkup(isStreamInvite ? 'videocam' : (isImage ? 'photo_camera' : 'chat'));
 
   let ctx = '';
   if (info.to) {
@@ -3382,7 +3487,7 @@ function normalizeUnreadMap(map) {
   }
 
   const rawText = String(info.text || '').trim();
-  let text = isImage ? '[bild]' : rawText;
+  let text = isStreamInvite ? '[streaminbjudan]' : (isImage ? '[bild]' : rawText);
   if (!text) text = '…';
 
   const ts = Number(info.time);
@@ -3676,9 +3781,11 @@ function coerceLastMessage(raw){
   const timeVal = src.time ?? src.last_created_at ?? src.created_at ?? null;
   const textVal = src.text ?? src.content ?? src.last_content ?? '';
   const recipName = src.recipient_name ?? src.last_recipient_name ?? null;
+  const normalizedKind = String(kindVal || 'chat').toLowerCase();
+  if (normalizedKind === STREAM_SIGNAL_KIND) return null;
 
   const normalized = {
-    text: String(textVal || '').slice(0, 200),
+    text: normalizedKind === STREAM_INVITE_KIND ? '[streaminbjudan]' : String(textVal || '').slice(0, 200),
     room: roomVal ? String(roomVal) : null,
     to: Number.isFinite(Number(toVal)) && Number(toVal) > 0 ? Number(toVal) : null,
     recipient_name: recipName ? String(recipName) : null,
@@ -3701,8 +3808,11 @@ function updateLastMessageFromMessage(m){
   if (!Number.isFinite(sid) || sid <= 0 || sid === ME_ID) return;
 
   const kind = String(m?.kind || 'chat');
+  if (kind === STREAM_SIGNAL_KIND) return;
   const info = {
-    text: kind === 'image' ? '' : String(m?.content || '').trim().slice(0, 200),
+    text: kind === STREAM_INVITE_KIND
+      ? '[streaminbjudan]'
+      : (kind === 'image' ? '' : String(m?.content || '').trim().slice(0, 200)),
     room: m?.recipient_id == null ? (m?.room || null) : null,
     to:   m?.recipient_id != null && Number(m.recipient_id) > 0 ? Number(m.recipient_id) : null,
     recipient_name: m?.recipient_name ? String(m.recipient_name) : null,
@@ -4222,6 +4332,21 @@ document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && msgSheet.h
 
 pubList.addEventListener('click', (e)=>{
 
+  const streamBtn = e.target.closest('.stream-invite-btn[data-stream-open]');
+  if (streamBtn) {
+    e.preventDefault();
+    const streamId = streamBtn.getAttribute('data-stream-open') || '';
+    const peerId = Number(streamBtn.getAttribute('data-stream-peer') || 0);
+    if (!streamId || !Number.isFinite(peerId) || peerId <= 0) {
+      showToast('Streamen kunde inte öppnas.');
+      return;
+    }
+    const li = streamBtn.closest('li.item');
+    const isMine = li?.classList.contains('me');
+    openStreamSession(streamId, peerId, isMine ? 'host' : 'guest');
+    return;
+  }
+
   const replyBtn = e.target.closest('.bubble-reply-btn');
   if (replyBtn) {
     e.preventDefault();
@@ -4462,6 +4587,7 @@ function renderRoomTabs(){
     const btn = pubForm.querySelector('button[type="submit"]');
     const imgB = pubUpBtn;
     const camB = pubCamBtn;
+    const streamB = streamInviteBtn;
     const mentionB = mentionBtn;
     const toggleB = attachToggle;
 
@@ -4469,6 +4595,7 @@ function renderRoomTabs(){
       ta.disabled = false; btn.disabled = false;
       if (imgB) imgB.disabled = false;
       if (camB) camB.disabled = false;
+      if (streamB) streamB.disabled = false;
       if (mentionB) mentionB.disabled = false;
       if (toggleB) toggleB.disabled = false;
       const n = nameById(currentDM);
@@ -4482,6 +4609,7 @@ function renderRoomTabs(){
     ta.disabled = !allowed; btn.disabled = !allowed;
     if (imgB) imgB.disabled = !allowed;
     if (camB) camB.disabled = !allowed;
+    if (streamB) streamB.disabled = true;
     if (mentionB) mentionB.disabled = !allowed;
     if (toggleB) toggleB.disabled = !allowed;
     if (!allowed) closeAttachmentMenu();
@@ -4946,9 +5074,30 @@ function applyFirstLoadLimit(list) {
   if (!Array.isArray(list)) return [];
   let items = list;
   if (FIRST_LOAD_EXCLUDE_BANNERS) {
-    items = items.filter(item => String(item?.kind || 'chat') !== 'banner');
+    items = items.filter(item => {
+      const kind = String(item?.kind || 'chat');
+      return kind !== 'banner' && kind !== 'stream_signal';
+    });
   }
+  items = items.filter(item => String(item?.kind || 'chat') !== 'stream_signal');
   return items.slice(-FIRST_LOAD_LIMIT);
+}
+
+function handleStreamSignalsFromPayload(messages) {
+  if (!Array.isArray(messages) || !messages.length) return [];
+  const visible = [];
+  messages.forEach(m => {
+    const kind = String(m?.kind || 'chat');
+    if (kind === STREAM_SIGNAL_KIND) {
+      const payload = safeJsonParse(String(m?.content || ''));
+      if (payload && payload.id && payload.type) {
+        queueStreamSignal(payload, Number(m?.sender_id || 0));
+      }
+      return;
+    }
+    visible.push(m);
+  });
+  return visible;
 }
 
 function handleStreamSync(js, context){
@@ -4974,7 +5123,8 @@ function handleStreamSync(js, context){
 
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
-    const items   = isCold ? applyFirstLoadLimit(payload) : payload;
+    const visiblePayload = handleStreamSignalsFromPayload(payload);
+    const items   = isCold ? applyFirstLoadLimit(visiblePayload) : visiblePayload;
 
     renderList(pubList, items, renderOpts);
     markVisible(pubList);
@@ -5011,8 +5161,8 @@ function handleStreamSync(js, context){
       const rid = m.recipient_id == null ? null : Number(m.recipient_id);
       return (sid === ME_ID && rid === context.to) || (sid === context.to && rid === ME_ID);
     });
-
-    const mine = between.filter(m => {
+    const visibleBetween = handleStreamSignalsFromPayload(between);
+    const mine = visibleBetween.filter(m => {
       const sid = Number(m.sender_id);
       return !isBlocked(sid) || sid === ME_ID;
     });
@@ -5459,6 +5609,334 @@ document.addEventListener('keydown', (e)=>{
   if (e.key === 'Escape' && camModal?.hasAttribute('open')) closeWebcamModal();
 });
 
+const STREAM_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+function setStreamModalOpen(open) {
+  if (!streamModal) return;
+  if (open) {
+    streamModal.hidden = false;
+    streamModal.classList.add('is-open');
+    streamModal.setAttribute('aria-hidden', 'false');
+  } else {
+    streamModal.classList.remove('is-open');
+    streamModal.setAttribute('aria-hidden', 'true');
+    streamModal.hidden = true;
+  }
+}
+
+function setStreamStatus(text) {
+  if (streamStatus) streamStatus.textContent = text || '';
+}
+
+async function sendStreamSignal(peerId, payload) {
+  if (!peerId || !payload) return;
+  const fd = new FormData();
+  fd.append('csrf_token', CSRF);
+  fd.append('kind', STREAM_SIGNAL_KIND);
+  fd.append('content', JSON.stringify(payload));
+  fd.append('recipient_id', String(peerId));
+  try {
+    await fetch(API + '/message', { method:'POST', body: fd, credentials:'include', headers:h });
+  } catch (_) {}
+}
+
+function ensureStreamPeerConnection() {
+  if (!ACTIVE_STREAM) return null;
+  if (ACTIVE_STREAM.pc) return ACTIVE_STREAM.pc;
+  const pc = new RTCPeerConnection({ iceServers: STREAM_ICE_SERVERS });
+  pc.onicecandidate = (event) => {
+    if (event.candidate && ACTIVE_STREAM) {
+      sendStreamSignal(ACTIVE_STREAM.peerId, {
+        id: ACTIVE_STREAM.id,
+        type: 'candidate',
+        candidate: event.candidate
+      });
+    }
+  };
+  pc.ontrack = (event) => {
+    if (!ACTIVE_STREAM) return;
+    if (!ACTIVE_STREAM.remoteStream) {
+      ACTIVE_STREAM.remoteStream = new MediaStream();
+      if (streamRemoteVideo) streamRemoteVideo.srcObject = ACTIVE_STREAM.remoteStream;
+    }
+    ACTIVE_STREAM.remoteStream.addTrack(event.track);
+  };
+  pc.onconnectionstatechange = () => {
+    if (!ACTIVE_STREAM) return;
+    const state = pc.connectionState;
+    if (state === 'connected') setStreamStatus('Ansluten');
+    else if (state === 'failed') setStreamStatus('Anslutning misslyckades');
+    else if (state === 'disconnected') setStreamStatus('Anslutning bröts');
+    else if (state === 'connecting') setStreamStatus('Ansluter…');
+  };
+
+  if (ACTIVE_STREAM.localStream) {
+    ACTIVE_STREAM.localStream.getTracks().forEach(track => {
+      try { pc.addTrack(track, ACTIVE_STREAM.localStream); } catch(_) {}
+    });
+  }
+
+  ACTIVE_STREAM.pc = pc;
+  return pc;
+}
+
+async function ensureStreamLocalMedia() {
+  if (!ACTIVE_STREAM || ACTIVE_STREAM.localStream) return;
+  if (!hasMediaDevices()) {
+    showToast('Kunde inte öppna kamera');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    ACTIVE_STREAM.localStream = stream;
+    ACTIVE_STREAM.camEnabled = stream.getVideoTracks().some(track => track.enabled);
+    ACTIVE_STREAM.micEnabled = stream.getAudioTracks().some(track => track.enabled);
+    if (streamLocalVideo) streamLocalVideo.srcObject = stream;
+    if (ACTIVE_STREAM.pc) {
+      stream.getTracks().forEach(track => {
+        try { ACTIVE_STREAM.pc.addTrack(track, stream); } catch(_) {}
+      });
+    }
+    updateStreamToggleButtons();
+  } catch (e) {
+    showToast('Kunde inte öppna kamera');
+  }
+}
+
+function updateStreamToggleButtons() {
+  if (!ACTIVE_STREAM) return;
+  const camOn = !!ACTIVE_STREAM.camEnabled;
+  const micOn = !!ACTIVE_STREAM.micEnabled;
+  if (streamCamToggle) {
+    streamCamToggle.innerHTML = `${iconMarkup(camOn ? 'videocam' : 'videocam_off')} Kamera`;
+    streamCamToggle.setAttribute('aria-pressed', camOn ? 'true' : 'false');
+  }
+  if (streamMicToggle) {
+    streamMicToggle.innerHTML = `${iconMarkup(micOn ? 'mic' : 'mic_off')} Mikrofon`;
+    streamMicToggle.setAttribute('aria-pressed', micOn ? 'true' : 'false');
+  }
+}
+
+async function createStreamOffer() {
+  if (!ACTIVE_STREAM) return;
+  const pc = ensureStreamPeerConnection();
+  if (!pc) return;
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await sendStreamSignal(ACTIVE_STREAM.peerId, {
+      id: ACTIVE_STREAM.id,
+      type: 'offer',
+      sdp: pc.localDescription
+    });
+  } catch (_) {
+    showToast('Kunde inte skapa erbjudande');
+  }
+}
+
+async function acceptStreamOffer(sdp) {
+  if (!ACTIVE_STREAM) return;
+  const pc = ensureStreamPeerConnection();
+  if (!pc || !sdp) return;
+  try {
+    await pc.setRemoteDescription(sdp);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    await sendStreamSignal(ACTIVE_STREAM.peerId, {
+      id: ACTIVE_STREAM.id,
+      type: 'answer',
+      sdp: pc.localDescription
+    });
+  } catch (_) {
+    showToast('Kunde inte svara på erbjudande');
+  }
+}
+
+function queueStreamSignal(payload, senderId) {
+  if (!payload || !payload.id) return;
+  const streamId = String(payload.id);
+  const entry = { payload, senderId };
+  if (ACTIVE_STREAM && String(ACTIVE_STREAM.id) === streamId) {
+    handleStreamSignal(entry);
+    return;
+  }
+  const queue = STREAM_SIGNAL_QUEUE.get(streamId) || [];
+  queue.push(entry);
+  STREAM_SIGNAL_QUEUE.set(streamId, queue);
+}
+
+function flushStreamSignalQueue(streamId) {
+  const queue = STREAM_SIGNAL_QUEUE.get(streamId);
+  if (!queue || !queue.length) return;
+  STREAM_SIGNAL_QUEUE.delete(streamId);
+  queue.forEach(entry => handleStreamSignal(entry));
+}
+
+async function handleStreamSignal(entry) {
+  if (!ACTIVE_STREAM) return;
+  const { payload, senderId } = entry;
+  if (!payload || String(payload.id) !== String(ACTIVE_STREAM.id)) return;
+  if (senderId && ACTIVE_STREAM.peerId && Number(senderId) !== Number(ACTIVE_STREAM.peerId)) return;
+
+  switch (payload.type) {
+    case 'join':
+      if (ACTIVE_STREAM.role === 'host') {
+        setStreamStatus('Skickar erbjudande…');
+        await ensureStreamLocalMedia();
+        await createStreamOffer();
+      }
+      break;
+    case 'offer':
+      if (ACTIVE_STREAM.role === 'guest') {
+        setStreamStatus('Svarar…');
+        await ensureStreamLocalMedia();
+        await acceptStreamOffer(payload.sdp);
+      }
+      break;
+    case 'answer':
+      if (ACTIVE_STREAM.role === 'host' && ACTIVE_STREAM.pc && payload.sdp) {
+        try { await ACTIVE_STREAM.pc.setRemoteDescription(payload.sdp); } catch(_) {}
+        setStreamStatus('Ansluten');
+      }
+      break;
+    case 'candidate':
+      if (ACTIVE_STREAM.pc && payload.candidate) {
+        try { await ACTIVE_STREAM.pc.addIceCandidate(payload.candidate); } catch(_) {}
+      }
+      break;
+    case 'hangup':
+      closeStreamSession({ sendSignal: false, reason: 'Streamen avslutades.' });
+      break;
+    default:
+      break;
+  }
+}
+
+async function openStreamSession(streamId, peerId, role = 'guest') {
+  if (!streamModal) return;
+  const peerNum = Number(peerId);
+  if (!streamId || !Number.isFinite(peerNum) || peerNum <= 0) {
+    showToast('Kunde inte starta stream');
+    return;
+  }
+
+  if (ACTIVE_STREAM && String(ACTIVE_STREAM.id) === String(streamId)) {
+    setStreamModalOpen(true);
+    return;
+  }
+
+  await closeStreamSession({ sendSignal: false });
+
+  ACTIVE_STREAM = {
+    id: String(streamId),
+    peerId: peerNum,
+    role,
+    pc: null,
+    localStream: null,
+    remoteStream: null,
+    camEnabled: true,
+    micEnabled: true,
+  };
+
+  const peerName = nameById(peerNum) || 'deltagare';
+  setStreamStatus(role === 'host' ? `Väntar på ${peerName}…` : 'Ansluter…');
+  setStreamModalOpen(true);
+  await ensureStreamLocalMedia();
+  ensureStreamPeerConnection();
+  updateStreamToggleButtons();
+  flushStreamSignalQueue(String(streamId));
+
+  if (role === 'guest') {
+    await sendStreamSignal(peerNum, { id: String(streamId), type: 'join' });
+  }
+}
+
+async function closeStreamSession({ sendSignal = true, reason = '' } = {}) {
+  if (!ACTIVE_STREAM) {
+    setStreamModalOpen(false);
+    return;
+  }
+  const streamId = ACTIVE_STREAM.id;
+  const peerId = ACTIVE_STREAM.peerId;
+
+  try {
+    ACTIVE_STREAM.localStream?.getTracks().forEach(track => { try { track.stop(); } catch(_) {} });
+    ACTIVE_STREAM.remoteStream?.getTracks().forEach(track => { try { track.stop(); } catch(_) {} });
+  } catch (_) {}
+
+  try { ACTIVE_STREAM.pc?.close(); } catch (_) {}
+
+  if (streamLocalVideo) streamLocalVideo.srcObject = null;
+  if (streamRemoteVideo) streamRemoteVideo.srcObject = null;
+
+  ACTIVE_STREAM = null;
+  setStreamStatus('');
+  setStreamModalOpen(false);
+
+  if (reason) showToast(reason);
+  if (sendSignal && peerId && streamId) {
+    await sendStreamSignal(peerId, { id: String(streamId), type: 'hangup' });
+  }
+}
+
+function startStreamDrag(e) {
+  if (!streamModal || !streamHeader) return;
+  if (e.button !== 0) return;
+  const rect = streamModal.getBoundingClientRect();
+  STREAM_DRAG_STATE = {
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top,
+  };
+  streamHeader.setPointerCapture?.(e.pointerId);
+  document.addEventListener('pointermove', handleStreamDragMove);
+  document.addEventListener('pointerup', stopStreamDrag);
+}
+
+function handleStreamDragMove(e) {
+  if (!STREAM_DRAG_STATE || !streamModal) return;
+  const maxX = Math.max(0, window.innerWidth - streamModal.offsetWidth);
+  const maxY = Math.max(0, window.innerHeight - streamModal.offsetHeight);
+  const nextX = Math.min(Math.max(0, e.clientX - STREAM_DRAG_STATE.offsetX), maxX);
+  const nextY = Math.min(Math.max(0, e.clientY - STREAM_DRAG_STATE.offsetY), maxY);
+  streamModal.style.left = `${nextX}px`;
+  streamModal.style.top = `${nextY}px`;
+  streamModal.style.right = 'auto';
+  streamModal.style.bottom = 'auto';
+}
+
+function stopStreamDrag() {
+  if (!STREAM_DRAG_STATE) return;
+  STREAM_DRAG_STATE = null;
+  document.removeEventListener('pointermove', handleStreamDragMove);
+  document.removeEventListener('pointerup', stopStreamDrag);
+}
+
+streamHeader?.addEventListener('pointerdown', startStreamDrag);
+streamClose?.addEventListener('click', () => closeStreamSession({ sendSignal: true }));
+document.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape' && streamModal?.classList.contains('is-open')) {
+    closeStreamSession({ sendSignal: true });
+  }
+});
+streamCamToggle?.addEventListener('click', () => {
+  if (!ACTIVE_STREAM?.localStream) return;
+  const tracks = ACTIVE_STREAM.localStream.getVideoTracks();
+  if (!tracks.length) return;
+  const next = !tracks[0].enabled;
+  tracks.forEach(track => { track.enabled = next; });
+  ACTIVE_STREAM.camEnabled = next;
+  updateStreamToggleButtons();
+});
+streamMicToggle?.addEventListener('click', () => {
+  if (!ACTIVE_STREAM?.localStream) return;
+  const tracks = ACTIVE_STREAM.localStream.getAudioTracks();
+  if (!tracks.length) return;
+  const next = !tracks[0].enabled;
+  tracks.forEach(track => { track.enabled = next; });
+  ACTIVE_STREAM.micEnabled = next;
+  updateStreamToggleButtons();
+});
+
 function closeExplicitModal(result=null){
   if (explicitModal) explicitModal.removeAttribute('open');
   if (explicitResolver) { explicitResolver(result); explicitResolver = null; }
@@ -5534,6 +6012,77 @@ function appendPendingMessage(text){
   li.innerHTML = `
     <button type="button" class="retry-btn" data-retry title="Försök igen" aria-label="Försök skicka igen">↻</button>
     <div class="bubble">${replyPreviewHTML}<div class="bubble-text">${esc(text)}</div></div>
+    <div class="bubble-meta small">${genderMarkup}<span class="bubble-meta-text">${nameMarkup}<br>${esc(when)}</span></div>
+  `;
+
+  const list = document.getElementById('kk-pubList');
+  if (list) {
+    list.appendChild(li);
+    try {
+      if (typeof AUTO_SCROLL !== 'undefined' && (AUTO_SCROLL || atBottom(list))) {
+        scrollToBottom(list, false);
+      }
+    } catch(_){}
+  }
+  return li;
+}
+
+function appendPendingStreamInvite(payload, peerId){
+  const li = document.createElement('li');
+  li.className = 'item me';
+  li.dataset.temp = String(Date.now());
+  li.dataset.retryAttempts = '0';
+  if (typeof ME_ID !== 'undefined') {
+    li.dataset.sid = String(ME_ID || 0);
+  }
+  if (typeof ME_NM !== 'undefined') {
+    li.dataset.sname = ME_NM || '';
+  }
+  li.dataset.kind = STREAM_INVITE_KIND;
+  li.dataset.body = JSON.stringify(payload || {});
+
+  const reply = COMPOSER_REPLY && Number.isFinite(Number(COMPOSER_REPLY.id))
+    ? {
+        id: Number(COMPOSER_REPLY.id),
+        name: COMPOSER_REPLY.name || '',
+        excerpt: COMPOSER_REPLY.excerpt || ''
+      }
+    : null;
+
+  if (reply && reply.id > 0) {
+    li.dataset.replyId = String(reply.id);
+    li.dataset.replyName = reply.name || '';
+    li.dataset.replyExcerpt = reply.excerpt || '';
+  } else {
+    delete li.dataset.replyId;
+    delete li.dataset.replyName;
+    delete li.dataset.replyExcerpt;
+  }
+
+  const now = new Date();
+  const when = now.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+  const who = typeof ME_NM !== 'undefined' ? ME_NM || '' : '';
+  const gender = (typeof genderById === 'function' && typeof ME_ID !== 'undefined')
+    ? genderById(ME_ID)
+    : '';
+  const genderMarkup = (typeof genderIconMarkup === 'function')
+    ? genderIconMarkup(gender)
+    : '';
+  const nameMarkup = (who && typeof ME_NM !== 'undefined' && who === ME_NM)
+    ? ''
+    : esc(who);
+
+  const replyPreviewHTML = reply ? replyPreviewMarkup(reply.id, reply.name, reply.excerpt) : '';
+  const bubbleHTML = streamInviteBubbleHTML(payload, {
+    replyPreviewHTML,
+    replyButtonHTML: '',
+    disabled: !payload?.id,
+    peerId,
+  });
+
+  li.innerHTML = `
+    <button type="button" class="retry-btn" data-retry title="Försök igen" aria-label="Försök skicka igen">↻</button>
+    ${bubbleHTML}
     <div class="bubble-meta small">${genderMarkup}<span class="bubble-meta-text">${nameMarkup}<br>${esc(when)}</span></div>
   `;
 
@@ -5990,6 +6539,44 @@ pubCamInp?.addEventListener('change', async ()=>{
   const file = pubCamInp.files?.[0]; pubCamInp.value='';
   if (!file) return;
   await handleImageSend(file);
+});
+
+streamInviteBtn?.addEventListener('click', async () => {
+  closeAttachmentMenu();
+  if (!currentDM) {
+    showToast('Öppna en privat chatt först.');
+    return;
+  }
+  const peerId = Number(currentDM);
+  if (!Number.isFinite(peerId) || peerId <= 0) {
+    showToast('Ingen mottagare vald.');
+    return;
+  }
+
+  const payload = {
+    id: generateStreamId(),
+    title: 'Videochatt',
+    note: 'Klicka för att starta en direkt webcam-chat.',
+    created_at: Date.now()
+  };
+
+  const fd = new FormData(pubForm);
+  fd.set('content', JSON.stringify(payload));
+  fd.set('kind', STREAM_INVITE_KIND);
+  fd.set('recipient_id', String(peerId));
+
+  const entries = serializeFormData(fd);
+  const pending = appendPendingStreamInvite(payload, peerId);
+  if (pending) {
+    try {
+      pending.dataset.retryPayload = JSON.stringify(entries);
+    } catch(_) {}
+  }
+
+  const sent = await sendMessageWithRetry(pending, entries, { resetOnSuccess: false });
+  if (sent) {
+    openStreamSession(payload.id, peerId, 'host');
+  }
 });
 
 
