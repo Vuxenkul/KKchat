@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '14');
+  define('KKCHAT_DB_VERSION', '15');
 }
 
 /**
@@ -24,6 +24,7 @@ function kkchat_activate() {
     'kkchat_dedupe_window'         => 10,
     'kkchat_report_autoban_threshold' => 0,
     'kkchat_report_autoban_window_days' => 0,
+    'kkchat_report_reasons' => kkchat_default_report_reasons(),
     'kkchat_first_load_limit' => 20,
     'kkchat_first_load_exclude_banners' => 0,
   ] as $k => $def) {
@@ -172,8 +173,15 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `reported_id` INT UNSIGNED NOT NULL,
     `reported_name` VARCHAR(64) NOT NULL,
     `reported_ip` VARCHAR(45) NULL,
+    `reason_key` VARCHAR(255) NULL,
     `reason` TEXT NOT NULL,
+    `reason_detail` TEXT NULL,
     `reported_ip_key` VARCHAR(64) NULL,
+    `source_type` ENUM('lobby','dm') NOT NULL DEFAULT 'lobby',
+    `source_room` VARCHAR(64) NULL,
+    `source_dm_id` INT UNSIGNED NULL,
+    `source_message_id` BIGINT UNSIGNED NULL,
+    `source_message_excerpt` TEXT NULL,
     `status` ENUM('open','resolved') NOT NULL DEFAULT 'open',
     `resolved_at` INT UNSIGNED DEFAULT NULL,
     `resolved_by` VARCHAR(64) DEFAULT NULL,
@@ -366,11 +374,32 @@ function kkchat_maybe_migrate(){
     }
 
   if (kkchat_table_exists($t['reports'])) {
+    if (!kkchat_column_exists($t['reports'], 'reason_key')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reason_key` VARCHAR(255) NULL AFTER `reported_ip`");
+    }
     if (!kkchat_column_exists($t['reports'], 'reported_ip_key')) {
       $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
     }
+    if (!kkchat_column_exists($t['reports'], 'reason_detail')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reason_detail` TEXT NULL AFTER `reason`");
+    }
     if (!kkchat_column_exists($t['reports'], 'reporter_ip_key')) {
       $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reporter_ip_key` VARCHAR(64) NULL AFTER `reporter_ip`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'source_type')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `source_type` ENUM('lobby','dm') NOT NULL DEFAULT 'lobby' AFTER `reported_ip_key`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'source_room')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `source_room` VARCHAR(64) NULL AFTER `source_type`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'source_dm_id')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `source_dm_id` INT UNSIGNED NULL AFTER `source_room`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'source_message_id')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `source_message_id` BIGINT UNSIGNED NULL AFTER `source_dm_id`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'source_message_excerpt')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `source_message_excerpt` TEXT NULL AFTER `source_message_id`");
     }
 
     $has_idx = (bool) $wpdb->get_var($wpdb->prepare(
@@ -909,8 +938,15 @@ function kkchat_maybe_upgrade_schema() {
       `reported_id` INT UNSIGNED NOT NULL,
       `reported_name` VARCHAR(64) NOT NULL,
       `reported_ip` VARCHAR(45) NULL,
+      `reason_key` VARCHAR(255) NULL,
       `reason` TEXT NOT NULL,
+      `reason_detail` TEXT NULL,
       `reported_ip_key` VARCHAR(64) NULL,
+      `source_type` ENUM('lobby','dm') NOT NULL DEFAULT 'lobby',
+      `source_room` VARCHAR(64) NULL,
+      `source_dm_id` INT UNSIGNED NULL,
+      `source_message_id` BIGINT UNSIGNED NULL,
+      `source_message_excerpt` TEXT NULL,
       `status` ENUM('open','resolved') NOT NULL DEFAULT 'open',
       `resolved_at` INT UNSIGNED DEFAULT NULL,
       `resolved_by` VARCHAR(64) DEFAULT NULL,
@@ -929,6 +965,34 @@ function kkchat_maybe_upgrade_schema() {
     $has_reported_ip_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reported_ip_key'");
     if (!$has_reported_ip_key) {
       @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
+    }
+    $has_reason_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reason_key'");
+    if (!$has_reason_key) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reason_key` VARCHAR(255) NULL AFTER `reported_ip`");
+    }
+    $has_reason_detail = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reason_detail'");
+    if (!$has_reason_detail) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reason_detail` TEXT NULL AFTER `reason`");
+    }
+    $has_source_type = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'source_type'");
+    if (!$has_source_type) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `source_type` ENUM('lobby','dm') NOT NULL DEFAULT 'lobby' AFTER `reported_ip_key`");
+    }
+    $has_source_room = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'source_room'");
+    if (!$has_source_room) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `source_room` VARCHAR(64) NULL AFTER `source_type`");
+    }
+    $has_source_dm_id = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'source_dm_id'");
+    if (!$has_source_dm_id) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `source_dm_id` INT UNSIGNED NULL AFTER `source_room`");
+    }
+    $has_source_message_id = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'source_message_id'");
+    if (!$has_source_message_id) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `source_message_id` BIGINT UNSIGNED NULL AFTER `source_dm_id`");
+    }
+    $has_source_message_excerpt = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'source_message_excerpt'");
+    if (!$has_source_message_excerpt) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `source_message_excerpt` TEXT NULL AFTER `source_message_id`");
     }
     $has_reporter_ip_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reporter_ip_key'");
     if (!$has_reporter_ip_key) {

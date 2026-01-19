@@ -272,6 +272,46 @@
   </div>
 </div>
 
+<!-- Report modal -->
+<div id="kk-reportModal" class="kk-report-modal" role="dialog" aria-modal="true" aria-labelledby="kk-reportTitle" hidden>
+  <form id="kk-reportForm" class="kk-report-card">
+    <div class="kk-report-head">
+      <strong id="kk-reportTitle">Rapportera</strong>
+      <button type="button" class="iconbtn" id="kk-reportClose">Stäng</button>
+    </div>
+    <div class="kk-report-body">
+      <div class="kk-report-section">
+        <strong>Välj anledning</strong>
+        <div id="kk-reportReasons" class="kk-report-reasons"></div>
+        <label class="kk-report-other">
+          <input type="checkbox" id="kk-reportOtherToggle">
+          Annat
+        </label>
+        <textarea id="kk-reportOtherText" class="kk-report-other-text" placeholder="Beskriv vad som hänt…" rows="3" hidden></textarea>
+      </div>
+      <div class="kk-report-section">
+        <strong>Var kommer detta ifrån?</strong>
+        <label class="kk-report-source">
+          <input type="radio" name="kk-report-source" value="lobby" checked>
+          <span id="kk-reportSourceLobby">Lobby</span>
+        </label>
+        <label class="kk-report-source">
+          <input type="radio" name="kk-report-source" value="dm">
+          <span id="kk-reportSourceDm">DM</span>
+        </label>
+      </div>
+      <div id="kk-reportMessageBox" class="kk-report-section" hidden>
+        <strong>Rapporterat meddelande</strong>
+        <div id="kk-reportMessageText" class="kk-report-message"></div>
+      </div>
+    </div>
+    <div class="kk-report-actions">
+      <button type="button" class="iconbtn" id="kk-reportCancel">Avbryt</button>
+      <button type="submit" class="iconbtn primary" id="kk-reportSubmit">Skicka rapport</button>
+    </div>
+  </form>
+</div>
+
 <!-- Explicit label modal -->
 <div id="kk-explicitModal" class="kk-explicit-modal" role="dialog" aria-modal="true" aria-labelledby="kk-explicitTitle">
   <form class="kk-explicit-box" id="kk-explicitForm">
@@ -318,6 +358,7 @@
   const ME_NM = <?= json_encode($me_nm) ?>;
   const OPEN_DM_USER = <?= $open_dm ?>;
   const IS_ADMIN = <?= $is_admin ? 'true' : 'false' ?>;
+  const REPORT_REASONS = <?= wp_json_encode($report_reasons) ?>;
   const ADMIN_LINKS = <?= wp_json_encode($admin_links) ?>;
   const HAS_ADMIN_TOOLS = Array.isArray(ADMIN_LINKS) && ADMIN_LINKS.length > 0;
   const GENDER_ICON_BASE = <?= json_encode($gender_icon_base) ?>;
@@ -527,7 +568,6 @@
   const reportListEl    = document.getElementById('kk-reportList');
   const reportRefreshBtn= document.getElementById('kk-reportRefresh');
   const countReportsEl  = document.getElementById('kk-countReports');
-  const REPORT_REASON_PLACEHOLDER = 'Skriv anledning här';
 
   // State for reports
   let OPEN_REPORTS_COUNT = 0;
@@ -3573,27 +3613,13 @@ userListEl.addEventListener('click', async (e)=>{
   if (rep) {
     const id = +rep.dataset.report;
     const whom = nameById(id);
-    let reason = prompt(`Ange anledning till rapporten för ${whom}:`, REPORT_REASON_PLACEHOLDER);
-    if (reason == null) return;
-    reason = (reason || '').trim();
-    if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
-
-    const fd = new FormData();
-    fd.append('csrf_token', CSRF);
-    fd.append('reported_id', String(id));
-    fd.append('reason', reason);
-
-    try{
-      const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-      const js = await r.json().catch(()=>({}));
-      if (r.ok && js.ok) {
-        showToast('Rapporten är skickad. Tack!');
-      } else {
-        alert('Kunde inte skicka rapporten: ' + (js.err || r.status));
-      }
-    }catch(_){
-      alert('Tekniskt fel vid rapportering.');
-    }
+    openReportModal({
+      id,
+      name: whom,
+      sourceType: currentDM != null ? 'dm' : 'lobby',
+      sourceRoom: currentRoom || 'lobby',
+      sourceDmId: id || null,
+    });
     return;
   }
 
@@ -4135,9 +4161,145 @@ const msgTitle = document.getElementById('kk-msgTitle');
 const actDm    = document.getElementById('kk-act-dm');
 const actReport= document.getElementById('kk-act-report');
 const actBlock = document.getElementById('kk-act-block');
-let MSG_TARGET = { id: null, name: '', msgId: null, li: null, isMine: false };
+const reportModal = document.getElementById('kk-reportModal');
+const reportForm = document.getElementById('kk-reportForm');
+const reportTitle = document.getElementById('kk-reportTitle');
+const reportClose = document.getElementById('kk-reportClose');
+const reportCancel = document.getElementById('kk-reportCancel');
+const reportReasonsWrap = document.getElementById('kk-reportReasons');
+const reportOtherToggle = document.getElementById('kk-reportOtherToggle');
+const reportOtherText = document.getElementById('kk-reportOtherText');
+const reportSourceLobby = document.getElementById('kk-reportSourceLobby');
+const reportSourceDm = document.getElementById('kk-reportSourceDm');
+const reportMessageBox = document.getElementById('kk-reportMessageBox');
+const reportMessageText = document.getElementById('kk-reportMessageText');
+
+let MSG_TARGET = { id: null, name: '', msgId: null, li: null, isMine: false, msgText: '', sourceType: 'lobby', sourceRoom: '', sourceDmId: null };
+let REPORT_TARGET = { id: null, name: '', sourceType: 'lobby', sourceRoom: '', sourceDmId: null, msgId: null, msgText: '' };
 
 const actHide = document.getElementById('kk-act-hide');
+
+function renderReportReasons() {
+  if (!reportReasonsWrap) return;
+  const reasons = Array.isArray(REPORT_REASONS) ? REPORT_REASONS : [];
+  reportReasonsWrap.innerHTML = reasons.map((reason) => {
+    const key = String(reason?.key || '').trim();
+    const label = String(reason?.label || '').trim();
+    if (!key || !label) return '';
+    return `<label class="kk-report-reason"><input type="checkbox" name="kk-report-reason" value="${escAttr(key)}"> ${esc(label)}</label>`;
+  }).join('');
+}
+
+function openReportModal(payload) {
+  if (!reportModal || !reportForm) return;
+  renderReportReasons();
+
+  REPORT_TARGET = {
+    id: payload?.id ?? null,
+    name: payload?.name ?? '',
+    sourceType: payload?.sourceType ?? 'lobby',
+    sourceRoom: payload?.sourceRoom ?? '',
+    sourceDmId: payload?.sourceDmId ?? null,
+    msgId: payload?.msgId ?? null,
+    msgText: payload?.msgText ?? '',
+  };
+
+  reportTitle.textContent = `Rapportera ${REPORT_TARGET.name || 'användare'}`;
+  reportSourceLobby.textContent = REPORT_TARGET.sourceRoom
+    ? `Lobby (#${REPORT_TARGET.sourceRoom})`
+    : 'Lobby';
+  reportSourceDm.textContent = REPORT_TARGET.name
+    ? `DM med ${REPORT_TARGET.name}`
+    : 'DM';
+
+  const sourceInputs = reportModal.querySelectorAll('input[name="kk-report-source"]');
+  sourceInputs.forEach((input) => {
+    const isLobby = input.value === 'lobby';
+    input.checked = isLobby ? REPORT_TARGET.sourceType !== 'dm' : REPORT_TARGET.sourceType === 'dm';
+  });
+
+  reportOtherToggle.checked = false;
+  reportOtherText.value = '';
+  reportOtherText.hidden = true;
+
+  if (reportMessageBox && reportMessageText) {
+    if (REPORT_TARGET.msgId && REPORT_TARGET.msgText) {
+      reportMessageText.textContent = REPORT_TARGET.msgText;
+      reportMessageBox.hidden = false;
+    } else {
+      reportMessageBox.hidden = true;
+      reportMessageText.textContent = '';
+    }
+  }
+
+  reportModal.hidden = false;
+  document.documentElement.classList.add('kkchat-no-scroll');
+}
+
+function closeReportModal() {
+  if (!reportModal) return;
+  reportModal.hidden = true;
+  document.documentElement.classList.remove('kkchat-no-scroll');
+}
+
+reportClose?.addEventListener('click', closeReportModal);
+reportCancel?.addEventListener('click', closeReportModal);
+reportModal?.addEventListener('click', (e) => { if (e.target === reportModal) closeReportModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !reportModal?.hidden) closeReportModal(); });
+reportOtherToggle?.addEventListener('change', () => {
+  if (!reportOtherText) return;
+  reportOtherText.hidden = !reportOtherToggle.checked;
+  if (reportOtherToggle.checked) reportOtherText.focus();
+});
+
+reportForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!REPORT_TARGET.id) return;
+
+  const selected = [...reportModal.querySelectorAll('input[name="kk-report-reason"]:checked')]
+    .map((input) => String(input.value || '').trim())
+    .filter(Boolean);
+  const otherEnabled = !!reportOtherToggle?.checked;
+  const otherText = otherEnabled ? (reportOtherText?.value || '').trim() : '';
+
+  if (!selected.length && !otherText) {
+    alert('Välj minst en anledning eller skriv en egen förklaring.');
+    return;
+  }
+  if (otherEnabled && !otherText) {
+    alert('Skriv en förklaring för "Annat".');
+    return;
+  }
+
+  const sourceValue = reportModal.querySelector('input[name="kk-report-source"]:checked')?.value || 'lobby';
+  const sourceType = sourceValue === 'dm' ? 'dm' : 'lobby';
+  const sourceRoom = sourceType === 'lobby' ? (REPORT_TARGET.sourceRoom || currentRoom || 'lobby') : '';
+  const sourceDmId = sourceType === 'dm' ? (REPORT_TARGET.sourceDmId || REPORT_TARGET.id || null) : null;
+
+  const fd = new FormData();
+  fd.append('csrf_token', CSRF);
+  fd.append('reported_id', String(REPORT_TARGET.id));
+  fd.append('reason_keys', JSON.stringify(selected));
+  if (otherText) fd.append('reason_other', otherText);
+  fd.append('source_type', sourceType);
+  if (sourceRoom) fd.append('source_room', sourceRoom);
+  if (sourceDmId) fd.append('source_dm_id', String(sourceDmId));
+  if (REPORT_TARGET.msgId) fd.append('message_id', String(REPORT_TARGET.msgId));
+  if (REPORT_TARGET.msgText) fd.append('message_excerpt', REPORT_TARGET.msgText);
+
+  try {
+    const r = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
+    const js = await r.json().catch(()=>({}));
+    if (r.ok && js.ok) {
+      showToast('Rapporten är skickad. Tack!');
+      closeReportModal();
+    } else {
+      alert('Kunde inte skicka rapporten: ' + (js.err || r.status));
+    }
+  } catch (_) {
+    alert('Tekniskt fel vid rapportering.');
+  }
+});
 
 actHide?.addEventListener('click', async ()=>{
   if (!IS_ADMIN) { closeMsgSheet(); return; }
@@ -4194,7 +4356,11 @@ function openMsgSheet(id, name, msgId = null, isMine = false, liEl = null){
     name: name || nameById(id) || '',
     msgId: Number(msgId) || null,
     li: liEl || null,
-    isMine: !!isMine
+    isMine: !!isMine,
+    msgText: liEl?.dataset?.body ? String(liEl.dataset.body) : '',
+    sourceType: currentDM != null ? 'dm' : 'lobby',
+    sourceRoom: currentRoom || '',
+    sourceDmId: currentDM != null ? currentDM : id || null
   };
 
   msgTitle.textContent = `Åtgärder för ${MSG_TARGET.name || '—'}`;
@@ -4268,20 +4434,16 @@ actDm?.addEventListener('click', ()=>{
   closeMsgSheet();
 });
 actReport?.addEventListener('click', async ()=>{
-  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, REPORT_REASON_PLACEHOLDER);
-  if (reason == null) return;
-  reason = (reason || '').trim();
-  if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
-  fd.append('reported_id', String(MSG_TARGET.id));
-  fd.append('reason', reason);
-  try{
-    const r = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeMsgSheet(); }
-    else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
-  }catch(_){ alert('Tekniskt fel vid rapportering.'); }
+  openReportModal({
+    id: MSG_TARGET.id,
+    name: MSG_TARGET.name,
+    sourceType: MSG_TARGET.sourceType,
+    sourceRoom: MSG_TARGET.sourceRoom,
+    sourceDmId: MSG_TARGET.sourceDmId,
+    msgId: MSG_TARGET.msgId,
+    msgText: MSG_TARGET.msgText,
+  });
+  closeMsgSheet();
 });
 actBlock?.addEventListener('click', async ()=>{
   const id = MSG_TARGET.id;
@@ -4316,22 +4478,16 @@ imgActDm?.addEventListener('click', ()=>{
 });
 
 imgActReport?.addEventListener('click', async ()=>{
-  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, REPORT_REASON_PLACEHOLDER);
-  if (reason == null) return;
-  reason = (reason || '').trim();
-  if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
-
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
-  fd.append('reported_id', String(MSG_TARGET.id));
-  fd.append('reason', reason);
-
-  try{
-    const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeImagePreview(); }
-    else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
-  }catch(_){ alert('Tekniskt fel vid rapportering.'); }
+  openReportModal({
+    id: MSG_TARGET.id,
+    name: MSG_TARGET.name,
+    sourceType: MSG_TARGET.sourceType,
+    sourceRoom: MSG_TARGET.sourceRoom,
+    sourceDmId: MSG_TARGET.sourceDmId,
+    msgId: MSG_TARGET.msgId,
+    msgText: MSG_TARGET.msgText,
+  });
+  closeImagePreview();
 });
 
 imgActBlock?.addEventListener('click', async ()=>{

@@ -24,6 +24,9 @@ function kkchat_admin_settings_page() {
 
     $report_autoban_threshold   = max(0, (int)($_POST['report_autoban_threshold'] ?? 0));
     $report_autoban_window_days = max(0, (int)($_POST['report_autoban_window_days'] ?? 0));
+    $report_reason_labels = (array)($_POST['report_reason_label'] ?? []);
+    $report_reason_totals = (array)($_POST['report_reason_total'] ?? []);
+    $report_reason_repeats = (array)($_POST['report_reason_repeat'] ?? []);
     $poll_hidden_threshold = max(0, (int)($_POST['poll_hidden_threshold'] ?? 90));
     $poll_hidden_delay     = max(0, (int)($_POST['poll_hidden_delay'] ?? 30));
     $poll_hot_interval     = max(1, (int)($_POST['poll_hot_interval'] ?? 4));
@@ -53,6 +56,32 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_dedupe_window',         $dedupe_window);
     update_option('kkchat_report_autoban_threshold',   $report_autoban_threshold);
     update_option('kkchat_report_autoban_window_days', $report_autoban_window_days);
+    $report_reasons = [];
+    $seen_keys = [];
+    foreach ($report_reason_labels as $idx => $label_raw) {
+      $label = sanitize_text_field($label_raw);
+      if ($label === '') {
+        continue;
+      }
+      $key = sanitize_title($label);
+      if ($key === '') {
+        continue;
+      }
+      $base = $key;
+      $suffix = 2;
+      while (isset($seen_keys[$key])) {
+        $key = $base . '-' . $suffix;
+        $suffix++;
+      }
+      $seen_keys[$key] = true;
+      $report_reasons[] = [
+        'key' => $key,
+        'label' => $label,
+        'total_threshold' => max(0, (int)($report_reason_totals[$idx] ?? 0)),
+        'repeat_threshold' => max(0, (int)($report_reason_repeats[$idx] ?? 0)),
+      ];
+    }
+    update_option('kkchat_report_reasons', $report_reasons);
     update_option('kkchat_poll_hidden_threshold', $poll_hidden_threshold);
     update_option('kkchat_poll_hidden_delay',     $poll_hidden_delay);
     update_option('kkchat_poll_hot_interval',     $poll_hot_interval);
@@ -83,6 +112,12 @@ function kkchat_admin_settings_page() {
   $v_dedupe_window         = (int)get_option('kkchat_dedupe_window', 10);
   $v_report_autoban_threshold   = (int) get_option('kkchat_report_autoban_threshold', 0);
   $v_report_autoban_window_days = (int) get_option('kkchat_report_autoban_window_days', 0);
+  $v_report_reasons = kkchat_report_reasons();
+  if (!$v_report_reasons) {
+    $v_report_reasons = [
+      ['label' => '', 'total_threshold' => 0, 'repeat_threshold' => 0],
+    ];
+  }
   $v_poll_hidden_threshold = (int)get_option('kkchat_poll_hidden_threshold', 90);
   $v_poll_hidden_delay     = (int)get_option('kkchat_poll_hidden_delay', 30);
   $v_poll_hot_interval     = (int)get_option('kkchat_poll_hot_interval', 4);
@@ -239,6 +274,70 @@ function kkchat_admin_settings_page() {
           </td>
         </tr>
       </table>
+      <h3><?php esc_html_e('Förinställda rapportorsaker', 'kkchat'); ?></h3>
+      <p class="description">
+        <?php esc_html_e('Användaren kan välja flera orsaker vid rapportering. "Tröskel totalt" gäller alla rapporter inom tidsfönstret, medan "samma typ" gäller endast rapporter med samma orsak.', 'kkchat'); ?>
+      </p>
+      <table class="widefat striped" id="kkchat-report-reasons">
+        <thead>
+          <tr>
+            <th><?php esc_html_e('Orsak', 'kkchat'); ?></th>
+            <th><?php esc_html_e('Tröskel totalt', 'kkchat'); ?></th>
+            <th><?php esc_html_e('Tröskel samma typ', 'kkchat'); ?></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($v_report_reasons as $reason): ?>
+            <tr>
+              <td>
+                <input type="text" name="report_reason_label[]" value="<?php echo esc_attr($reason['label'] ?? ''); ?>" placeholder="<?php esc_attr_e('t.ex. -18', 'kkchat'); ?>">
+              </td>
+              <td>
+                <input type="number" class="small-text" min="0" step="1" name="report_reason_total[]" value="<?php echo esc_attr((int)($reason['total_threshold'] ?? 0)); ?>">
+              </td>
+              <td>
+                <input type="number" class="small-text" min="0" step="1" name="report_reason_repeat[]" value="<?php echo esc_attr((int)($reason['repeat_threshold'] ?? 0)); ?>">
+              </td>
+              <td>
+                <button type="button" class="button kkchat-remove-reason"><?php esc_html_e('Ta bort', 'kkchat'); ?></button>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+      <p>
+        <button type="button" class="button" id="kkchat-add-report-reason"><?php esc_html_e('Lägg till orsak', 'kkchat'); ?></button>
+      </p>
+      <script>
+        (function() {
+          const table = document.getElementById('kkchat-report-reasons');
+          const addBtn = document.getElementById('kkchat-add-report-reason');
+          if (!table || !addBtn) return;
+
+          const newRow = () => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><input type="text" name="report_reason_label[]" placeholder="<?php echo esc_attr('t.ex. -18'); ?>"></td>
+              <td><input type="number" class="small-text" min="0" step="1" name="report_reason_total[]" value="0"></td>
+              <td><input type="number" class="small-text" min="0" step="1" name="report_reason_repeat[]" value="0"></td>
+              <td><button type="button" class="button kkchat-remove-reason"><?php echo esc_html('Ta bort'); ?></button></td>
+            `;
+            return tr;
+          };
+
+          addBtn.addEventListener('click', () => {
+            table.querySelector('tbody')?.appendChild(newRow());
+          });
+
+          table.addEventListener('click', (e) => {
+            const btn = e.target.closest('.kkchat-remove-reason');
+            if (!btn) return;
+            const row = btn.closest('tr');
+            row?.remove();
+          });
+        })();
+      </script>
       <h2>Polling</h2>
       <table class="form-table">
         <tr>

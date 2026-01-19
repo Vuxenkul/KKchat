@@ -79,6 +79,63 @@ register_rest_route($ns, '/admin/user-messages', [
   'permission_callback' => '__return_true',
 ]);
 
+// Admin: fetch a full DM thread between two users (sent + received)
+register_rest_route($ns, '/admin/dm-thread', [
+  'methods'  => 'GET',
+  'callback' => function (WP_REST_Request $req) use ($require_admin) {
+    $require_admin();
+
+    nocache_headers();
+    kkchat_close_session_if_open();
+
+    global $wpdb; $t = kkchat_tables();
+
+    $uid    = max(0, (int)$req->get_param('user_id'));
+    $peer   = max(0, (int)$req->get_param('peer_id'));
+    $limit  = max(50, min(500, (int)($req->get_param('limit') ?: 200)));
+
+    if ($uid === 0 || $peer === 0) kkchat_json(['ok'=>false,'err'=>'need_user'], 400);
+
+    $sql = "SELECT id,created_at,kind,room,
+                   sender_id,sender_name,sender_ip,
+                   recipient_id,recipient_name,recipient_ip,
+                   content, is_explicit,
+                   reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt
+              FROM {$t['messages']}
+             WHERE (room IS NULL OR room = '')
+               AND ((sender_id = %d AND recipient_id = %d)
+                    OR (sender_id = %d AND recipient_id = %d))
+          ORDER BY id DESC
+             LIMIT %d";
+
+    $rows = $wpdb->get_results($wpdb->prepare($sql, $uid, $peer, $peer, $uid, $limit), ARRAY_A) ?: [];
+
+    $out = array_map(function($m){
+      return [
+        'id'             => (int)$m['id'],
+        'time'           => (int)$m['created_at'],
+        'kind'           => $m['kind'] ?: 'chat',
+        'room'           => $m['room'] ?: null,
+        'sender_id'      => (int)$m['sender_id'],
+        'sender_name'    => (string)$m['sender_name'],
+        'sender_ip'      => $m['sender_ip'] ?: null,
+        'recipient_id'   => isset($m['recipient_id']) ? (int)$m['recipient_id'] : null,
+        'recipient_name' => $m['recipient_name'] ?: null,
+        'recipient_ip'   => $m['recipient_ip'] ?: null,
+        'content'        => $m['content'],
+        'is_explicit'    => !empty($m['is_explicit']),
+        'reply_to_id'          => isset($m['reply_to_id']) ? (int)$m['reply_to_id'] : null,
+        'reply_to_sender_id'   => isset($m['reply_to_sender_id']) ? (int)$m['reply_to_sender_id'] : null,
+        'reply_to_sender_name' => $m['reply_to_sender_name'] ?: null,
+        'reply_to_excerpt'     => $m['reply_to_excerpt'] ?: null,
+      ];
+    }, $rows);
+
+    kkchat_json(['ok'=>true,'rows'=>$out]);
+  },
+  'permission_callback' => '__return_true',
+]);
+
 register_rest_route($ns, '/admin/visibility', [
   'methods'  => 'POST',
   'callback' => function (WP_REST_Request $req) use ($require_admin) {

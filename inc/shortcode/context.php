@@ -70,6 +70,12 @@ function kkchat_shortcode_context() {
   $mention_audio = esc_url($plugin_root_url . 'assets/mention.mp3');
   $report_audio  = esc_url($plugin_root_url . 'assets/report.mp3');
   $gender_icon_base = esc_url($plugin_root_url . 'assets/genders/');
+  $report_reasons = array_map(static function ($reason) {
+    return [
+      'key' => (string) ($reason['key'] ?? ''),
+      'label' => (string) ($reason['label'] ?? ''),
+    ];
+  }, kkchat_report_reasons());
 
   return [
     'ns'              => $ns,
@@ -90,6 +96,7 @@ function kkchat_shortcode_context() {
     'audio'           => $audio,
     'mention_audio'   => $mention_audio,
     'report_audio'    => $report_audio,
+    'report_reasons'  => $report_reasons,
     'gender_icon_base'=> $gender_icon_base,
   ];
 }

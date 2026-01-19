@@ -202,6 +202,79 @@ function kkchat_report_autoban_window_days(): int {
     return (int) apply_filters('kkchat_report_autoban_window_days', $value);
 }
 
+function kkchat_default_report_reasons(): array {
+    return [
+        [
+            'key' => 'under-18',
+            'label' => '-18',
+            'total_threshold' => 0,
+            'repeat_threshold' => 0,
+        ],
+        [
+            'key' => 'storig-person',
+            'label' => 'Störig person',
+            'total_threshold' => 0,
+            'repeat_threshold' => 0,
+        ],
+    ];
+}
+
+function kkchat_report_reasons(): array {
+    $raw = get_option('kkchat_report_reasons');
+    if (!is_array($raw) || empty($raw)) {
+        $raw = kkchat_default_report_reasons();
+    }
+
+    $clean = [];
+    $seen  = [];
+
+    foreach ($raw as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+
+        $label = trim((string) ($row['label'] ?? ''));
+        if ($label === '') {
+            continue;
+        }
+
+        $key = sanitize_title((string) ($row['key'] ?? $label));
+        if ($key === '') {
+            $key = sanitize_title($label);
+        }
+        if ($key === '') {
+            continue;
+        }
+
+        $base = $key;
+        $i = 2;
+        while (isset($seen[$key])) {
+            $key = $base . '-' . $i;
+            $i++;
+        }
+        $seen[$key] = true;
+
+        $clean[] = [
+            'key' => $key,
+            'label' => $label,
+            'total_threshold' => max(0, (int) ($row['total_threshold'] ?? $row['total'] ?? 0)),
+            'repeat_threshold' => max(0, (int) ($row['repeat_threshold'] ?? $row['repeat'] ?? 0)),
+        ];
+    }
+
+    return (array) apply_filters('kkchat_report_reasons', $clean);
+}
+
+function kkchat_report_reason_map(): array {
+    $map = [];
+    foreach (kkchat_report_reasons() as $reason) {
+        if (!empty($reason['key'])) {
+            $map[$reason['key']] = $reason;
+        }
+    }
+    return $map;
+}
+
 function kkchat_sanitize_guest_nick(string $nick): string {
     $nick = preg_replace('~[^\p{L}\p{N} _\-]~u', '', $nick);
     $nick = trim($nick);

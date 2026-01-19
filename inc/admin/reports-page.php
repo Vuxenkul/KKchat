@@ -236,6 +236,8 @@ function kkchat_admin_reports_page() {
           <th>Anmäld</th>
           <th>Anmäld IP</th>
           <th>Orsak</th>
+          <th>Källa</th>
+          <th>Meddelande</th>
           <th>Status</th>
           <th>Åtgärder</th>
         </tr>
@@ -246,6 +248,15 @@ function kkchat_admin_reports_page() {
         $reportedIp = trim((string)$r->reported_ip);
         $reporterBlocked = $reporterIp !== '' && isset($blockedMap[$reporterIp]) ? $blockedMap[$reporterIp] : null;
         $reportedBlocked = $reportedIp !== '' && isset($blockedMap[$reportedIp]) ? $blockedMap[$reportedIp] : null;
+        $sourceType = isset($r->source_type) ? (string) $r->source_type : '';
+        $sourceRoom = isset($r->source_room) ? (string) $r->source_room : '';
+        if ($sourceType === 'dm') {
+          $sourceLabel = 'DM med ' . (string) $r->reported_name;
+        } else {
+          $sourceLabel = $sourceRoom !== '' ? '#' . $sourceRoom : 'Lobby';
+        }
+        $messageId = isset($r->source_message_id) ? (int) $r->source_message_id : 0;
+        $messageExcerpt = isset($r->source_message_excerpt) ? (string) $r->source_message_excerpt : '';
       ?>
         <tr>
           <td><?php echo (int)$r->id; ?></td>
@@ -269,6 +280,13 @@ function kkchat_admin_reports_page() {
             <?php endif; ?>
           </td>
           <td style="white-space:pre-wrap"><?php echo esc_html($r->reason); ?></td>
+          <td><?php echo esc_html($sourceLabel); ?></td>
+          <td style="white-space:pre-wrap">
+            <?php if ($messageId || $messageExcerpt !== ''): ?>
+              <?php if ($messageId): ?><div class="small">#<?php echo (int) $messageId; ?></div><?php endif; ?>
+              <?php if ($messageExcerpt !== ''): ?><div><?php echo esc_html($messageExcerpt); ?></div><?php endif; ?>
+            <?php endif; ?>
+          </td>
           <td>
             <span class="kkchat-status kkchat-status--<?php echo $r->status === 'open' ? 'open' : 'resolved'; ?>">
               <?php echo $r->status==='open' ? 'Öppen' : 'Löst'; ?>
@@ -283,11 +301,12 @@ function kkchat_admin_reports_page() {
               $del = wp_nonce_url(add_query_arg(['act' => 'delete', 'id' => $r->id], $reports_base), $nonce);
             ?>
             <a class="button" href="<?php echo esc_url($res); ?>"><?php echo $r->status==='open' ? 'Markera som löst' : 'Reaktivera'; ?></a>
+            <button type="button" class="button kkchat-show-messages" data-user-id="<?php echo (int) $r->reported_id; ?>" data-user-name="<?php echo esc_attr($r->reported_name); ?>">Se meddelanden</button>
             <a class="button button-danger" href="<?php echo esc_url($del); ?>" onclick="return confirm('Radera denna rapport?');">Ta bort</a>
           </td>
         </tr>
       <?php endforeach; else: ?>
-        <tr><td colspan="9">Inga rapporter.</td></tr>
+        <tr><td colspan="11">Inga rapporter.</td></tr>
       <?php endif; ?>
       </tbody>
     </table>
@@ -307,6 +326,181 @@ function kkchat_admin_reports_page() {
       <span class="kkchat-ip-flag-text"><?php esc_html_e('Blockerad IP-adress', 'kkchat'); ?></span>
       – <?php esc_html_e('markerade adresser har en aktiv blockering och kan markeras som lösta via knappen ovan.', 'kkchat'); ?>
     </p>
+
+    <div id="kkchat-messages-modal" class="kkchat-modal" hidden>
+      <div class="kkchat-modal__box" role="dialog" aria-modal="true" aria-labelledby="kkchat-messages-title">
+        <div class="kkchat-modal__head">
+          <strong id="kkchat-messages-title">Meddelanden</strong>
+          <button type="button" class="button" id="kkchat-messages-close">Stäng</button>
+        </div>
+        <div class="kkchat-modal__body" id="kkchat-messages-content"></div>
+      </div>
+    </div>
+
+    <script>
+      (function() {
+        const modal = document.getElementById('kkchat-messages-modal');
+        const modalTitle = document.getElementById('kkchat-messages-title');
+        const modalBody = document.getElementById('kkchat-messages-content');
+        const modalClose = document.getElementById('kkchat-messages-close');
+        const buttons = document.querySelectorAll('.kkchat-show-messages');
+        const restBase = <?php echo wp_json_encode(rest_url('kkchat/v1')); ?>;
+        const restNonce = <?php echo wp_json_encode(wp_create_nonce('wp_rest')); ?>;
+
+        const esc = (value) => String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+
+        const formatTime = (ts) => {
+          if (!ts) return '';
+          try {
+            return new Date(ts * 1000).toLocaleString('sv-SE');
+          } catch (_) {
+            return '';
+          }
+        };
+
+        const fetchJson = async (url) => {
+          const res = await fetch(url, {
+            headers: { 'X-WP-Nonce': restNonce },
+            credentials: 'same-origin',
+          });
+          return res.json();
+        };
+
+        const renderMessages = (groups, userId) => {
+          if (!modalBody) return;
+          if (!groups.length) {
+            modalBody.innerHTML = '<p>Inga meddelanden hittades.</p>';
+            return;
+          }
+          modalBody.innerHTML = groups.map((group) => {
+            const rows = group.rows.map((row) => `
+              <li class="kkchat-msg-row ${row.sender_id === userId ? 'out' : 'in'}">
+                <div class="kkchat-msg-meta">${esc(row.sender_name || 'Okänd')} · ${esc(formatTime(row.time))}</div>
+                <div class="kkchat-msg-content">${esc(row.content || '')}</div>
+              </li>
+            `).join('');
+            const threadBtn = group.type === 'dm'
+              ? `<button type="button" class="button kkchat-dm-thread" data-user-id="${userId}" data-peer-id="${group.peerId}" data-peer-name="${esc(group.peerName)}">Visa hela DM-tråden</button>`
+              : '';
+            const groupAttr = group.peerId ? ` data-peer="${group.peerId}"` : '';
+            return `
+              <div class="kkchat-msg-group"${groupAttr}>
+                <div class="kkchat-msg-group__head">
+                  <h4>${esc(group.label)}</h4>
+                  ${threadBtn}
+                </div>
+                <ul class="kkchat-msg-list">${rows}</ul>
+              </div>
+            `;
+          }).join('');
+        };
+
+        const loadUserMessages = async (userId) => {
+          modalBody.innerHTML = '<p>Laddar…</p>';
+          const js = await fetchJson(`${restBase}/admin/user-messages?user_id=${userId}&limit=200`);
+          if (!js || js.ok === false) {
+            modalBody.innerHTML = `<p>Kunde inte hämta meddelanden: ${esc(js?.err || 'okänt fel')}</p>`;
+            return;
+          }
+          const rows = (js.rows || []).filter((row) => Number(row.sender_id) === Number(userId));
+          const groupsMap = new Map();
+
+          rows.forEach((row) => {
+            if (row.room) {
+              const key = `room:${row.room}`;
+              if (!groupsMap.has(key)) {
+                groupsMap.set(key, { type: 'room', label: `Rum #${row.room}`, rows: [] });
+              }
+              groupsMap.get(key).rows.push(row);
+            } else if (row.recipient_id) {
+              const peerId = Number(row.recipient_id);
+              const key = `dm:${peerId}`;
+              if (!groupsMap.has(key)) {
+                groupsMap.set(key, {
+                  type: 'dm',
+                  label: `DM med ${row.recipient_name || '#' + peerId}`,
+                  rows: [],
+                  peerId,
+                  peerName: row.recipient_name || ('#' + peerId),
+                });
+              }
+              groupsMap.get(key).rows.push(row);
+            }
+          });
+
+          renderMessages([...groupsMap.values()], userId);
+        };
+
+        const loadDmThread = async (userId, peerId, peerName) => {
+          const js = await fetchJson(`${restBase}/admin/dm-thread?user_id=${userId}&peer_id=${peerId}&limit=400`);
+          if (!js || js.ok === false) {
+            alert('Kunde inte hämta DM-tråd.');
+            return;
+          }
+
+          const rows = js.rows || [];
+          const html = rows.map((row) => `
+            <li class="kkchat-msg-row ${row.sender_id === userId ? 'out' : 'in'}">
+              <div class="kkchat-msg-meta">${esc(row.sender_name || 'Okänd')} · ${esc(formatTime(row.time))}</div>
+              <div class="kkchat-msg-content">${esc(row.content || '')}</div>
+            </li>
+          `).join('');
+
+          const group = modalBody.querySelector(`.kkchat-msg-group[data-peer="${peerId}"]`);
+          if (group) {
+            const list = group.querySelector('.kkchat-msg-list');
+            if (list) list.innerHTML = html || '<li>Inga meddelanden i tråden.</li>';
+            const btn = group.querySelector('.kkchat-dm-thread');
+            if (btn) btn.remove();
+          } else {
+            modalBody.innerHTML = `
+              <div class="kkchat-msg-group">
+                <div class="kkchat-msg-group__head"><h4>DM med ${esc(peerName)}</h4></div>
+                <ul class="kkchat-msg-list">${html || '<li>Inga meddelanden i tråden.</li>'}</ul>
+              </div>
+            `;
+          }
+        };
+
+        modalBody?.addEventListener('click', (event) => {
+          const btn = event.target.closest('.kkchat-dm-thread');
+          if (!btn) return;
+          const userId = Number(btn.dataset.userId);
+          const peerId = Number(btn.dataset.peerId);
+          const peerName = btn.dataset.peerName || '';
+          if (userId && peerId) {
+            loadDmThread(userId, peerId, peerName).catch(() => {});
+          }
+        });
+
+        buttons.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const userId = Number(btn.dataset.userId);
+            const userName = btn.dataset.userName || '';
+            if (!userId) return;
+            modalTitle.textContent = `Meddelanden för ${userName || '#' + userId}`;
+            modal.hidden = false;
+            document.body.classList.add('kkchat-no-scroll');
+            loadUserMessages(userId).catch(() => {});
+          });
+        });
+
+        modalClose?.addEventListener('click', () => {
+          modal.hidden = true;
+          document.body.classList.remove('kkchat-no-scroll');
+        });
+        modal?.addEventListener('click', (event) => {
+          if (event.target === modal) {
+            modal.hidden = true;
+            document.body.classList.remove('kkchat-no-scroll');
+          }
+        });
+      })();
+    </script>
 
     <style>
       .kkchat-ip {
@@ -369,6 +563,69 @@ function kkchat_admin_reports_page() {
         color: #8b0000;
         font-size: 11px;
         font-weight: 600;
+      }
+      .kkchat-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+      .kkchat-modal[hidden] {
+        display: none;
+      }
+      .kkchat-modal__box {
+        background: #fff;
+        border-radius: 8px;
+        padding: 16px;
+        width: min(900px, 92vw);
+        max-height: 85vh;
+        overflow: auto;
+      }
+      .kkchat-modal__head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .kkchat-msg-group {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        padding: 12px;
+        margin-bottom: 12px;
+        background: #fafafa;
+      }
+      .kkchat-msg-group__head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 8px;
+      }
+      .kkchat-msg-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        gap: 8px;
+      }
+      .kkchat-msg-row {
+        padding: 8px 10px;
+        border-radius: 6px;
+        background: #fff;
+        border: 1px solid #eee;
+      }
+      .kkchat-msg-row.out {
+        border-color: #cfe1ff;
+        background: #f5f9ff;
+      }
+      .kkchat-msg-meta {
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 4px;
       }
     </style>
   </div>

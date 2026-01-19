@@ -1950,3 +1950,78 @@ body.kkchat-no-scroll { overflow: hidden; }
 }
 #kkchat-root .kk-agree { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
 #kkchat-root .kk-agree input { width: auto; min-width: 30px; }
+
+/* ===========================
+   Report modal
+   =========================== */
+#kkchat-root .kk-report-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 18, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+#kkchat-root .kk-report-modal[hidden] {
+  display: none;
+}
+#kkchat-root .kk-report-card {
+  width: min(520px, 92vw);
+  background: #0f1218;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 16px;
+  color: #f5f5f5;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+}
+#kkchat-root .kk-report-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+#kkchat-root .kk-report-body {
+  display: grid;
+  gap: 16px;
+}
+#kkchat-root .kk-report-section strong {
+  display: block;
+  margin-bottom: 8px;
+}
+#kkchat-root .kk-report-reasons {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#kkchat-root .kk-report-reason,
+#kkchat-root .kk-report-source,
+#kkchat-root .kk-report-other {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+#kkchat-root .kk-report-other-text {
+  width: 100%;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: #1a1f27;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #f5f5f5;
+  resize: vertical;
+}
+#kkchat-root .kk-report-message {
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+#kkchat-root .kk-report-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
