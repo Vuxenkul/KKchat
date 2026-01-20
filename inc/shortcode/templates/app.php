@@ -1812,6 +1812,7 @@ function playNotifOnce() {
     const root = document.getElementById('kkchat-root');
 
     const BLUR_KEY = 'kk_blur_images';
+    const BLUR_PROMPT_NO_KEY = 'kk_blur_prompt_no_at';
     let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '1') === '1';
     let SETTINGS_OPEN = false;
     let ADMIN_MENU_OPEN = false;
@@ -1828,6 +1829,24 @@ function playNotifOnce() {
       if (IMG_BLUR) resetInlineImageBlur();
       applyBlurClass();
       renderRoomTabs();
+    }
+
+    function shouldShowBlurPrompt(){
+      const lastNoAt = Number(localStorage.getItem(BLUR_PROMPT_NO_KEY) || 0);
+      if (!lastNoAt) return true;
+      return (Date.now() - lastNoAt) > 24 * 60 * 60 * 1000;
+    }
+
+    function maybeOfferDisableBlur(){
+      if (!IMG_BLUR || !shouldShowBlurPrompt()) return;
+      const msg = 'Vill du stänga av xxx-blur? Du kan ändra detta under Inställningar (kugghjulet i chatten).\n\nAktivera inställningen nu?';
+      const accepted = window.confirm(msg);
+      if (accepted) {
+        localStorage.removeItem(BLUR_PROMPT_NO_KEY);
+        setImageBlur(false);
+      } else {
+        localStorage.setItem(BLUR_PROMPT_NO_KEY, String(Date.now()));
+      }
     }
     if (IMG_BLUR) resetInlineImageBlur();
     applyBlurClass();
@@ -6308,6 +6327,7 @@ function openImagePreview(src, alt, sid = null, sname = ''){
     const isExplicit = img.dataset.explicit === '1';
     if (IMG_BLUR && isExplicit && !img.dataset.unblurred) {
       img.dataset.unblurred = '1';
+      maybeOfferDisableBlur();
       return;
     }
     openImagePreview(img.currentSrc || img.src, img.alt || '', sid, sname);
