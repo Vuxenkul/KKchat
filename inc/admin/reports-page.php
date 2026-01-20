@@ -152,8 +152,8 @@ function kkchat_admin_reports_page() {
   if ($status !== 'any') { $where[] = "status = %s"; $params[] = $status; }
   if ($q !== '') {
     $like = '%'.$wpdb->esc_like($q).'%';
-    $where[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s)";
-    array_push($params, $like, $like, $like);
+    $where[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s OR reason_label LIKE %s OR context_label LIKE %s OR message_excerpt LIKE %s)";
+    array_push($params, $like, $like, $like, $like, $like, $like);
   }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
@@ -246,6 +246,12 @@ function kkchat_admin_reports_page() {
         $reportedIp = trim((string)$r->reported_ip);
         $reporterBlocked = $reporterIp !== '' && isset($blockedMap[$reporterIp]) ? $blockedMap[$reporterIp] : null;
         $reportedBlocked = $reportedIp !== '' && isset($blockedMap[$reportedIp]) ? $blockedMap[$reportedIp] : null;
+        $reasonLabel = trim((string) ($r->reason_label ?? ''));
+        $reasonDetail = trim((string) ($r->reason ?? ''));
+        $contextLabel = trim((string) ($r->context_label ?? ''));
+        $messageExcerpt = trim((string) ($r->message_excerpt ?? ''));
+        $messageKind = trim((string) ($r->message_kind ?? ''));
+        $messageId = isset($r->message_id) ? (int) $r->message_id : 0;
       ?>
         <tr>
           <td><?php echo (int)$r->id; ?></td>
@@ -268,7 +274,26 @@ function kkchat_admin_reports_page() {
               <?php endif; ?>
             <?php endif; ?>
           </td>
-          <td style="white-space:pre-wrap"><?php echo esc_html($r->reason); ?></td>
+          <td style="white-space:pre-wrap">
+            <?php if ($reasonLabel !== ''): ?>
+              <strong><?php echo esc_html($reasonLabel); ?></strong><br>
+            <?php endif; ?>
+            <?php if ($reasonDetail !== ''): ?>
+              <span><?php echo esc_html($reasonDetail); ?></span><br>
+            <?php endif; ?>
+            <?php if ($contextLabel !== ''): ?>
+              <span class="kkchat-report-meta"><?php echo esc_html(sprintf('Källa: %s', $contextLabel)); ?></span><br>
+            <?php endif; ?>
+            <?php if ($messageExcerpt !== '' || $messageId > 0): ?>
+              <span class="kkchat-report-meta">
+                <?php
+                  $excerptLabel = $messageKind === 'image' ? '[Bild]' : $messageExcerpt;
+                  $excerptLabel = $excerptLabel !== '' ? $excerptLabel : '—';
+                  echo esc_html(sprintf('Meddelande #%d: %s', $messageId, $excerptLabel));
+                ?>
+              </span>
+            <?php endif; ?>
+          </td>
           <td>
             <span class="kkchat-status kkchat-status--<?php echo $r->status === 'open' ? 'open' : 'resolved'; ?>">
               <?php echo $r->status==='open' ? 'Öppen' : 'Löst'; ?>
@@ -283,6 +308,7 @@ function kkchat_admin_reports_page() {
               $del = wp_nonce_url(add_query_arg(['act' => 'delete', 'id' => $r->id], $reports_base), $nonce);
             ?>
             <a class="button" href="<?php echo esc_url($res); ?>"><?php echo $r->status==='open' ? 'Markera som löst' : 'Reaktivera'; ?></a>
+            <button class="button kkchat-report-messages" type="button" data-user-id="<?php echo (int) $r->reported_id; ?>" data-user-name="<?php echo esc_attr($r->reported_name); ?>">Se meddelanden</button>
             <a class="button button-danger" href="<?php echo esc_url($del); ?>" onclick="return confirm('Radera denna rapport?');">Ta bort</a>
           </td>
         </tr>
@@ -307,6 +333,190 @@ function kkchat_admin_reports_page() {
       <span class="kkchat-ip-flag-text"><?php esc_html_e('Blockerad IP-adress', 'kkchat'); ?></span>
       – <?php esc_html_e('markerade adresser har en aktiv blockering och kan markeras som lösta via knappen ovan.', 'kkchat'); ?>
     </p>
+
+    <div id="kkchat-report-messages-modal" class="kkchat-report-modal" hidden>
+      <div class="kkchat-report-modal__box" role="dialog" aria-modal="true" aria-labelledby="kkchat-report-messages-title">
+        <div class="kkchat-report-modal__head">
+          <strong id="kkchat-report-messages-title">Meddelanden</strong>
+          <button type="button" class="button" id="kkchat-report-messages-close">Stäng</button>
+        </div>
+        <div class="kkchat-report-modal__body">
+          <div id="kkchat-report-messages-content" class="kkchat-report-modal__content"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function(){
+        const modal = document.getElementById('kkchat-report-messages-modal');
+        const closeBtn = document.getElementById('kkchat-report-messages-close');
+        const content = document.getElementById('kkchat-report-messages-content');
+        const title = document.getElementById('kkchat-report-messages-title');
+        const apiBase = <?php echo wp_json_encode(trailingslashit(rest_url('kkchat/v1'))); ?>;
+        const restNonce = <?php echo wp_json_encode(wp_create_nonce('wp_rest')); ?>;
+        let activeUserId = null;
+
+        function escapeHtml(text){
+          const div = document.createElement('div');
+          div.textContent = text || '';
+          return div.innerHTML;
+        }
+
+        function formatTime(ts){
+          try {
+            return new Date(Number(ts) * 1000).toLocaleString('sv-SE');
+          } catch (_) {
+            return String(ts || '');
+          }
+        }
+
+        function messageLabel(msg){
+          if (!msg) return '';
+          const kind = String(msg.kind || 'chat').toLowerCase();
+          if (kind === 'image') return '[Bild]';
+          return msg.content || '';
+        }
+
+        function showModal(){
+          if (!modal) return;
+          modal.hidden = false;
+          modal.setAttribute('aria-hidden', 'false');
+        }
+
+        function hideModal(){
+          if (!modal) return;
+          modal.hidden = true;
+          modal.setAttribute('aria-hidden', 'true');
+          if (content) content.innerHTML = '';
+          activeUserId = null;
+        }
+
+        async function fetchJson(url){
+          const resp = await fetch(url, {
+            credentials: 'include',
+            headers: {
+              'X-WP-Nonce': restNonce
+            }
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok || !data || data.ok !== true) {
+            throw new Error((data && data.err) || 'Kunde inte hämta data');
+          }
+          return data;
+        }
+
+        function renderMessageGroups(rows, userId){
+          if (!content) return;
+          if (!rows.length) {
+            content.innerHTML = '<p>Inga meddelanden hittades.</p>';
+            return;
+          }
+
+          const rooms = new Map();
+          const dms = new Map();
+
+          rows.forEach(msg => {
+            if (Number(msg.sender_id) !== Number(userId)) return;
+            if (msg.recipient_id) {
+              const peerId = Number(msg.recipient_id);
+              const existing = dms.get(peerId) || { peerId, peerName: msg.recipient_name || `#${peerId}`, rows: [] };
+              existing.rows.push(msg);
+              dms.set(peerId, existing);
+            } else {
+              const roomKey = msg.room || 'Lobby';
+              const existing = rooms.get(roomKey) || { room: roomKey, rows: [] };
+              existing.rows.push(msg);
+              rooms.set(roomKey, existing);
+            }
+          });
+
+          const htmlParts = [];
+          rooms.forEach(group => {
+            htmlParts.push(`<div class="kkchat-report-section"><h4>Rum: ${escapeHtml(group.room)}</h4>`);
+            htmlParts.push('<ul class="kkchat-report-list">');
+            group.rows.forEach(row => {
+              htmlParts.push(`<li><span class="kkchat-report-time">${escapeHtml(formatTime(row.time))}</span> ${escapeHtml(messageLabel(row))}</li>`);
+            });
+            htmlParts.push('</ul></div>');
+          });
+
+          dms.forEach(group => {
+            htmlParts.push(`<div class="kkchat-report-section"><h4>DM med ${escapeHtml(group.peerName)}</h4>`);
+            htmlParts.push(`<button class="button kkchat-report-thread" type="button" data-peer="${group.peerId}">Hämta hela DM-tråden</button>`);
+            htmlParts.push('<ul class="kkchat-report-list">');
+            group.rows.forEach(row => {
+              htmlParts.push(`<li><span class="kkchat-report-time">${escapeHtml(formatTime(row.time))}</span> ${escapeHtml(messageLabel(row))}</li>`);
+            });
+            htmlParts.push('</ul>');
+            htmlParts.push(`<div class="kkchat-report-thread-output" data-peer-output="${group.peerId}"></div>`);
+            htmlParts.push('</div>');
+          });
+
+          content.innerHTML = htmlParts.join('') || '<p>Inga meddelanden hittades.</p>';
+        }
+
+        async function loadUserMessages(userId, userName){
+          if (!content) return;
+          activeUserId = userId;
+          title.textContent = `Meddelanden från ${userName || '#' + userId}`;
+          content.innerHTML = '<p>Laddar…</p>';
+          showModal();
+          try {
+            const data = await fetchJson(`${apiBase}admin/user-messages?user_id=${encodeURIComponent(userId)}&limit=500`);
+            renderMessageGroups(data.rows || [], userId);
+          } catch (err) {
+            content.innerHTML = `<p>${escapeHtml(err.message || 'Kunde inte hämta meddelanden.')}</p>`;
+          }
+        }
+
+        async function loadThread(userId, peerId, outputEl){
+          if (!outputEl) return;
+          outputEl.innerHTML = '<p>Laddar DM-tråd…</p>';
+          try {
+            const data = await fetchJson(`${apiBase}admin/dm-thread?user_id=${encodeURIComponent(userId)}&peer_id=${encodeURIComponent(peerId)}&limit=500`);
+            const rows = Array.isArray(data.rows) ? data.rows : [];
+            const list = rows.map(row => {
+              const who = row.sender_name || `#${row.sender_id}`;
+              return `<li><span class="kkchat-report-time">${escapeHtml(formatTime(row.time))}</span> <strong>${escapeHtml(who)}</strong>: ${escapeHtml(messageLabel(row))}</li>`;
+            }).join('');
+            outputEl.innerHTML = list ? `<ul class="kkchat-report-list">${list}</ul>` : '<p>Inga DM-meddelanden hittades.</p>';
+          } catch (err) {
+            outputEl.innerHTML = `<p>${escapeHtml(err.message || 'Kunde inte hämta DM-tråden.')}</p>`;
+          }
+        }
+
+        document.querySelectorAll('.kkchat-report-messages').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const userId = btn.getAttribute('data-user-id');
+            const userName = btn.getAttribute('data-user-name') || '';
+            loadUserMessages(userId, userName);
+          });
+        });
+
+        modal?.addEventListener('click', (event) => {
+          if (event.target === modal) hideModal();
+        });
+        closeBtn?.addEventListener('click', hideModal);
+        document.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape' && modal && !modal.hidden) hideModal();
+        });
+
+        content?.addEventListener('click', (event) => {
+          const btn = event.target.closest('.kkchat-report-thread');
+          if (!btn) return;
+          const peerId = btn.getAttribute('data-peer');
+          const output = content.querySelector(`[data-peer-output="${peerId}"]`);
+          if (!output) {
+            return;
+          }
+          if (!activeUserId) {
+            output.innerHTML = '<p>Kan inte hitta användar-id.</p>';
+            return;
+          }
+          loadThread(activeUserId, peerId, output);
+        });
+      })();
+    </script>
 
     <style>
       .kkchat-ip {
@@ -341,6 +551,59 @@ function kkchat_admin_reports_page() {
         display: flex;
         align-items: center;
         gap: 6px;
+      }
+      .kkchat-report-meta {
+        color: #555;
+        font-size: 12px;
+        display: inline-block;
+        margin-top: 2px;
+      }
+      .kkchat-report-modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+      }
+      .kkchat-report-modal[hidden] {
+        display: none;
+      }
+      .kkchat-report-modal__box {
+        background: #fff;
+        border-radius: 10px;
+        padding: 16px;
+        width: min(900px, 95vw);
+        max-height: 85vh;
+        overflow: hidden;
+        box-shadow: 0 12px 32px rgba(0,0,0,0.2);
+      }
+      .kkchat-report-modal__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .kkchat-report-modal__body {
+        overflow: auto;
+        max-height: calc(85vh - 80px);
+      }
+      .kkchat-report-section {
+        margin-bottom: 20px;
+      }
+      .kkchat-report-section h4 {
+        margin: 0 0 8px;
+      }
+      .kkchat-report-list {
+        margin: 8px 0;
+        padding-left: 18px;
+      }
+      .kkchat-report-time {
+        color: #666;
+        font-size: 12px;
+        margin-right: 6px;
       }
       .kkchat-status {
         display: inline-flex;

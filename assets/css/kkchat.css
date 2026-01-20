@@ -123,6 +123,77 @@ a#kk-imgOpen {
   justify-content: center;
 }
 
+/* ===========================
+   Report modal
+   =========================== */
+
+#kkchat-root .kk-report-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 1100;
+  padding: 16px;
+}
+#kkchat-root .kk-report-modal:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#kkchat-root .kk-report-box {
+  background: linear-gradient(135deg, rgb(40 43 58 / 92%) 0%, rgb(13 17 27 / 92%) 100%);
+  border: 1px solid rgba(227, 87, 84, 0.6);
+  border-radius: 16px;
+  color: #fff;
+  padding: 18px;
+  width: min(520px, 100%);
+  box-shadow: 0 18px 48px rgba(0,0,0,0.35);
+}
+#kkchat-root .kk-report-desc {
+  margin: 6px 0 12px;
+  font-size: 14px;
+  color: #e5e7ff;
+}
+#kkchat-root .kk-report-section {
+  margin-bottom: 14px;
+}
+#kkchat-root .kk-report-section-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+#kkchat-root .kk-report-reasons label,
+#kkchat-root .kk-report-context-options label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+#kkchat-root .kk-report-other {
+  display: block;
+  margin-top: 8px;
+}
+#kkchat-root .kk-report-other textarea {
+  width: 100%;
+  margin-top: 6px;
+  min-height: 80px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.2);
+  background: rgba(10,12,20,0.85);
+  color: #fff;
+  padding: 8px;
+  resize: vertical;
+}
+#kkchat-root .kk-report-context-summary,
+#kkchat-root .kk-report-preview {
+  font-size: 13px;
+  color: #cdd0ff;
+  margin-top: 6px;
+}
+#kkchat-root .kk-report-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 #kkchat-root .kk-explicit-modal {
   display: none;
   position: fixed;

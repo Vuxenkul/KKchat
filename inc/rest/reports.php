@@ -1,6 +1,21 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
+  $kind = strtolower($kind);
+  if ($kind === 'image') {
+    return '[Bild]';
+  }
+  $cleaned = trim(preg_replace('~\s+~u', ' ', $content));
+  if ($cleaned === '') {
+    return '';
+  }
+  if (mb_strlen($cleaned) <= 160) {
+    return $cleaned;
+  }
+  return rtrim(mb_substr($cleaned, 0, 160)) . '…';
+}
+
   /* =========================================================
    *                     User Reports
    * ========================================================= */
@@ -18,12 +33,65 @@ if (!defined('ABSPATH')) exit;
 
       $reported_id = max(0, (int)$req->get_param('reported_id'));
       $reason = trim((string)$req->get_param('reason'));
+      $reason_key = sanitize_key((string)$req->get_param('reason_key'));
+      $context_type = sanitize_key((string)$req->get_param('context_type'));
+      $message_id = max(0, (int)$req->get_param('message_id'));
       if ($reported_id <= 0) kkchat_json(['ok'=>false,'err'=>'bad_user'], 400);
       if ($reported_id === $me_id) kkchat_json(['ok'=>false,'err'=>'self_report'], 400);
-      if ($reason === '' || mb_strlen($reason) > 1000) kkchat_json(['ok'=>false,'err'=>'bad_reason'], 400);
+      if ($reason_key === '' && $reason !== '') {
+        $reason_key = 'other';
+      }
+      if ($reason_key === '' || $reason_key === 'other') {
+        if ($reason === '' || mb_strlen($reason) > 1000) kkchat_json(['ok'=>false,'err'=>'bad_reason'], 400);
+        $reason_key = 'other';
+        $reason_label = 'Annat';
+      } else {
+        $rule = kkchat_report_reason_rule_for_key($reason_key);
+        if (!$rule) {
+          $reason_key = 'other';
+          $reason_label = 'Annat';
+        } else {
+          $reason_label = (string) $rule['label'];
+        }
+        if (mb_strlen($reason) > 1000) kkchat_json(['ok'=>false,'err'=>'bad_reason'], 400);
+      }
+      if ($reason_key === 'other' && $reason === '') kkchat_json(['ok'=>false,'err'=>'bad_reason'], 400);
 
       $u = $wpdb->get_row($wpdb->prepare("SELECT id,name,ip,wp_username FROM {$t['users']} WHERE id=%d", $reported_id), ARRAY_A);
       if (!$u) kkchat_json(['ok'=>false,'err'=>'user_gone'], 400);
+
+      $context_label = null;
+      $message_excerpt = null;
+      $message_kind = null;
+      if ($message_id > 0) {
+        $msg = $wpdb->get_row($wpdb->prepare(
+          "SELECT id, room, sender_id, sender_name, recipient_id, recipient_name, content, kind
+             FROM {$t['messages']}
+            WHERE id = %d
+            LIMIT 1",
+          $message_id
+        ), ARRAY_A);
+        if ($msg && (int) $msg['sender_id'] === $reported_id) {
+          $message_kind = (string) ($msg['kind'] ?: 'chat');
+          $message_excerpt = kkchat_report_excerpt((string) $msg['content'], $message_kind);
+          if (!empty($msg['recipient_id'])) {
+            $context_type = 'dm';
+            $context_label = 'DM';
+          } elseif (!empty($msg['room'])) {
+            $context_type = 'room';
+            $context_label = sprintf('Rum: %s', (string) $msg['room']);
+          }
+        } else {
+          $message_id = 0;
+        }
+      }
+
+      if (!in_array($context_type, ['lobby', 'dm', 'room'], true)) {
+        $context_type = '';
+      }
+      if ($context_label === null && $context_type !== '') {
+        $context_label = $context_type === 'lobby' ? 'Lobby' : ($context_type === 'dm' ? 'DM' : 'Rum');
+      }
 
       $now = time();
       $reporter_ip_raw = kkchat_client_ip();
@@ -40,13 +108,21 @@ if (!defined('ABSPATH')) exit;
         'reported_name' => (string)$u['name'],
         'reported_ip'   => $reported_ip_raw,
         'reported_ip_key' => $reported_ip_key ?: null,
+        'reason_key'    => $reason_key,
+        'reason_label'  => $reason_label ?? null,
         'reason'        => $reason,
+        'context_type'  => $context_type ?: null,
+        'context_label' => $context_label,
+        'message_id'    => $message_id ?: null,
+        'message_excerpt' => $message_excerpt,
+        'message_kind'  => $message_kind,
         'status'        => 'open',
-      ], ['%d','%d','%s','%s','%s','%d','%s','%s','%s','%s','%s']);
+      ], ['%d','%d','%s','%s','%s','%d','%s','%s','%s','%s','%s','%s','%s','%s','%d','%s','%s','%s']);
 
       if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
-      $threshold    = kkchat_report_autoban_threshold();
-      $window_days  = kkchat_report_autoban_window_days();
+      $rule = ($reason_key !== 'other') ? kkchat_report_reason_rule_for_key($reason_key) : null;
+      $threshold    = $rule ? (int) ($rule['threshold'] ?? 0) : kkchat_report_autoban_threshold();
+      $window_days  = $rule ? (int) ($rule['window_days'] ?? 0) : kkchat_report_autoban_window_days();
       $window_secs  = ($window_days > 0) ? (int) ($window_days * (defined('DAY_IN_SECONDS') ? DAY_IN_SECONDS : 86400)) : 0;
 
       if ($reported_ip_key && $threshold > 0 && $window_secs > 0) {
@@ -121,7 +197,8 @@ if (!defined('ABSPATH')) exit;
       $rows = $wpdb->get_results(
         $wpdb->prepare(
           "SELECT id, created_at, reporter_id, reporter_name,
-                  reported_id, reported_name, reason
+                  reported_id, reported_name, reason, reason_key, reason_label,
+                  context_type, context_label, message_id, message_excerpt, message_kind
              FROM {$t['reports']}
             WHERE status = %s
             ORDER BY id DESC
@@ -140,6 +217,13 @@ if (!defined('ABSPATH')) exit;
           'reported_id'   => (int)$r['reported_id'],
           'reported_name' => (string)$r['reported_name'],
           'reason'        => (string)$r['reason'],
+          'reason_key'    => (string)($r['reason_key'] ?? ''),
+          'reason_label'  => (string)($r['reason_label'] ?? ''),
+          'context_type'  => (string)($r['context_type'] ?? ''),
+          'context_label' => (string)($r['context_label'] ?? ''),
+          'message_id'    => isset($r['message_id']) ? (int)$r['message_id'] : 0,
+          'message_excerpt' => (string)($r['message_excerpt'] ?? ''),
+          'message_kind'  => (string)($r['message_kind'] ?? ''),
         ];
       }, $rows)]);
     },
@@ -194,4 +278,3 @@ if (!defined('ABSPATH')) exit;
     },
     'permission_callback' => '__return_true',
   ]);
-

@@ -202,6 +202,49 @@ function kkchat_report_autoban_window_days(): int {
     return (int) apply_filters('kkchat_report_autoban_window_days', $value);
 }
 
+function kkchat_report_reason_rules(): array {
+    $raw = get_option('kkchat_report_reason_rules', []);
+    if (!is_array($raw)) {
+        $raw = [];
+    }
+
+    $rules = [];
+    foreach ($raw as $row) {
+        if (!is_array($row)) {
+            continue;
+        }
+        $key = isset($row['key']) ? sanitize_key((string) $row['key']) : '';
+        $label = isset($row['label']) ? trim((string) $row['label']) : '';
+        if ($key === '' || $label === '') {
+            continue;
+        }
+        $threshold = isset($row['threshold']) ? max(0, (int) $row['threshold']) : 0;
+        $window_days = isset($row['window_days']) ? max(0, (int) $row['window_days']) : 0;
+
+        $rules[] = [
+            'key' => $key,
+            'label' => $label,
+            'threshold' => $threshold,
+            'window_days' => $window_days,
+        ];
+    }
+
+    return apply_filters('kkchat_report_reason_rules', $rules);
+}
+
+function kkchat_report_reason_rule_for_key(string $key): ?array {
+    $key = sanitize_key($key);
+    if ($key === '') {
+        return null;
+    }
+    foreach (kkchat_report_reason_rules() as $rule) {
+        if (($rule['key'] ?? '') === $key) {
+            return $rule;
+        }
+    }
+    return null;
+}
+
 function kkchat_sanitize_guest_nick(string $nick): string {
     $nick = preg_replace('~[^\p{L}\p{N} _\-]~u', '', $nick);
     $nick = trim($nick);

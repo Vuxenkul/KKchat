@@ -24,6 +24,7 @@ function kkchat_admin_settings_page() {
 
     $report_autoban_threshold   = max(0, (int)($_POST['report_autoban_threshold'] ?? 0));
     $report_autoban_window_days = max(0, (int)($_POST['report_autoban_window_days'] ?? 0));
+    $report_reason_rules_raw    = (string) ($_POST['report_reason_rules'] ?? '');
     $poll_hidden_threshold = max(0, (int)($_POST['poll_hidden_threshold'] ?? 90));
     $poll_hidden_delay     = max(0, (int)($_POST['poll_hidden_delay'] ?? 30));
     $poll_hot_interval     = max(1, (int)($_POST['poll_hot_interval'] ?? 4));
@@ -53,6 +54,28 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_dedupe_window',         $dedupe_window);
     update_option('kkchat_report_autoban_threshold',   $report_autoban_threshold);
     update_option('kkchat_report_autoban_window_days', $report_autoban_window_days);
+    $report_reason_rules = [];
+    foreach (preg_split('/\r\n|\r|\n/', $report_reason_rules_raw) as $line) {
+      $line = trim($line);
+      if ($line === '') {
+        continue;
+      }
+      $parts = array_map('trim', explode('|', $line));
+      $key = sanitize_key($parts[0] ?? '');
+      $label = $parts[1] ?? '';
+      if ($key === '' || $label === '') {
+        continue;
+      }
+      $threshold = isset($parts[2]) ? max(0, (int) $parts[2]) : 0;
+      $window_days = isset($parts[3]) ? max(0, (int) $parts[3]) : 0;
+      $report_reason_rules[] = [
+        'key' => $key,
+        'label' => $label,
+        'threshold' => $threshold,
+        'window_days' => $window_days,
+      ];
+    }
+    update_option('kkchat_report_reason_rules', $report_reason_rules);
     update_option('kkchat_poll_hidden_threshold', $poll_hidden_threshold);
     update_option('kkchat_poll_hidden_delay',     $poll_hidden_delay);
     update_option('kkchat_poll_hot_interval',     $poll_hot_interval);
@@ -83,6 +106,10 @@ function kkchat_admin_settings_page() {
   $v_dedupe_window         = (int)get_option('kkchat_dedupe_window', 10);
   $v_report_autoban_threshold   = (int) get_option('kkchat_report_autoban_threshold', 0);
   $v_report_autoban_window_days = (int) get_option('kkchat_report_autoban_window_days', 0);
+  $v_report_reason_rules = get_option('kkchat_report_reason_rules', []);
+  if (!is_array($v_report_reason_rules)) {
+    $v_report_reason_rules = [];
+  }
   $v_poll_hidden_threshold = (int)get_option('kkchat_poll_hidden_threshold', 90);
   $v_poll_hidden_delay     = (int)get_option('kkchat_poll_hidden_delay', 30);
   $v_poll_hot_interval     = (int)get_option('kkchat_poll_hot_interval', 4);
@@ -95,6 +122,16 @@ function kkchat_admin_settings_page() {
   $v_admin_auto_incognito  = (int)get_option('kkchat_admin_auto_incognito', 0);
   $v_first_load_limit      = max(1, min(200, (int) get_option('kkchat_first_load_limit', 20)));
   $v_first_load_exclude_banners = (int) get_option('kkchat_first_load_exclude_banners', 0);
+  $report_reason_rules_text = implode("\n", array_map(function ($rule) {
+    $key = $rule['key'] ?? '';
+    $label = $rule['label'] ?? '';
+    $threshold = isset($rule['threshold']) ? (int) $rule['threshold'] : 0;
+    $window_days = isset($rule['window_days']) ? (int) $rule['window_days'] : 0;
+    if ($key === '' || $label === '') {
+      return '';
+    }
+    return sprintf('%s|%s|%d|%d', $key, $label, $threshold, $window_days);
+  }, $v_report_reason_rules));
 
   $sync_metrics_defaults = [
     'total_requests'     => 0,
@@ -236,6 +273,16 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="report_autoban_window_days" name="report_autoban_window_days" type="number" class="small-text" min="0" step="1" value="<?php echo esc_attr((int) $v_report_autoban_window_days); ?>">
             <p class="description"><?php esc_html_e('Så här många dagar bakåt i tiden rapporter räknas när tröskeln kontrolleras. Ange 0 för att stänga av.', 'kkchat'); ?></p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="report_reason_rules"><?php esc_html_e('Förvalda rapportorsaker', 'kkchat'); ?></label></th>
+          <td>
+            <textarea id="report_reason_rules" name="report_reason_rules" rows="6" class="large-text code"><?php echo esc_textarea($report_reason_rules_text); ?></textarea>
+            <p class="description">
+              <?php esc_html_e('En rad per orsak i formatet nyckel|Label|Tröskel|Dagar. Exempel: under18|Under 18|2|7', 'kkchat'); ?>
+              <?php esc_html_e('Tröskel och dagar styr auto-ban specifikt för orsaken; lämna 0 för att stänga av auto-ban för just den orsaken.', 'kkchat'); ?>
+            </p>
           </td>
         </tr>
       </table>
