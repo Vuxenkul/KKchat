@@ -272,6 +272,35 @@
   </div>
 </div>
 
+<!-- Report modal -->
+<div id="kk-reportModal" class="kk-report-modal" role="dialog" aria-modal="true" aria-labelledby="kk-reportTitle" hidden>
+  <form id="kk-reportForm" class="kk-report-box">
+    <strong id="kk-reportTitle">Rapportera användare</strong>
+    <div class="kk-report-desc" id="kk-reportTarget"></div>
+    <div class="kk-report-section">
+      <div class="kk-report-section-title">Välj anledning</div>
+      <div id="kk-reportReasons" class="kk-report-reasons"></div>
+      <label class="kk-report-other">
+        <span>Annat (fritext)</span>
+        <textarea id="kk-reportOther" rows="3" placeholder="Beskriv vad som hänt" hidden disabled></textarea>
+      </label>
+    </div>
+    <div class="kk-report-section" id="kk-reportContextBlock">
+      <div class="kk-report-section-title">Var hände det?</div>
+      <div class="kk-report-context-options" id="kk-reportContextOptions">
+        <label><input type="radio" name="kk-report-context" value="lobby" checked> Lobby</label>
+        <label><input type="radio" name="kk-report-context" value="dm"> DM</label>
+      </div>
+      <div class="kk-report-context-summary" id="kk-reportContextSummary" hidden></div>
+      <div class="kk-report-preview" id="kk-reportMessagePreview" hidden></div>
+    </div>
+    <div class="kk-report-actions">
+      <button type="button" class="iconbtn" id="kk-reportCancel">Avbryt</button>
+      <button type="submit" class="iconbtn primary" id="kk-reportSubmit">Skicka rapport</button>
+    </div>
+  </form>
+</div>
+
 <!-- Explicit label modal -->
 <div id="kk-explicitModal" class="kk-explicit-modal" role="dialog" aria-modal="true" aria-labelledby="kk-explicitTitle">
   <form class="kk-explicit-box" id="kk-explicitForm">
@@ -324,6 +353,10 @@
   const POLL_SETTINGS = Object.freeze(<?= wp_json_encode($poll_settings) ?>);
   const FIRST_LOAD_LIMIT = Number(<?= (int) $first_load_limit ?>) || 20;
   const FIRST_LOAD_EXCLUDE_BANNERS = <?= $first_load_exclude_banners ? 'true' : 'false' ?>;
+  const REPORT_REASONS = (() => {
+    const raw = <?= wp_json_encode($report_reasons) ?>;
+    return Array.isArray(raw) ? raw : [];
+  })();
 
   const $ = s => document.querySelector(s);
   const pubList = $('#kk-pubList');
@@ -527,7 +560,6 @@
   const reportListEl    = document.getElementById('kk-reportList');
   const reportRefreshBtn= document.getElementById('kk-reportRefresh');
   const countReportsEl  = document.getElementById('kk-countReports');
-  const REPORT_REASON_PLACEHOLDER = 'Skriv anledning här';
 
   // State for reports
   let OPEN_REPORTS_COUNT = 0;
@@ -2147,6 +2179,9 @@ function msgToHTML(m){
   const gender = genderById(sid);
   const metaHTML = `<div class="bubble-meta small">${genderIconMarkup(gender)}<span class="bubble-meta-text">${who===ME_NM?'':esc(who)}<br>${esc(when)}</span></div>`;
 
+  const room = m.room || null;
+  const recipientId = m.recipient_id ? Number(m.recipient_id) : null;
+  const recipientName = m.recipient_name || null;
   const attrs = [
     `class=\"item ${sid===ME_ID?'me':'them'}${roleClass}\"`,
     `data-id=\"${mid}\"`,
@@ -2154,6 +2189,15 @@ function msgToHTML(m){
     `data-sname=\"${escAttr(who)}\"`,
     `data-kind=\"${escAttr(kind)}\"`
   ];
+  if (room) {
+    attrs.push(`data-room=\"${escAttr(room)}\"`);
+  }
+  if (recipientId) {
+    attrs.push(`data-recipient-id=\"${recipientId}\"`);
+  }
+  if (recipientName) {
+    attrs.push(`data-recipient-name=\"${escAttr(recipientName)}\"`);
+  }
   if (kind === 'image') {
     attrs.push(`data-explicit=\"${isExplicit ? '1' : '0'}\"`);
   }
@@ -2521,6 +2565,10 @@ function applyCache(key){
     const senderId = Number.isFinite(senderIdRaw) && senderIdRaw > 0 ? senderIdRaw : null;
     const senderName = m.sender_name != null && m.sender_name !== '' ? String(m.sender_name) : null;
     const excerptSource = m.excerpt ?? m.content ?? m.text ?? m.body ?? '';
+    const room = m.room != null && m.room !== '' ? String(m.room) : null;
+    const recipientIdRaw = Number(m.recipient_id ?? m.recipientId ?? m.recipient ?? 0);
+    const recipientId = Number.isFinite(recipientIdRaw) && recipientIdRaw > 0 ? recipientIdRaw : null;
+    const recipientName = m.recipient_name != null && m.recipient_name !== '' ? String(m.recipient_name) : null;
     const excerpt = messageExcerptFromContent(excerptSource, kind);
 
     const entry = {
@@ -2529,6 +2577,9 @@ function applyCache(key){
       sender_id: senderId,
       sender_name: senderName,
       excerpt,
+      room,
+      recipient_id: recipientId,
+      recipient_name: recipientName,
     };
 
     if (m.is_explicit !== undefined) {
@@ -2581,11 +2632,17 @@ function applyCache(key){
       const senderId = Number(li.dataset.sid || 0) || null;
       const senderName = li.dataset.sname || null;
       const body = li.dataset.body || '';
+      const room = li.dataset.room || null;
+      const recipientId = li.dataset.recipientId ? Number(li.dataset.recipientId) : null;
+      const recipientName = li.dataset.recipientName || null;
       const entry = rememberMessageMeta({
         id: mid,
         kind,
         sender_id: senderId,
         sender_name: senderName,
+        room,
+        recipient_id: recipientId,
+        recipient_name: recipientName,
         content: body,
         is_explicit: li.dataset.explicit === '1',
         reply_to_id: li.dataset.replyId ? Number(li.dataset.replyId) : null,
@@ -2602,19 +2659,25 @@ function applyCache(key){
     container.querySelectorAll('li.item').forEach(li => {
       const mid = Number(li.dataset.id || 0);
       if (!Number.isFinite(mid) || mid <= 0) return;
-      const kind = li.dataset.kind || (li.querySelector('.bubble.img') ? 'image' : 'chat');
-      const senderId = Number(li.dataset.sid || 0) || null;
-      const senderName = li.dataset.sname || null;
-      const body = li.dataset.body || '';
-      rememberMessageMeta({
-        id: mid,
-        kind,
-        sender_id: senderId,
-        sender_name: senderName,
-        content: body,
-        reply_to_id: li.dataset.replyId ? Number(li.dataset.replyId) : null,
-        reply_to_sender_name: li.dataset.replyName || null,
-        reply_to_excerpt: li.dataset.replyExcerpt || null,
+    const kind = li.dataset.kind || (li.querySelector('.bubble.img') ? 'image' : 'chat');
+    const senderId = Number(li.dataset.sid || 0) || null;
+    const senderName = li.dataset.sname || null;
+    const body = li.dataset.body || '';
+    const room = li.dataset.room || null;
+    const recipientId = li.dataset.recipientId ? Number(li.dataset.recipientId) : null;
+    const recipientName = li.dataset.recipientName || null;
+    rememberMessageMeta({
+      id: mid,
+      kind,
+      sender_id: senderId,
+      sender_name: senderName,
+      room,
+      recipient_id: recipientId,
+      recipient_name: recipientName,
+      content: body,
+      reply_to_id: li.dataset.replyId ? Number(li.dataset.replyId) : null,
+      reply_to_sender_name: li.dataset.replyName || null,
+      reply_to_excerpt: li.dataset.replyExcerpt || null,
       });
     });
   }
@@ -3572,28 +3635,14 @@ userListEl.addEventListener('click', async (e)=>{
   const rep = e.target.closest('[data-report]');
   if (rep) {
     const id = +rep.dataset.report;
-    const whom = nameById(id);
-    let reason = prompt(`Ange anledning till rapporten för ${whom}:`, REPORT_REASON_PLACEHOLDER);
-    if (reason == null) return;
-    reason = (reason || '').trim();
-    if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
-
-    const fd = new FormData();
-    fd.append('csrf_token', CSRF);
-    fd.append('reported_id', String(id));
-    fd.append('reason', reason);
-
-    try{
-      const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-      const js = await r.json().catch(()=>({}));
-      if (r.ok && js.ok) {
-        showToast('Rapporten är skickad. Tack!');
-      } else {
-        alert('Kunde inte skicka rapporten: ' + (js.err || r.status));
-      }
-    }catch(_){
-      alert('Tekniskt fel vid rapportering.');
-    }
+    const whom = nameById(id) || ('#' + id);
+    openReportModal({
+      reportedId: id,
+      reportedName: whom,
+      allowContextPick: true,
+      contextType: 'lobby',
+      contextLabel: 'Lobby'
+    });
     return;
   }
 
@@ -4139,6 +4188,192 @@ let MSG_TARGET = { id: null, name: '', msgId: null, li: null, isMine: false };
 
 const actHide = document.getElementById('kk-act-hide');
 
+const reportModal = document.getElementById('kk-reportModal');
+const reportForm = document.getElementById('kk-reportForm');
+const reportTitle = document.getElementById('kk-reportTitle');
+const reportTarget = document.getElementById('kk-reportTarget');
+const reportReasons = document.getElementById('kk-reportReasons');
+const reportOther = document.getElementById('kk-reportOther');
+const reportCancel = document.getElementById('kk-reportCancel');
+const reportContextBlock = document.getElementById('kk-reportContextBlock');
+const reportContextOptions = document.getElementById('kk-reportContextOptions');
+const reportContextSummary = document.getElementById('kk-reportContextSummary');
+const reportMessagePreview = document.getElementById('kk-reportMessagePreview');
+
+let REPORT_TARGET = {
+  reportedId: null,
+  reportedName: '',
+  messageId: null,
+  contextType: '',
+  contextLabel: '',
+  allowContextPick: true,
+  onSuccess: null,
+};
+
+function buildReportReasons(selectedKey = null){
+  if (!reportReasons) return;
+  const options = Array.isArray(REPORT_REASONS) ? REPORT_REASONS : [];
+  const items = options
+    .filter(r => r && r.key && r.label)
+    .map(r => ({ key: String(r.key), label: String(r.label) }));
+  const fallbackKey = items.length ? items[0].key : 'other';
+  const resolvedKey = selectedKey && items.some(i => i.key === selectedKey) ? selectedKey : fallbackKey;
+  const radioName = 'kk-report-reason';
+  const html = items.map((r, idx) => {
+    const checked = resolvedKey === r.key || (!selectedKey && idx === 0);
+    return `<label><input type="radio" name="${radioName}" value="${escAttr(r.key)}"${checked ? ' checked' : ''}> ${esc(r.label)}</label>`;
+  }).concat([
+    `<label><input type="radio" name="${radioName}" value="other"${items.length === 0 ? ' checked' : ''}> Annat</label>`
+  ]);
+  reportReasons.innerHTML = html.join('');
+  toggleReportOther(resolvedKey === 'other' || (items.length === 0 && !selectedKey));
+}
+
+function toggleReportOther(isOther){
+  if (!reportOther) return;
+  reportOther.disabled = !isOther;
+  reportOther.toggleAttribute('hidden', !isOther);
+  if (!isOther) reportOther.value = '';
+}
+
+function setReportContextUI(){
+  if (!reportContextOptions || !reportContextSummary || !reportContextBlock) return;
+  const showPicker = !!REPORT_TARGET.allowContextPick;
+  reportContextOptions.toggleAttribute('hidden', !showPicker);
+  reportContextSummary.toggleAttribute('hidden', showPicker);
+  if (!showPicker) {
+    reportContextSummary.textContent = REPORT_TARGET.contextLabel ? `Källa: ${REPORT_TARGET.contextLabel}` : 'Källa: okänd';
+  }
+}
+
+function setReportMessagePreview(text){
+  if (!reportMessagePreview) return;
+  if (!text) {
+    reportMessagePreview.setAttribute('hidden', '');
+    reportMessagePreview.textContent = '';
+    return;
+  }
+  reportMessagePreview.textContent = `Meddelande: ${text}`;
+  reportMessagePreview.removeAttribute('hidden');
+}
+
+function openReportModal(options){
+  if (!reportModal || !reportForm) return;
+  REPORT_TARGET = {
+    reportedId: options.reportedId,
+    reportedName: options.reportedName || '',
+    messageId: options.messageId || null,
+    contextType: options.contextType || '',
+    contextLabel: options.contextLabel || '',
+    allowContextPick: options.allowContextPick ?? true,
+    onSuccess: typeof options.onSuccess === 'function' ? options.onSuccess : null,
+  };
+  if (reportTitle) {
+    reportTitle.textContent = `Rapportera ${REPORT_TARGET.reportedName || 'användare'}`;
+  }
+  if (reportTarget) {
+    reportTarget.textContent = REPORT_TARGET.reportedName ? `Du rapporterar ${REPORT_TARGET.reportedName}.` : 'Du rapporterar en användare.';
+  }
+  buildReportReasons();
+  setReportContextUI();
+  setReportMessagePreview(options.messagePreview || '');
+  if (REPORT_TARGET.allowContextPick && reportForm && REPORT_TARGET.contextType) {
+    const contextInput = reportForm.querySelector(`input[name="kk-report-context"][value="${REPORT_TARGET.contextType}"]`);
+    if (contextInput instanceof HTMLInputElement) {
+      contextInput.checked = true;
+    }
+  }
+  reportModal.hidden = false;
+  reportModal.setAttribute('aria-hidden', 'false');
+}
+
+function closeReportModal(){
+  if (!reportModal || !reportForm) return;
+  reportModal.hidden = true;
+  reportModal.setAttribute('aria-hidden', 'true');
+  reportForm.reset();
+  if (reportOther) {
+    reportOther.value = '';
+    reportOther.disabled = true;
+    reportOther.setAttribute('hidden', '');
+  }
+  if (reportMessagePreview) {
+    reportMessagePreview.textContent = '';
+    reportMessagePreview.setAttribute('hidden', '');
+  }
+  REPORT_TARGET.onSuccess = null;
+}
+
+reportReasons?.addEventListener('change', (e) => {
+  const input = e.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  if (input.name !== 'kk-report-reason') return;
+  toggleReportOther(input.value === 'other');
+});
+
+reportCancel?.addEventListener('click', (e) => {
+  e.preventDefault();
+  closeReportModal();
+});
+
+reportModal?.addEventListener('click', (e) => {
+  if (e.target === reportModal) closeReportModal();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && reportModal && !reportModal.hidden) {
+    closeReportModal();
+  }
+});
+
+reportForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const selected = reportForm.querySelector('input[name="kk-report-reason"]:checked');
+  if (!selected) {
+    alert('Välj en anledning.');
+    return;
+  }
+  const reasonKey = selected.value;
+  const reasonText = (reportOther?.value || '').trim();
+  if (reasonKey === 'other' && !reasonText) {
+    alert('Du måste skriva en förklaring för "Annat".');
+    reportOther?.focus();
+    return;
+  }
+
+  const fd = new FormData();
+  fd.append('csrf_token', CSRF);
+  fd.append('reported_id', String(REPORT_TARGET.reportedId || ''));
+  fd.append('reason_key', reasonKey);
+  if (reasonKey === 'other') {
+    fd.append('reason', reasonText);
+  }
+  if (REPORT_TARGET.messageId) {
+    fd.append('message_id', String(REPORT_TARGET.messageId));
+  }
+  if (REPORT_TARGET.allowContextPick) {
+    const contextInput = reportForm.querySelector('input[name="kk-report-context"]:checked');
+    if (contextInput?.value) {
+      fd.append('context_type', contextInput.value);
+    }
+  }
+
+  try {
+    const r = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
+    const js = await r.json().catch(()=>({}));
+    if (r.ok && js.ok) {
+      showToast('Rapporten är skickad. Tack!');
+      const callback = REPORT_TARGET.onSuccess;
+      closeReportModal();
+      if (callback) callback();
+    } else {
+      alert('Kunde inte skicka rapporten: ' + (js.err || r.status));
+    }
+  } catch (_) {
+    alert('Tekniskt fel vid rapportering.');
+  }
+});
+
 actHide?.addEventListener('click', async ()=>{
   if (!IS_ADMIN) { closeMsgSheet(); return; }
 
@@ -4220,6 +4455,32 @@ msgClose?.addEventListener('click', closeMsgSheet);
 msgSheet?.addEventListener('click', (e)=>{ if (e.target === msgSheet) closeMsgSheet(); });
 document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && msgSheet.hasAttribute('open')) closeMsgSheet(); });
 
+function getReportContextFromMessage(messageId, liEl = null){
+  const mid = Number(messageId || 0);
+  const meta = messagePreviewById(mid);
+  const room = meta?.room || liEl?.dataset?.room || '';
+  const recipientId = meta?.recipient_id || (liEl?.dataset?.recipientId ? Number(liEl.dataset.recipientId) : null);
+  if (recipientId) {
+    return {
+      contextType: 'dm',
+      contextLabel: 'DM',
+      messagePreview: meta?.excerpt || ''
+    };
+  }
+  if (room) {
+    return {
+      contextType: 'room',
+      contextLabel: `Rum: ${room}`,
+      messagePreview: meta?.excerpt || ''
+    };
+  }
+  return {
+    contextType: 'lobby',
+    contextLabel: 'Lobby',
+    messagePreview: meta?.excerpt || ''
+  };
+}
+
 pubList.addEventListener('click', (e)=>{
 
   const replyBtn = e.target.closest('.bubble-reply-btn');
@@ -4268,20 +4529,19 @@ actDm?.addEventListener('click', ()=>{
   closeMsgSheet();
 });
 actReport?.addEventListener('click', async ()=>{
-  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, REPORT_REASON_PLACEHOLDER);
-  if (reason == null) return;
-  reason = (reason || '').trim();
-  if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
-  fd.append('reported_id', String(MSG_TARGET.id));
-  fd.append('reason', reason);
-  try{
-    const r = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeMsgSheet(); }
-    else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
-  }catch(_){ alert('Tekniskt fel vid rapportering.'); }
+  const mid = Number(MSG_TARGET.msgId || 0);
+  const context = getReportContextFromMessage(mid, MSG_TARGET.li);
+  closeMsgSheet();
+  openReportModal({
+    reportedId: MSG_TARGET.id,
+    reportedName: MSG_TARGET.name,
+    messageId: mid || null,
+    contextType: context.contextType,
+    contextLabel: context.contextLabel,
+    allowContextPick: false,
+    messagePreview: context.messagePreview,
+    onSuccess: () => {}
+  });
 });
 actBlock?.addEventListener('click', async ()=>{
   const id = MSG_TARGET.id;
@@ -4316,22 +4576,19 @@ imgActDm?.addEventListener('click', ()=>{
 });
 
 imgActReport?.addEventListener('click', async ()=>{
-  let reason = prompt(`Ange anledning till rapporten för ${MSG_TARGET.name}:`, REPORT_REASON_PLACEHOLDER);
-  if (reason == null) return;
-  reason = (reason || '').trim();
-  if (!reason || reason === REPORT_REASON_PLACEHOLDER) { alert('Du måste ange en anledning.'); return; }
-
-  const fd = new FormData();
-  fd.append('csrf_token', CSRF);
-  fd.append('reported_id', String(MSG_TARGET.id));
-  fd.append('reason', reason);
-
-  try{
-    const r  = await fetch(API + '/report', { method:'POST', body: fd, credentials:'include', headers:h });
-    const js = await r.json().catch(()=>({}));
-    if (r.ok && js.ok) { showToast('Rapporten är skickad. Tack!'); closeImagePreview(); }
-    else { alert('Kunde inte skicka rapporten: ' + (js.err || r.status)); }
-  }catch(_){ alert('Tekniskt fel vid rapportering.'); }
+  const mid = Number(MSG_TARGET.msgId || 0);
+  const context = getReportContextFromMessage(mid, MSG_TARGET.li);
+  closeImagePreview();
+  openReportModal({
+    reportedId: MSG_TARGET.id,
+    reportedName: MSG_TARGET.name,
+    messageId: mid || null,
+    contextType: context.contextType,
+    contextLabel: context.contextLabel,
+    allowContextPick: false,
+    messagePreview: context.messagePreview,
+    onSuccess: () => {}
+  });
 });
 
 imgActBlock?.addEventListener('click', async ()=>{
@@ -6189,13 +6446,22 @@ jumpBtn.addEventListener('click', ()=>{
       const id  = Number(r.id||0);
       const rep = `${String(r.reporter_name||'')} (${Number(r.reporter_id||0)})`;
       const tgt = `${String(r.reported_name||'')} (${Number(r.reported_id||0)})`;
+      const reasonLabel = String(r.reason_label||'').trim();
       const reason = String(r.reason||'').trim();
+      const contextLabel = String(r.context_label||'').trim();
+      const messageExcerpt = String(r.message_excerpt||'').trim();
+      const messageId = Number(r.message_id || 0);
+      const messageKind = String(r.message_kind || '').toLowerCase();
+      const messageText = messageKind === 'image' ? '[Bild]' : messageExcerpt;
       return `
         <div class="user report" data-id="${id}">
           <div class="user-main">
             <b>#${id} • ${fmtWhen(ts)}</b>
             <div class="small">Reporter: ${esc(rep)} → Reported: ${esc(tgt)}</div>
-            <div class="small">${esc(reason)}</div>
+            ${reasonLabel ? `<div class="small"><strong>${esc(reasonLabel)}</strong></div>` : ''}
+            ${reason ? `<div class="small">${esc(reason)}</div>` : ''}
+            ${contextLabel ? `<div class="small">Källa: ${esc(contextLabel)}</div>` : ''}
+            ${(messageText || messageId) ? `<div class="small">Meddelande #${messageId || '—'}: ${esc(messageText || '—')}</div>` : ''}
           </div>
           <div class="user-actions">
             <button class="modbtn" data-resolve="${id}" title="Resolve" aria-label="Markera som löst">${iconMarkup('task_alt')}</button>

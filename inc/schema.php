@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define DB schema version if not already defined (bump when schema changes)
 if (!defined('KKCHAT_DB_VERSION')) {
-  define('KKCHAT_DB_VERSION', '14');
+  define('KKCHAT_DB_VERSION', '15');
 }
 
 /**
@@ -24,6 +24,7 @@ function kkchat_activate() {
     'kkchat_dedupe_window'         => 10,
     'kkchat_report_autoban_threshold' => 0,
     'kkchat_report_autoban_window_days' => 0,
+    'kkchat_report_reason_rules' => [],
     'kkchat_first_load_limit' => 20,
     'kkchat_first_load_exclude_banners' => 0,
   ] as $k => $def) {
@@ -172,7 +173,14 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
     `reported_id` INT UNSIGNED NOT NULL,
     `reported_name` VARCHAR(64) NOT NULL,
     `reported_ip` VARCHAR(45) NULL,
+    `reason_key` VARCHAR(64) NULL,
+    `reason_label` VARCHAR(128) NULL,
     `reason` TEXT NOT NULL,
+    `context_type` VARCHAR(32) NULL,
+    `context_label` VARCHAR(128) NULL,
+    `message_id` BIGINT UNSIGNED NULL,
+    `message_excerpt` VARCHAR(255) NULL,
+    `message_kind` VARCHAR(32) NULL,
     `reported_ip_key` VARCHAR(64) NULL,
     `status` ENUM('open','resolved') NOT NULL DEFAULT 'open',
     `resolved_at` INT UNSIGNED DEFAULT NULL,
@@ -368,6 +376,27 @@ function kkchat_maybe_migrate(){
   if (kkchat_table_exists($t['reports'])) {
     if (!kkchat_column_exists($t['reports'], 'reported_ip_key')) {
       $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'reason_key')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reason_key` VARCHAR(64) NULL AFTER `reported_ip`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'reason_label')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reason_label` VARCHAR(128) NULL AFTER `reason_key`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'context_type')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `context_type` VARCHAR(32) NULL AFTER `reason`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'context_label')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `context_label` VARCHAR(128) NULL AFTER `context_type`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'message_id')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `message_id` BIGINT UNSIGNED NULL AFTER `context_label`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'message_excerpt')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `message_excerpt` VARCHAR(255) NULL AFTER `message_id`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'message_kind')) {
+      $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `message_kind` VARCHAR(32) NULL AFTER `message_excerpt`");
     }
     if (!kkchat_column_exists($t['reports'], 'reporter_ip_key')) {
       $wpdb->query("ALTER TABLE `{$t['reports']}` ADD COLUMN `reporter_ip_key` VARCHAR(64) NULL AFTER `reporter_ip`");
@@ -909,7 +938,14 @@ function kkchat_maybe_upgrade_schema() {
       `reported_id` INT UNSIGNED NOT NULL,
       `reported_name` VARCHAR(64) NOT NULL,
       `reported_ip` VARCHAR(45) NULL,
+      `reason_key` VARCHAR(64) NULL,
+      `reason_label` VARCHAR(128) NULL,
       `reason` TEXT NOT NULL,
+      `context_type` VARCHAR(32) NULL,
+      `context_label` VARCHAR(128) NULL,
+      `message_id` BIGINT UNSIGNED NULL,
+      `message_excerpt` VARCHAR(255) NULL,
+      `message_kind` VARCHAR(32) NULL,
       `reported_ip_key` VARCHAR(64) NULL,
       `status` ENUM('open','resolved') NOT NULL DEFAULT 'open',
       `resolved_at` INT UNSIGNED DEFAULT NULL,
@@ -929,6 +965,27 @@ function kkchat_maybe_upgrade_schema() {
     $has_reported_ip_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reported_ip_key'");
     if (!$has_reported_ip_key) {
       @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reported_ip_key` VARCHAR(64) NULL AFTER `reason`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'reason_key')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reason_key` VARCHAR(64) NULL AFTER `reported_ip`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'reason_label')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `reason_label` VARCHAR(128) NULL AFTER `reason_key`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'context_type')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `context_type` VARCHAR(32) NULL AFTER `reason`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'context_label')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `context_label` VARCHAR(128) NULL AFTER `context_type`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'message_id')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `message_id` BIGINT UNSIGNED NULL AFTER `context_label`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'message_excerpt')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `message_excerpt` VARCHAR(255) NULL AFTER `message_id`");
+    }
+    if (!kkchat_column_exists($t['reports'], 'message_kind')) {
+      @ $wpdb->query("ALTER TABLE {$t['reports']} ADD `message_kind` VARCHAR(32) NULL AFTER `message_excerpt`");
     }
     $has_reporter_ip_key = $wpdb->get_var("SHOW COLUMNS FROM {$t['reports']} LIKE 'reporter_ip_key'");
     if (!$has_reporter_ip_key) {
