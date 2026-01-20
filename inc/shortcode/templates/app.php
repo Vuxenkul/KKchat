@@ -315,6 +315,20 @@
   </form>
 </div>
 
+<!-- Recent uploads modal -->
+<div id="kk-recentUploadModal" class="kk-recent-modal" role="dialog" aria-modal="true" aria-labelledby="kk-recentUploadTitle">
+  <div class="kk-recent-box">
+    <div class="kk-recent-head">
+      <strong id="kk-recentUploadTitle">Senast uppladdat</strong>
+      <button type="button" class="iconbtn" id="kk-recentUploadClose">Stäng</button>
+    </div>
+    <div class="kk-recent-grid" id="kk-recentUploadGrid" role="list"></div>
+    <div class="kk-recent-actions">
+      <button type="button" class="iconbtn primary" id="kk-recentUploadNew">Ladda upp ny bild</button>
+    </div>
+  </div>
+</div>
+
 <!-- Multi-tab takeover modal -->
 <div
   id="kk-multiTabModal"
@@ -647,6 +661,11 @@ const camFlip   = document.getElementById('kk-camFlip');
   const explicitCancel  = document.getElementById('kk-explicitCancel');
   const explicitConfirm = document.getElementById('kk-explicitConfirm');
   let explicitResolver  = null;
+
+  const recentUploadModal = document.getElementById('kk-recentUploadModal');
+  const recentUploadGrid  = document.getElementById('kk-recentUploadGrid');
+  const recentUploadClose = document.getElementById('kk-recentUploadClose');
+  const recentUploadNew   = document.getElementById('kk-recentUploadNew');
 
   const h = {'X-WP-Nonce': REST_NONCE};
 
@@ -5759,6 +5778,119 @@ document.addEventListener('keydown', (e)=>{
   if (e.key === 'Escape' && explicitModal?.hasAttribute('open')) closeExplicitModal(null);
 });
 
+const RECENT_UPLOADS_KEY = 'kk_recent_uploads_v1';
+const RECENT_UPLOADS_MAX = 8;
+
+function loadRecentUploads(){
+  try{
+    const raw = localStorage.getItem(RECENT_UPLOADS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(item => item && typeof item.url === 'string')
+      .map(item => ({ url: item.url, ts: Number(item.ts) || Date.now() }));
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveRecentUploads(list){
+  try{
+    localStorage.setItem(RECENT_UPLOADS_KEY, JSON.stringify(list));
+  } catch (_) {}
+}
+
+function addRecentUpload(url){
+  if (!url) return;
+  const current = loadRecentUploads();
+  const next = current.filter(item => item.url !== url);
+  next.unshift({ url, ts: Date.now() });
+  saveRecentUploads(next.slice(0, RECENT_UPLOADS_MAX));
+}
+
+function hasRecentUploads(){
+  return loadRecentUploads().length > 0;
+}
+
+function closeRecentUploadModal(){
+  if (recentUploadModal) recentUploadModal.removeAttribute('open');
+}
+
+function renderRecentUploads(){
+  if (!recentUploadGrid) return;
+  const uploads = loadRecentUploads();
+  recentUploadGrid.innerHTML = '';
+  if (!uploads.length) {
+    const empty = document.createElement('div');
+    empty.textContent = 'Inga tidigare uppladdningar ännu.';
+    empty.style.opacity = '0.7';
+    empty.style.fontSize = '14px';
+    recentUploadGrid.appendChild(empty);
+    return;
+  }
+
+  const formatter = new Intl.DateTimeFormat('sv-SE', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+
+  uploads.forEach((item) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'kk-recent-item';
+    btn.dataset.recentUrl = item.url;
+
+    const img = document.createElement('img');
+    img.src = item.url;
+    img.alt = 'Senast uppladdad bild';
+    img.loading = 'lazy';
+    img.decoding = 'async';
+
+    const date = document.createElement('span');
+    date.className = 'kk-recent-date';
+    date.textContent = formatter.format(new Date(item.ts));
+
+    btn.appendChild(img);
+    btn.appendChild(date);
+    recentUploadGrid.appendChild(btn);
+  });
+}
+
+function openRecentUploadModal(){
+  if (!recentUploadModal) return;
+  renderRecentUploads();
+  recentUploadModal.setAttribute('open', '');
+  requestAnimationFrame(()=>{ recentUploadClose?.focus(); });
+}
+
+recentUploadClose?.addEventListener('click', closeRecentUploadModal);
+recentUploadNew?.addEventListener('click', ()=>{
+  closeRecentUploadModal();
+  pubImgInp?.click();
+});
+recentUploadModal?.addEventListener('click', (e)=>{
+  if (e.target === recentUploadModal) closeRecentUploadModal();
+});
+document.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape' && recentUploadModal?.hasAttribute('open')) closeRecentUploadModal();
+});
+recentUploadGrid?.addEventListener('click', async (e)=>{
+  const btn = e.target?.closest?.('.kk-recent-item');
+  if (!btn) return;
+  const url = btn.dataset.recentUrl;
+  if (!url) return;
+  closeRecentUploadModal();
+  const choice = await promptExplicitChoice({ name: 'Senast uppladdad bild' });
+  if (choice === null || choice === undefined) return;
+  showToast('Skickar bild…');
+  const ok = await sendImageMessage(url, !!choice);
+  if (ok) {
+    await pollActive();
+    showToast('Bild skickad');
+    clearComposerReply();
+  }
+});
+
 
 function appendPendingMessage(text){
   const li = document.createElement('li');
@@ -6218,6 +6350,7 @@ async function uploadImage(file){
       const small = await compressImageIfNeeded(file);
       showToast('Laddar bild…');
       const url = await uploadImage(small);
+      addRecentUpload(url);
       const ok  = await sendImageMessage(url, !!choice);
       if (ok) {
         await pollActive();
@@ -6234,7 +6367,11 @@ async function uploadImage(file){
 // Upload picker
 pubUpBtn?.addEventListener('click', () => {
   closeAttachmentMenu();
-  pubImgInp?.click();
+  if (hasRecentUploads()) {
+    openRecentUploadModal();
+  } else {
+    pubImgInp?.click();
+  }
 });
 
 pubImgInp?.addEventListener('change', async ()=>{
