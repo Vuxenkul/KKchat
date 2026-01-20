@@ -164,7 +164,7 @@ a#kk-imgOpen {
 #kkchat-root .kk-report-reasons label,
 #kkchat-root .kk-report-context-options label {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   margin-bottom: 6px;
   font-size: 14px;
@@ -172,7 +172,8 @@ a#kk-imgOpen {
 }
 #kkchat-root .kk-report-reasons input,
 #kkchat-root .kk-report-context-options input {
-  margin-top: 2px;
+  margin: 0;
+  flex: 0 0 auto;
 }
 #kkchat-root .kk-report-other {
   display: block;
