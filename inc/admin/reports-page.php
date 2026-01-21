@@ -151,9 +151,28 @@ function kkchat_admin_reports_page() {
   $where = []; $params = [];
   if ($status !== 'any') { $where[] = "status = %s"; $params[] = $status; }
   if ($q !== '') {
+    $searchClauses = [];
+    $searchParams = [];
     $like = '%'.$wpdb->esc_like($q).'%';
-    $where[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s OR reason_label LIKE %s OR context_label LIKE %s OR message_excerpt LIKE %s)";
-    array_push($params, $like, $like, $like, $like, $like, $like);
+    $searchClauses[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s OR reason_label LIKE %s OR context_label LIKE %s OR message_excerpt LIKE %s OR reporter_ip LIKE %s OR reported_ip LIKE %s)";
+    array_push($searchParams, $like, $like, $like, $like, $like, $like, $like, $like);
+
+    if (filter_var($q, FILTER_VALIDATE_IP)) {
+      $ipKey = kkchat_ip_ban_key($q);
+      $ipKey = $ipKey ?: $q;
+      $searchClauses[] = "(reporter_ip = %s OR reported_ip = %s OR reporter_ip_key = %s OR reported_ip_key = %s)";
+      array_push($searchParams, $q, $q, $ipKey, $ipKey);
+    }
+
+    if (ctype_digit($q)) {
+      $searchClauses[] = "(id = %d OR reporter_id = %d OR reported_id = %d)";
+      array_push($searchParams, (int)$q, (int)$q, (int)$q);
+    }
+
+    if ($searchClauses) {
+      $where[] = '(' . implode(' OR ', $searchClauses) . ')';
+      array_push($params, ...$searchParams);
+    }
   }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
