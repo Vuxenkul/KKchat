@@ -107,7 +107,7 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
         }
         if ($hit_forbid){
           $now = time();
-          $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
+          $admin = 'auto:rules';
           $cause = 'Forbidden word: "'.$hit_forbid['word'].'"';
           $dur   = $hit_forbid['duration_sec']; // NULL => infinite
           $ip    = kkchat_client_ip();
@@ -121,7 +121,7 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
               'target_wp_username'=>$_SESSION['kkchat_wp_username'] ?? null,
               'target_ip'=>null,
               'cause'=>$cause,
-              'created_by'=>$admin ?: null,
+              'created_by'=>$admin,
               'created_at'=>$now,
               'expires_at'=>$exp,
               'active'=>1
@@ -136,7 +136,7 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
               'target_wp_username'=>$_SESSION['kkchat_wp_username'] ?? null,
               'target_ip'=>kkchat_ip_ban_key($ip),
               'cause'=>$cause,
-              'created_by'=>$admin ?: null,
+              'created_by'=>$admin,
               'created_at'=>$now,
               'expires_at'=>$exp,
               'active'=>1
@@ -308,7 +308,7 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
 
           if ($mins > 0 && $rec['n'] >= $max && ($now - $rec['first']) <= $fast) {
             $exp = $now + max(60, $mins * 60);
-            $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
+            $admin = 'auto:spam';
             $cause = 'Repeat spam (auto)';
 
             $wpdb->insert($t['blocks'], [
@@ -318,7 +318,7 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
               'target_wp_username' => $_SESSION['kkchat_wp_username'] ?? null,
               'target_ip' => null,
               'cause' => $cause,
-              'created_by' => $admin ?: null,
+              'created_by' => $admin,
               'created_at' => $now,
               'expires_at' => $exp,
               'active' => 1
@@ -397,4 +397,3 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
     },
     'permission_callback' => '__return_true',
   ]);
-
