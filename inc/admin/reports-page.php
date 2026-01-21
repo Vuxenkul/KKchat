@@ -152,13 +152,8 @@ function kkchat_admin_reports_page() {
   if ($status !== 'any') { $where[] = "status = %s"; $params[] = $status; }
   if ($q !== '') {
     $like = '%'.$wpdb->esc_like($q).'%';
-    $where[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s OR reason_label LIKE %s OR context_label LIKE %s OR message_excerpt LIKE %s OR reporter_ip LIKE %s OR reported_ip LIKE %s)";
-    array_push($params, $like, $like, $like, $like, $like, $like, $like, $like);
-
-    if (ctype_digit($q)) {
-      $where[] = "(id = %d OR reporter_id = %d OR reported_id = %d)";
-      array_push($params, (int)$q, (int)$q, (int)$q);
-    }
+    $where[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s OR reason_label LIKE %s OR context_label LIKE %s OR message_excerpt LIKE %s)";
+    array_push($params, $like, $like, $like, $like, $like, $like);
   }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
