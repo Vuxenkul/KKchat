@@ -66,7 +66,11 @@ function kkchat_admin_reports_page() {
   }
 
   // Filter
-  $status = in_array(($_GET['status'] ?? 'open'), ['open','resolved','all'], true) ? $_GET['status'] : 'open';
+  $status_input = isset($_GET['status']) ? (string)$_GET['status'] : '';
+  if ($status_input === '') {
+    $status_input = 'open';
+  }
+  $status = in_array($status_input, ['open','resolved','all'], true) ? $status_input : 'open';
   $q      = sanitize_text_field($_GET['q'] ?? '');
   $per    = max(10, min(200, (int)($_GET['per'] ?? 50)));
   $page   = max(1, (int)($_GET['paged'] ?? 1));
@@ -399,7 +403,7 @@ function kkchat_admin_reports_page() {
           </td>
         </tr>
       <?php endforeach; else: ?>
-        <tr><td colspan="9">Inga rapporter hittades.</td></tr>
+        <tr><td colspan="9"><?php echo $total > 0 ? 'Inga rapporter på denna sida.' : 'Inga rapporter hittades.'; ?></td></tr>
       <?php endif; ?>
       </tbody>
     </table>
