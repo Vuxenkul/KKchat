@@ -201,6 +201,9 @@ function kkchat_admin_reports_page() {
 
   $pages = max(1, (int)ceil($total / $per));
   $reports_base = menu_page_url('kkchat_reports', false);
+  if (!$reports_base) {
+    $reports_base = admin_url('admin.php?page=kkchat_reports');
+  }
 
   $blockedMap = [];
   if ($rows) {
@@ -235,6 +238,7 @@ function kkchat_admin_reports_page() {
     <?php endif; ?>
 
     <form method="get" action="<?php echo esc_url($reports_base); ?>" style="background:#fff;border:1px solid #eee;padding:10px;border-radius:8px;margin:12px 0">
+      <input type="hidden" name="page" value="kkchat_reports">
       <table class="form-table">
         <tr>
           <th>Status</th>
