@@ -149,10 +149,20 @@ function kkchat_admin_reports_page() {
   $offset = ($page - 1) * $per;
 
   $searchableColumns = [];
+  $availableColumns = $wpdb->get_col("SHOW COLUMNS FROM {$t['reports']}");
+  if ($availableColumns) {
+    $availableColumns = array_fill_keys($availableColumns, true);
+  } else {
+    $availableColumns = [];
+  }
+
   foreach (['reporter_name', 'reported_name', 'reporter_ip', 'reported_ip', 'reason', 'reason_label', 'context_label', 'message_excerpt'] as $column) {
-    if (kkchat_column_exists($t['reports'], $column)) {
+    if (isset($availableColumns[$column])) {
       $searchableColumns[] = $column;
     }
+  }
+  if (!$searchableColumns) {
+    $searchableColumns = ['reporter_name', 'reported_name', 'reason'];
   }
 
   $where = []; $params = [];
