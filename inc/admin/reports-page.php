@@ -148,21 +148,35 @@ function kkchat_admin_reports_page() {
   $page   = max(1, (int)($_GET['paged'] ?? 1));
   $offset = ($page - 1) * $per;
 
+  $searchableColumns = [];
+  foreach (['reporter_name', 'reported_name', 'reporter_ip', 'reported_ip', 'reason', 'reason_label', 'context_label', 'message_excerpt'] as $column) {
+    if (kkchat_column_exists($t['reports'], $column)) {
+      $searchableColumns[] = $column;
+    }
+  }
+
   $where = []; $params = [];
   if ($status !== 'any') { $where[] = "status = %s"; $params[] = $status; }
-  if ($q !== '') {
+  if ($q !== '' && $searchableColumns) {
     $like = '%'.$wpdb->esc_like($q).'%';
-    $where[] = "(reporter_name LIKE %s OR reported_name LIKE %s OR reason LIKE %s OR reason_label LIKE %s OR context_label LIKE %s OR message_excerpt LIKE %s)";
-    array_push($params, $like, $like, $like, $like, $like, $like);
+    $searchClauses = [];
+    foreach ($searchableColumns as $column) {
+      $searchClauses[] = "{$column} LIKE %s";
+      $params[] = $like;
+    }
+    $where[] = '(' . implode(' OR ', $searchClauses) . ')';
   }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
-  $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['reports']} $whereSql", ...$params));
+  if ($params) {
+    $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['reports']} $whereSql", ...$params));
+  } else {
+    $total = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$t['reports']} $whereSql");
+  }
 
-  $rows = $wpdb->get_results($wpdb->prepare(
-    "SELECT * FROM {$t['reports']} $whereSql ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, id DESC LIMIT %d OFFSET %d",
-    ...array_merge($params, [$per, $offset])
-  ));
+  $rowsQuery = "SELECT * FROM {$t['reports']} $whereSql ORDER BY CASE WHEN status='open' THEN 0 ELSE 1 END, id DESC LIMIT %d OFFSET %d";
+  $rowsParams = array_merge($params, [$per, $offset]);
+  $rows = $wpdb->get_results($wpdb->prepare($rowsQuery, ...$rowsParams));
 
   $pages = max(1, (int)ceil($total / $per));
   $reports_base = menu_page_url('kkchat_reports', false);
