@@ -200,10 +200,8 @@ function kkchat_admin_reports_page() {
   $rows = $wpdb->get_results($wpdb->prepare($rowsQuery, ...$rowsParams));
 
   $pages = max(1, (int)ceil($total / $per));
-  $reports_base = menu_page_url('kkchat_reports', false);
-  if (!$reports_base) {
-    $reports_base = admin_url('admin.php?page=kkchat_reports');
-  }
+  $reports_base = admin_url('admin.php?page=kkchat_reports');
+  $reports_action = admin_url('admin.php');
 
   $blockedMap = [];
   if ($rows) {
@@ -237,7 +235,7 @@ function kkchat_admin_reports_page() {
       <div class="notice notice-warning inline"><p><?php esc_html_e('Sökningen kunde inte köras eftersom kolumninformationen saknas. Kontakta support eller uppdatera databasschemat.', 'kkchat'); ?></p></div>
     <?php endif; ?>
 
-    <form method="get" action="<?php echo esc_url($reports_base); ?>" style="background:#fff;border:1px solid #eee;padding:10px;border-radius:8px;margin:12px 0">
+    <form method="get" action="<?php echo esc_url($reports_action); ?>" style="background:#fff;border:1px solid #eee;padding:10px;border-radius:8px;margin:12px 0">
       <input type="hidden" name="page" value="kkchat_reports">
       <table class="form-table">
         <tr>
