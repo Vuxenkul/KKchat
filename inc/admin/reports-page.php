@@ -7,6 +7,10 @@ function kkchat_admin_reports_page() {
   $nonce = 'kkchat_reports';
   $auto_threshold   = kkchat_report_autoban_threshold();
   $auto_window_days = kkchat_report_autoban_window_days();
+  if (!kkchat_table_exists($t['reports'])) {
+    echo '<div class="notice notice-error"><p>'.esc_html__('Rapport-tabellen saknas. Kör uppdateringen för att skapa databastabellerna.', 'kkchat').'</p></div>';
+    return;
+  }
 
   $build_block_map = static function(array $ips) use ($wpdb, $t) {
     $blockedMap = [];
@@ -149,9 +153,11 @@ function kkchat_admin_reports_page() {
   $offset = ($page - 1) * $per;
 
   $searchableColumns = [];
+  $searchColumnsKnown = false;
   $availableColumns = $wpdb->get_col("SHOW COLUMNS FROM {$t['reports']}");
   if ($availableColumns) {
     $availableColumns = array_fill_keys($availableColumns, true);
+    $searchColumnsKnown = true;
   } else {
     $availableColumns = [];
   }
@@ -161,8 +167,13 @@ function kkchat_admin_reports_page() {
       $searchableColumns[] = $column;
     }
   }
+  $searchWarning = false;
   if (!$searchableColumns) {
-    $searchableColumns = ['reporter_name', 'reported_name', 'reason'];
+    if ($searchColumnsKnown) {
+      $searchableColumns = ['reporter_name', 'reported_name', 'reason'];
+    } else {
+      $searchWarning = $q !== '';
+    }
   }
 
   $where = []; $params = [];
@@ -219,6 +230,9 @@ function kkchat_admin_reports_page() {
         <?php esc_html_e('Automatiskt IP-ban via rapporter är avstängt (tröskeln eller fönstret är 0).', 'kkchat'); ?>
       <?php endif; ?>
     </p>
+    <?php if ($searchWarning): ?>
+      <div class="notice notice-warning inline"><p><?php esc_html_e('Sökningen kunde inte köras eftersom kolumninformationen saknas. Kontakta support eller uppdatera databasschemat.', 'kkchat'); ?></p></div>
+    <?php endif; ?>
 
     <form method="get" action="<?php echo esc_url($reports_base); ?>" style="background:#fff;border:1px solid #eee;padding:10px;border-radius:8px;margin:12px 0">
       <table class="form-table">
