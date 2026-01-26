@@ -282,7 +282,7 @@
       <div id="kk-reportReasons" class="kk-report-reasons"></div>
       <label class="kk-report-other">
         <span>Annat (fritext)</span>
-        <textarea id="kk-reportOther" rows="3" placeholder="Beskriv vad som hänt" hidden disabled></textarea>
+        <textarea id="kk-reportOther" rows="3" placeholder="Beskriv vad som hänt (valfritt)"></textarea>
       </label>
     </div>
     <div class="kk-report-section" id="kk-reportContextBlock">
@@ -4259,24 +4259,22 @@ function buildReportReasons(selectedKey = null){
   const items = options
     .filter(r => r && r.key && r.label)
     .map(r => ({ key: String(r.key), label: String(r.label) }));
-  const fallbackKey = items.length ? items[0].key : 'other';
-  const resolvedKey = selectedKey && items.some(i => i.key === selectedKey) ? selectedKey : fallbackKey;
+  const resolvedKey = selectedKey && items.some(i => i.key === selectedKey) ? selectedKey : 'other';
   const radioName = 'kk-report-reason';
   const html = items.map((r, idx) => {
-    const checked = resolvedKey === r.key || (!selectedKey && idx === 0);
+    const checked = resolvedKey === r.key;
     return `<label><input type="radio" name="${radioName}" value="${escAttr(r.key)}"${checked ? ' checked' : ''}> ${esc(r.label)}</label>`;
   }).concat([
-    `<label><input type="radio" name="${radioName}" value="other"${items.length === 0 ? ' checked' : ''}> Annat</label>`
+    `<label><input type="radio" name="${radioName}" value="other"${resolvedKey === 'other' ? ' checked' : ''}> Annat</label>`
   ]);
   reportReasons.innerHTML = html.join('');
-  toggleReportOther(resolvedKey === 'other' || (items.length === 0 && !selectedKey));
+  toggleReportOther();
 }
 
-function toggleReportOther(isOther){
+function toggleReportOther(){
   if (!reportOther) return;
-  reportOther.disabled = !isOther;
-  reportOther.toggleAttribute('hidden', !isOther);
-  if (!isOther) reportOther.value = '';
+  reportOther.disabled = false;
+  reportOther.removeAttribute('hidden');
 }
 
 function setReportContextUI(){
@@ -4337,8 +4335,8 @@ function closeReportModal(){
   reportForm.reset();
   if (reportOther) {
     reportOther.value = '';
-    reportOther.disabled = true;
-    reportOther.setAttribute('hidden', '');
+    reportOther.disabled = false;
+    reportOther.removeAttribute('hidden');
   }
   if (reportMessagePreview) {
     reportMessagePreview.textContent = '';
@@ -4351,7 +4349,7 @@ reportReasons?.addEventListener('change', (e) => {
   const input = e.target;
   if (!(input instanceof HTMLInputElement)) return;
   if (input.name !== 'kk-report-reason') return;
-  toggleReportOther(input.value === 'other');
+  toggleReportOther();
 });
 
 reportCancel?.addEventListener('click', (e) => {
@@ -4388,7 +4386,7 @@ reportForm?.addEventListener('submit', async (e) => {
   fd.append('csrf_token', CSRF);
   fd.append('reported_id', String(REPORT_TARGET.reportedId || ''));
   fd.append('reason_key', reasonKey);
-  if (reasonKey === 'other') {
+  if (reasonText) {
     fd.append('reason', reasonText);
   }
   if (REPORT_TARGET.messageId) {
