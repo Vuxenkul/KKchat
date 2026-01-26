@@ -6955,10 +6955,14 @@ async function refreshUsersAndUnread(){
 async function init(){
   await multiTabReady;
   try{
-    await Promise.all([
+    const bootstrapPromise = Promise.all([
       refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); }),
       loadRooms().catch(e => { console.warn('loadRooms failed', e); })
-    ]);
+    ]).then(() => {
+      renderDMSidebar();
+      renderRoomTabs();
+      updateLeftCounts();
+    }).catch(() => {});
     renderDMSidebar();
     renderRoomTabs();
     const unreadPromise = refreshUsersAndUnread()
@@ -6974,6 +6978,7 @@ async function init(){
       await syncPromise;
     }
     await unreadPromise;
+    await bootstrapPromise;
   } catch (e) {
     // optionally log e
   }
