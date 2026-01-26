@@ -148,6 +148,8 @@ a#kk-imgOpen {
   padding: 18px;
   width: min(520px, 100%);
   box-shadow: 0 18px 48px rgba(0,0,0,0.35);
+  max-height: min(90vh, 720px);
+  overflow-y: auto;
 }
 #kkchat-root .kk-report-desc {
   margin: 6px 0 12px;
