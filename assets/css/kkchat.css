@@ -261,6 +261,73 @@ a#kk-imgOpen {
   font-size:18px;
 }
 #kkchat-root .kk-explicit-actions .iconbtn.primary:hover { filter: brightness(0.98); }
+
+#kkchat-root .kk-verify-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 1100;
+  padding: 16px;
+}
+#kkchat-root .kk-verify-modal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#kkchat-root .kk-verify-box {
+  background: linear-gradient(135deg, rgba(40,43,58,0.92) 0%, rgba(13,17,27,0.92) 100%);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 16px;
+  color: #fff;
+  padding: 18px;
+  width: min(560px, 100%);
+  max-height: min(80vh, 720px);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 18px 48px rgba(0,0,0,0.35);
+}
+#kkchat-root .kk-verify-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+#kkchat-root .kk-verify-body {
+  overflow-y: auto;
+  padding-right: 6px;
+  display: grid;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+#kkchat-root .kk-verify-image {
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.15);
+}
+#kkchat-root .kk-verify-body ul {
+  padding-left: 18px;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+#kkchat-root .kk-verify-note {
+  margin: 0;
+  color: #cdd0ff;
+}
+#kkchat-root .kk-verify-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+#kkchat-root .kk-verify-actions .iconbtn.primary {
+  background: #e35754;
+  color: #fff;
+}
+#kkchat-root .kk-verify-actions .iconbtn.primary:hover { filter: brightness(0.98); }
 #kkchat-root .kk-recent-modal {
   display: none;
   position: fixed;

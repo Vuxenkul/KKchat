@@ -315,6 +315,37 @@
   </form>
 </div>
 
+<!-- Verification upload modal -->
+<div id="kk-verifyUploadModal" class="kk-verify-modal" role="dialog" aria-modal="true" aria-labelledby="kk-verifyTitle">
+  <div class="kk-verify-box">
+    <div class="kk-verify-head">
+      <strong id="kk-verifyTitle">Så tar du verifieringsbilden</strong>
+      <button type="button" class="iconbtn" id="kk-verifyClose">Stäng</button>
+    </div>
+    <div class="kk-verify-body">
+      <img
+        class="kk-verify-image"
+        src="https://via.placeholder.com/800x500?text=Verifieringsbild+exempel"
+        alt="Exempel på hur verifieringsbilden ska tas"
+        loading="lazy"
+        decoding="async"
+      >
+      <p>Följ stegen nedan så att vi kan godkänna din verifiering direkt.</p>
+      <ul>
+        <li>Ha bra ljus och undvik motljus.</li>
+        <li>Visa hela ansiktet, inga filter eller solglasögon.</li>
+        <li>Håll en lapp med ditt användarnamn och dagens datum.</li>
+        <li>Se till att texten är skarp och läsbar.</li>
+      </ul>
+      <p class="kk-verify-note">Bilden måste vara ny och tydlig för att godkännas.</p>
+    </div>
+    <div class="kk-verify-actions">
+      <button type="button" class="iconbtn" id="kk-verifyCancel">Avbryt</button>
+      <button type="button" class="iconbtn primary" id="kk-verifyContinue">Fortsätt till uppladdning</button>
+    </div>
+  </div>
+</div>
+
 <!-- Recent uploads modal -->
 <div id="kk-recentUploadModal" class="kk-recent-modal" role="dialog" aria-modal="true" aria-labelledby="kk-recentUploadTitle">
   <div class="kk-recent-box">
@@ -661,6 +692,11 @@ const camFlip   = document.getElementById('kk-camFlip');
   const explicitCancel  = document.getElementById('kk-explicitCancel');
   const explicitConfirm = document.getElementById('kk-explicitConfirm');
   let explicitResolver  = null;
+
+  const verifyUploadModal = document.getElementById('kk-verifyUploadModal');
+  const verifyUploadClose = document.getElementById('kk-verifyClose');
+  const verifyUploadCancel = document.getElementById('kk-verifyCancel');
+  const verifyUploadContinue = document.getElementById('kk-verifyContinue');
 
   const recentUploadModal = document.getElementById('kk-recentUploadModal');
   const recentUploadGrid  = document.getElementById('kk-recentUploadGrid');
@@ -5821,6 +5857,26 @@ function closeRecentUploadModal(){
   if (recentUploadModal) recentUploadModal.removeAttribute('open');
 }
 
+function closeVerifyUploadModal(){
+  if (verifyUploadModal) verifyUploadModal.removeAttribute('open');
+}
+
+function openVerifyUploadModal(){
+  if (!verifyUploadModal) return;
+  closeAttachmentMenu();
+  verifyUploadModal.setAttribute('open', '');
+  requestAnimationFrame(()=>{ verifyUploadContinue?.focus(); });
+}
+
+function startImageUploadFlow(){
+  closeAttachmentMenu();
+  if (hasRecentUploads()) {
+    openRecentUploadModal();
+  } else {
+    pubImgInp?.click();
+  }
+}
+
 function renderRecentUploads(){
   if (!recentUploadGrid) return;
   const uploads = loadRecentUploads();
@@ -5894,6 +5950,19 @@ recentUploadGrid?.addEventListener('click', async (e)=>{
     showToast('Bild skickad');
     clearComposerReply();
   }
+});
+
+verifyUploadClose?.addEventListener('click', closeVerifyUploadModal);
+verifyUploadCancel?.addEventListener('click', closeVerifyUploadModal);
+verifyUploadContinue?.addEventListener('click', ()=>{
+  closeVerifyUploadModal();
+  startImageUploadFlow();
+});
+verifyUploadModal?.addEventListener('click', (e)=>{
+  if (e.target === verifyUploadModal) closeVerifyUploadModal();
+});
+document.addEventListener('keydown', (e)=>{
+  if (e.key === 'Escape' && verifyUploadModal?.hasAttribute('open')) closeVerifyUploadModal();
 });
 
 
@@ -6371,11 +6440,10 @@ async function uploadImage(file){
 
 // Upload picker
 pubUpBtn?.addEventListener('click', () => {
-  closeAttachmentMenu();
-  if (hasRecentUploads()) {
-    openRecentUploadModal();
+  if (verifyUploadModal) {
+    openVerifyUploadModal();
   } else {
-    pubImgInp?.click();
+    startImageUploadFlow();
   }
 });
 
