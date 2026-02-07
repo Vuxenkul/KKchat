@@ -5272,13 +5272,14 @@ function handleStreamSync(js, context){
   if (context.kind === 'room') {
     const payload = Array.isArray(js?.messages) ? js.messages : [];
     const items   = isCold ? applyFirstLoadLimit(payload) : payload;
+    const hasNew  = didAppendNew(items, prevLast);
 
     renderList(pubList, items, renderOpts);
     markVisible(pubList);
     watchNewImages(pubList);
     updateReceipts(pubList, items, /*isDM=*/false);
 
-    if (items.length && (AUTO_SCROLL || wasAtBottom)) {
+    if (items.length && hasNew && (AUTO_SCROLL || wasAtBottom)) {
       scrollToBottom(pubList, false);
     }
 
@@ -5320,13 +5321,14 @@ function handleStreamSync(js, context){
       sender_id: Number(m.sender_id),
       recipient_id: m.recipient_id == null ? null : Number(m.recipient_id)
     }));
+    const hasNew = didAppendNew(items, prevLast);
 
     renderList(pubList, items, renderOpts);
     markVisible(pubList);
     watchNewImages(pubList);
     updateReceipts(pubList, items, /*isDM=*/true);
 
-    if (items.length && (AUTO_SCROLL || wasAtBottom)) {
+    if (items.length && hasNew && (AUTO_SCROLL || wasAtBottom)) {
       scrollToBottom(pubList, false);
     }
 
