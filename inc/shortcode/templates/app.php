@@ -2843,7 +2843,7 @@ function watchNewImages(container){
     img.dataset.watch = '1';
     if (IMG_BLUR && img.dataset.explicit === '1') img.removeAttribute('data-unblurred');
     img.addEventListener('load', ()=>{
-      if (AUTO_SCROLL || atBottom(container)) scrollToBottom(container, false);
+      if (atBottom(container)) scrollToBottom(container, false);
     }, { once: true });
   });
 }
