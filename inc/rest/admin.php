@@ -51,7 +51,32 @@ register_rest_route($ns, '/admin/user-messages', [
 
     $rows = $wpdb->get_results($wpdb->prepare($sql, ...array_merge($params, [$limit])), ARRAY_A) ?: [];
 
-    $out = array_map(function($m){
+    $watch_rules = array_values(array_filter(kkchat_rules_active(), function ($rule) {
+      return isset($rule['kind']) && $rule['kind'] === 'watch';
+    }));
+
+    $out = array_map(function($m) use ($watch_rules){
+      $watch_words = [];
+      $kind = $m['kind'] ?: 'chat';
+      if ($watch_rules && $kind === 'chat') {
+        $text = (string) ($m['content'] ?? '');
+        if ($text !== '') {
+          foreach ($watch_rules as $rule) {
+            if (!kkchat_rule_matches($rule, $text)) {
+              continue;
+            }
+            $word = trim((string) ($rule['word'] ?? ''));
+            if ($word === '') {
+              continue;
+            }
+            $watch_words[] = $word;
+            if (count($watch_words) >= 3) {
+              break;
+            }
+          }
+        }
+      }
+
       return [
         'id'             => (int)$m['id'],
         'time'           => (int)$m['created_at'],
@@ -69,6 +94,8 @@ register_rest_route($ns, '/admin/user-messages', [
         'reply_to_sender_id'   => isset($m['reply_to_sender_id']) ? (int)$m['reply_to_sender_id'] : null,
         'reply_to_sender_name' => $m['reply_to_sender_name'] ?: null,
         'reply_to_excerpt'     => $m['reply_to_excerpt'] ?: null,
+        'watch_hit'      => !empty($watch_words),
+        'watch_words'    => $watch_words,
       ];
     }, $rows);
 
