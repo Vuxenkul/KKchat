@@ -235,6 +235,8 @@ $sql2 = "CREATE TABLE IF NOT EXISTS `{$t['reads']}` (
   if (get_option('kkchat_admin_users') === false) {
     add_option('kkchat_admin_users', "");
   }
+
+  kkchat_maybe_upgrade_schema();
 }
 
 function kkchat_table_exists($table){
@@ -718,10 +720,8 @@ function kkchat_banner_next_run_window(array $row, int $after, int $interval): ?
 }
 
 /**
- * Runtime schema check / upgrades after updates (always runs)
+ * Runtime schema check / upgrades after updates (runs on activation)
  */
-add_action('plugins_loaded', 'kkchat_maybe_upgrade_schema');
-add_action('plugins_loaded', 'kkchat_maybe_upgrade_schema');
 function kkchat_maybe_upgrade_schema() {
   global $wpdb; $t = kkchat_tables();
   require_once ABSPATH . 'wp-admin/includes/upgrade.php';
