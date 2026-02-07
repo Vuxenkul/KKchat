@@ -3550,6 +3550,12 @@ function userRow(u){
         aria-label="${isHidden ? 'Visa mig i användarlistan' : 'Göm mig i användarlistan'}">${iconMarkup(isHidden ? 'visibility_off' : 'visibility')}</button>`
     : '';
 
+  const isGuestName = /-guest$/i.test(String(u.name || '').trim());
+  const profileBtn = !isGuestName
+    ? `<a class="openbtn profilebtn" href="https://kkompis.se/din-profil/${encodeURIComponent(String(u.name || '').trim())}/"
+        title="Visa profil" aria-label="Visa profil för ${esc(u.name || '')}" target="_blank" rel="noopener noreferrer">${iconMarkup('person')}</a>`
+    : '';
+
   const logoutSelfBtn = isMe
     ? `<button class="logoutbtn" data-logout="1" title="Logga ut" aria-label="Logga ut">Logga ut<b>${iconMarkup('logout')}</b></button>`
     : '';
@@ -3568,7 +3574,7 @@ function userRow(u){
           <div class="small">${esc(u.gender || '')}</div>
         </div>
       </div>
-      <div class="user-actions">${badge}${dmBtn}${blockBtn}${reportBtn}${modBtns}${incogBtn}${logoutSelfBtn}</div>
+      <div class="user-actions">${badge}${profileBtn}${dmBtn}${blockBtn}${reportBtn}${modBtns}${incogBtn}${logoutSelfBtn}</div>
       ${lastMessageLine(u)}
     </div>`;
 
