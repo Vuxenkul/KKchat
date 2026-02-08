@@ -54,14 +54,7 @@ body {
 
 #kkchat-root {
   --kk-ui-scale: 1;
-  zoom: var(--kk-ui-scale);
-}
-
-@supports not (zoom: 1) {
-  #kkchat-root {
-    transform: scale(var(--kk-ui-scale));
-    transform-origin: top left;
-  }
+  font-size: calc(16px * var(--kk-ui-scale));
 }
 
 #kkchat-root .imgfoot.flex .btns #kk-img-act-dm,
