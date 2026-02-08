@@ -2012,13 +2012,13 @@ html, body { margin: 0; height: 100%; }
   border-bottom: 1px solid rgba(122, 136, 196, 0.16);
 }
 #kkchat-root .loggroup-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 20px;
-  background: rgba(18, 22, 34, 0.65);
-  border-bottom: 1px solid rgba(122, 136, 196, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 12px 20px;
+    background: linear-gradient(135deg, rgb(227 87 84 / 51%) 0%, rgb(161 49 52 / 0%) 100%);
+    border-bottom: 1px solid rgba(122, 136, 196, 0.2);
 }
 #kkchat-root .loggroup-toggle {
   all: unset;
@@ -2316,4 +2316,5 @@ body.kkchat-no-scroll { overflow: hidden; }
     color: #e35754;
 }
 #kkchat-root .kk-agree { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
+
 #kkchat-root .kk-agree input { width: auto; min-width: 30px; }
