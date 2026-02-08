@@ -6560,6 +6560,7 @@ jumpBtn.addEventListener('click', ()=>{
   let LOG_USER_ID = null;
   let LOG_BEFORE  = 0;
   let LOG_BUSY    = false;
+  let LOG_GROUPS  = new Map();
 
   const logPanel = document.getElementById('kk-logPanel');
   const logUser  = document.getElementById('kk-logUser');
@@ -6571,6 +6572,7 @@ jumpBtn.addEventListener('click', ()=>{
     if (!IS_ADMIN) return;
     LOG_USER_ID = uid;
     LOG_BEFORE  = 0;
+    LOG_GROUPS = new Map();
     logList.innerHTML = '';
     logUser.textContent = nameById(uid);
     logPanel?.setAttribute('open','');
@@ -6681,12 +6683,66 @@ jumpBtn.addEventListener('click', ()=>{
     if (m.recipient_id) return 'DM';
     return m.room ? `#${esc(m.room)}` : '—';
   }
- function renderLogRows(rows){
-  const frag = document.createDocumentFragment();
+  function getLogGroupMeta(m){
+    if (m.recipient_id) {
+      const isSender = Number(m.sender_id) === Number(LOG_USER_ID);
+      const otherId = isSender ? m.recipient_id : m.sender_id;
+      const otherName = isSender
+        ? (m.recipient_name || `#${m.recipient_id}`)
+        : (m.sender_name || `#${m.sender_id}`);
+      const label = `DM: ${otherName}`;
+      return { key: `dm-${otherId || otherName}`, label };
+    }
+    const roomLabel = m.room ? `#${m.room}` : '#public';
+    return { key: `room-${m.room || 'public'}`, label: `Lobby: ${roomLabel}` };
+  }
 
+  function ensureLogGroup(meta){
+    if (LOG_GROUPS.has(meta.key)) {
+      return LOG_GROUPS.get(meta.key);
+    }
+
+    const groupEl = document.createElement('li');
+    groupEl.className = 'loggroup';
+    groupEl.dataset.groupKey = meta.key;
+
+    const head = document.createElement('div');
+    head.className = 'loggroup-head';
+    head.innerHTML = `
+      <span class="loggroup-title">${esc(meta.label)}</span>
+      <span class="loggroup-badges"></span>
+    `;
+
+    const list = document.createElement('ul');
+    list.className = 'loggroup-list';
+
+    groupEl.appendChild(head);
+    groupEl.appendChild(list);
+    logList.appendChild(groupEl);
+
+    const groupData = { el: groupEl, head, list, hasWatch: false };
+    LOG_GROUPS.set(meta.key, groupData);
+    return groupData;
+  }
+
+  function updateGroupWatchBadge(groupData){
+    if (!groupData || !groupData.head) return;
+    const badgeWrap = groupData.head.querySelector('.loggroup-badges');
+    if (!badgeWrap) return;
+    badgeWrap.innerHTML = groupData.hasWatch
+      ? `<span class="badge badge-watch">Bevakning</span>`
+      : '';
+    groupData.el.classList.toggle('loggroup--watch', groupData.hasWatch);
+  }
+
+ function renderLogRows(rows){
   rows.forEach(m => {
+    const meta = getLogGroupMeta(m);
+    const groupData = ensureLogGroup(meta);
+
     const li = document.createElement('li');
-    li.className = 'logitem' + (m.hidden ? ' hidden' : '');
+    const watchHit = !!m.watch_hit;
+    li.className = 'logitem' + (m.hidden ? ' hidden' : '') + (watchHit ? ' logitem--watch' : '');
     if (m.id) li.dataset.id = String(m.id);
 
     const left = document.createElement('div');
@@ -6703,6 +6759,10 @@ jumpBtn.addEventListener('click', ()=>{
       ? `<img class="imgmsg" src="${escAttr(String(m.content || ''))}" alt="Bild" style="max-width:220px;max-height:160px;border:1px solid #e5e7eb;border-radius:8px;cursor:zoom-in">`
       : `<div style="white-space:pre-wrap">${esc(String(m.content || ''))}</div>`;
 
+    const watchLabel = (Array.isArray(m.watch_words) && m.watch_words.length)
+      ? `<span class="badge badge-watch" title="Bevakningsord: ${escAttr(m.watch_words.join(', '))}">Bevakning</span>`
+      : '';
+
     const headMeta =
       `<div class="meta">
          <b>${esc(m.sender_name||'')}</b>
@@ -6711,6 +6771,7 @@ jumpBtn.addEventListener('click', ()=>{
          ${m.recipient_id
             ? `<b>${esc(m.recipient_name||('#'+m.recipient_id))}</b> <small>(${esc(m.recipient_ip||'')})</small>`
             : `<code>${esc(m.room||'public')}</code>`}
+         ${watchLabel}
        </div>`;
 
     const isAdmin = (typeof IS_ADMIN !== 'undefined' && IS_ADMIN);
@@ -6740,10 +6801,13 @@ jumpBtn.addEventListener('click', ()=>{
 
     li.appendChild(left);
     li.appendChild(right);
-    frag.appendChild(li);
-  });
+    groupData.list.appendChild(li);
 
-  logList.appendChild(frag);
+    if (watchHit && !groupData.hasWatch) {
+      groupData.hasWatch = true;
+      updateGroupWatchBadge(groupData);
+    }
+  });
 }
 
 logList?.addEventListener('click', async (e) => {
