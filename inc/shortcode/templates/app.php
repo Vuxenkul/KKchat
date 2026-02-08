@@ -1832,9 +1832,29 @@ function playNotifOnce() {
 
     const BLUR_KEY = 'kk_blur_images';
     const BLUR_PROMPT_NO_KEY = 'kk_blur_prompt_no_at';
+    const FONT_SCALE_KEY = 'kk_font_scale';
+    const FONT_SCALE_MIN = 0.85;
+    const FONT_SCALE_MAX = 1.25;
     let IMG_BLUR = (localStorage.getItem(BLUR_KEY) || '1') === '1';
+    let FONT_SCALE = Number(localStorage.getItem(FONT_SCALE_KEY) || '1');
     let SETTINGS_OPEN = false;
     let ADMIN_MENU_OPEN = false;
+
+    function clamp(value, min, max){
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function applyFontScale(){
+      if (!root) return;
+      root.style.setProperty('--kk-ui-scale', FONT_SCALE.toFixed(2));
+    }
+
+    function setFontScale(value){
+      const next = clamp(Number(value) || 1, FONT_SCALE_MIN, FONT_SCALE_MAX);
+      FONT_SCALE = next;
+      localStorage.setItem(FONT_SCALE_KEY, String(next));
+      applyFontScale();
+    }
 
     function resetInlineImageBlur(){
       document.querySelectorAll('img.imgmsg').forEach(img => img.removeAttribute('data-unblurred'));
@@ -1869,6 +1889,8 @@ function playNotifOnce() {
     }
     if (IMG_BLUR) resetInlineImageBlur();
     applyBlurClass();
+    FONT_SCALE = clamp(FONT_SCALE || 1, FONT_SCALE_MIN, FONT_SCALE_MAX);
+    applyFontScale();
 
   const ROOM_CACHE = new Map();          
   const AUTO_OPEN_DM_ON_NEW = false; 
@@ -4704,6 +4726,7 @@ function renderRoomTabs(){
   const blurLabel = IMG_BLUR
     ? `${iconMarkup('visibility')} Visa XXX-bilder`
     : `${iconMarkup('visibility_off')} Dölj XXX-bilder`;
+  const fontScaleLabel = `${Math.round(FONT_SCALE * 100)}%`;
 
   const allMuted = allChatsMuted();
   const allMuteLabel = allMuted
@@ -4746,6 +4769,12 @@ function renderRoomTabs(){
         <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-new="1" role="menuitem">${muteNewChatsLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-all="1" role="menuitem">${allMuteLabel}</button>
+        <div class="tab-settings-item tab-settings-slider" role="menuitem">
+          <span>Textstorlek</span>
+          <input type="range" min="${FONT_SCALE_MIN}" max="${FONT_SCALE_MAX}" step="0.05"
+                 value="${FONT_SCALE}" data-settings-fontscale="1" aria-label="Textstorlek">
+          <span class="tab-settings-slider-value" data-settings-fontscale-value>${fontScaleLabel}</span>
+        </div>
         <button type="button" class="tab-settings-item" data-settings-logout="1" role="menuitem">${iconMarkup('logout')} Logga ut</button>
       </div>
     </div>
@@ -4955,6 +4984,16 @@ roomTabs.addEventListener('click', async e => {
     await snapshotPromise.catch(()=>{});
   }
   await syncPromise;
+});
+
+roomTabs.addEventListener('input', e => {
+  const fontScaleInput = e.target.closest('[data-settings-fontscale]');
+  if (!fontScaleInput) return;
+  e.stopPropagation();
+  setFontScale(fontScaleInput.value);
+  const wrapper = fontScaleInput.closest('.tab-settings-slider');
+  const value = wrapper?.querySelector('[data-settings-fontscale-value]');
+  if (value) value.textContent = `${Math.round(FONT_SCALE * 100)}%`;
 });
 
 document.addEventListener('click', e => {

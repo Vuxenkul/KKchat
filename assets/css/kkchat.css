@@ -52,6 +52,18 @@ body {
   font-family: "Lexend", system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+#kkchat-root {
+  --kk-ui-scale: 1;
+  zoom: var(--kk-ui-scale);
+}
+
+@supports not (zoom: 1) {
+  #kkchat-root {
+    transform: scale(var(--kk-ui-scale));
+    transform-origin: top left;
+  }
+}
+
 #kkchat-root .imgfoot.flex .btns #kk-img-act-dm,
 #kkchat-root .imgfoot.flex .btns #kk-img-act-report,
 #kkchat-root .imgfoot.flex .btns #kk-img-act-block,
@@ -791,6 +803,21 @@ html, body { margin: 0; height: 100%; }
   border-color: rgba(120, 128, 149, 0.5);
   outline: none;
   transform: translateY(-1px);
+}
+#kkchat-root .tab-settings-item.tab-settings-slider {
+  cursor: default;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+}
+#kkchat-root .tab-settings-item.tab-settings-slider input[type="range"] {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+#kkchat-root .tab-settings-slider-value {
+  font-weight: 700;
+  color: var(--ink-soft);
 }
 #kkchat-root .tabs {
      position: relative;
