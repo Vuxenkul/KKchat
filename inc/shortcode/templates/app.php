@@ -6765,7 +6765,11 @@ jumpBtn.addEventListener('click', ()=>{
 
     const li = document.createElement('li');
     const watchHit = !!m.watch_hit;
-    li.className = 'logitem' + (m.hidden ? ' hidden' : '') + (watchHit ? ' logitem--watch' : '');
+    const isWatchedSender = LOG_USER_ID && Number(m.sender_id) === Number(LOG_USER_ID);
+    const isWatchedRecipient = LOG_USER_ID && Number(m.recipient_id) === Number(LOG_USER_ID);
+    li.className = 'logitem' + (m.hidden ? ' hidden' : '') + (watchHit ? ' logitem--watch' : '') +
+      (isWatchedSender ? ' logitem--watched-sent' : '') +
+      (isWatchedRecipient ? ' logitem--watched-received' : '');
     if (m.id) li.dataset.id = String(m.id);
 
     const left = document.createElement('div');
@@ -6777,10 +6781,14 @@ jumpBtn.addEventListener('click', ()=>{
        <div>ID: ${m.id || '-'}</div>`;
 
     const right = document.createElement('div');
+    right.className = 'logitem-content';
 
+    const bubbleClass = isWatchedRecipient
+      ? 'log-bubble log-bubble--received'
+      : (isWatchedSender ? 'log-bubble log-bubble--sent' : 'log-bubble');
     const contentHTML = (m.kind||'chat') === 'image'
-      ? `<img class="imgmsg" src="${escAttr(String(m.content || ''))}" alt="Bild" style="max-width:220px;max-height:160px;border:1px solid #e5e7eb;border-radius:8px;cursor:zoom-in">`
-      : `<div style="white-space:pre-wrap">${esc(String(m.content || ''))}</div>`;
+      ? `<div class="logitem-message"><div class="${bubbleClass}"><img class="imgmsg" src="${escAttr(String(m.content || ''))}" alt="Bild"></div></div>`
+      : `<div class="logitem-message"><div class="${bubbleClass}"><div class="log-bubble-text">${esc(String(m.content || ''))}</div></div></div>`;
 
     const watchLabel = (Array.isArray(m.watch_words) && m.watch_words.length)
       ? `<span class="badge badge-watch" title="Bevakningsord: ${escAttr(m.watch_words.join(', '))}">Bevakning</span>`
