@@ -6607,6 +6607,7 @@ jumpBtn.addEventListener('click', ()=>{
       const id  = Number(r.id||0);
       const rep = `${String(r.reporter_name||'')} (${Number(r.reporter_id||0)})`;
       const tgt = `${String(r.reported_name||'')} (${Number(r.reported_id||0)})`;
+      const reportedId = Number(r.reported_id || 0);
       const reasonLabel = String(r.reason_label||'').trim();
       const reason = String(r.reason||'').trim();
       const contextLabel = String(r.context_label||'').trim();
@@ -6615,18 +6616,40 @@ jumpBtn.addEventListener('click', ()=>{
       const messageKind = String(r.message_kind || '').toLowerCase();
       const messageText = messageKind === 'image' ? '[Bild]' : messageExcerpt;
       return `
-        <div class="user report" data-id="${id}">
-          <div class="user-main">
-            <b>#${id} • ${fmtWhen(ts)}</b>
-            <div class="small">Reporter: ${esc(rep)} → Reported: ${esc(tgt)}</div>
-            ${reasonLabel ? `<div class="small"><strong>${esc(reasonLabel)}</strong></div>` : ''}
-            ${reason ? `<div class="small">${esc(reason)}</div>` : ''}
-            ${contextLabel ? `<div class="small">Källa: ${esc(contextLabel)}</div>` : ''}
-            ${(messageText || messageId) ? `<div class="small">Meddelande #${messageId || '—'}: ${esc(messageText || '—')}</div>` : ''}
+        <div class="user report kk-report-card" data-id="${id}">
+          <div class="report-header">
+            <div>
+              <div class="report-title">Rapport #${id}</div>
+              <div class="report-time">${fmtWhen(ts)}</div>
+            </div>
+            ${reasonLabel ? `<div class="report-chip">${esc(reasonLabel)}</div>` : ''}
           </div>
-          <div class="user-actions">
-            <button class="modbtn" data-resolve="${id}" title="Resolve" aria-label="Markera som löst">${iconMarkup('task_alt')}</button>
-            <button class="modbtn" data-delete="${id}"  title="Delete" aria-label="Ta bort rapport">${iconMarkup('delete')}</button>
+          <div class="report-grid">
+            <div class="report-block">
+              <div class="report-label">Reporter</div>
+              <div class="report-value">${esc(rep)}</div>
+            </div>
+            <div class="report-block">
+              <div class="report-label">Rapporterad</div>
+              <div class="report-value">${esc(tgt)}</div>
+            </div>
+            ${reason ? `<div class="report-block report-block--full">
+              <div class="report-label">Anledning</div>
+              <div class="report-value">${esc(reason)}</div>
+            </div>` : ''}
+            ${contextLabel ? `<div class="report-block">
+              <div class="report-label">Källa</div>
+              <div class="report-value">${esc(contextLabel)}</div>
+            </div>` : ''}
+            ${(messageText || messageId) ? `<div class="report-block report-block--full">
+              <div class="report-label">Meddelande #${messageId || '—'}</div>
+              <div class="report-value">${esc(messageText || '—')}</div>
+            </div>` : ''}
+          </div>
+          <div class="report-actions">
+            ${reportedId ? `<button class="report-action" data-log="${reportedId}" title="Visa logg" aria-label="Visa logg för användaren">${iconMarkup('history')}<span>Visa logg</span></button>` : ''}
+            <button class="report-action" data-resolve="${id}" title="Markera som löst" aria-label="Markera som löst">${iconMarkup('task_alt')}<span>Lös</span></button>
+            <button class="report-action" data-delete="${id}" title="Ta bort rapport" aria-label="Ta bort rapport">${iconMarkup('delete')}<span>Ta bort</span></button>
           </div>
         </div>`;
     }).join('');
@@ -6644,6 +6667,12 @@ jumpBtn.addEventListener('click', ()=>{
   reportRefreshBtn?.addEventListener('click', ()=>{ loadReports().catch(()=>{}); });
 
   reportListEl?.addEventListener('click', async (e)=>{
+    const logBtn = e.target.closest('[data-log]');
+    if (logBtn && IS_ADMIN) {
+      openLogs(+logBtn.dataset.log);
+      return;
+    }
+
     const res = e.target.closest('[data-resolve]');
     if (res){
       const id = Number(res.getAttribute('data-resolve'));
