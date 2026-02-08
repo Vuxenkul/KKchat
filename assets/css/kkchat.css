@@ -2316,5 +2316,4 @@ body.kkchat-no-scroll { overflow: hidden; }
     color: #e35754;
 }
 #kkchat-root .kk-agree { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
-
 #kkchat-root .kk-agree input { width: auto; min-width: 30px; }
