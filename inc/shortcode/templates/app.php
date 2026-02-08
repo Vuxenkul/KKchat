@@ -6615,41 +6615,67 @@ jumpBtn.addEventListener('click', ()=>{
       const messageId = Number(r.message_id || 0);
       const messageKind = String(r.message_kind || '').toLowerCase();
       const messageText = messageKind === 'image' ? '[Bild]' : messageExcerpt;
+      const compactReason = reasonLabel && reason ? `${reasonLabel}: ${reason}` : (reasonLabel || reason);
       return `
-        <div class="user report kk-report-card" data-id="${id}">
-          <div class="report-header">
-            <div>
-              <div class="report-title">Rapport #${id}</div>
-              <div class="report-time">${fmtWhen(ts)}</div>
+        <div class="user report kk-report-item" data-id="${id}">
+          <div class="report-compact">
+            <div class="report-compact-row">
+              <span class="report-compact-label">Tid</span>
+              <span class="report-compact-value">${fmtWhen(ts)}</span>
             </div>
-            ${reasonLabel ? `<div class="report-chip">${esc(reasonLabel)}</div>` : ''}
+            <div class="report-compact-row">
+              <span class="report-compact-label">Rapporterad</span>
+              <span class="report-compact-value">${esc(tgt)}</span>
+            </div>
+            ${compactReason ? `<div class="report-compact-row">
+              <span class="report-compact-label">Anledning</span>
+              <span class="report-compact-value">${esc(compactReason)}</span>
+            </div>` : ''}
+            ${messageText ? `<div class="report-compact-row">
+              <span class="report-compact-label">Meddelande</span>
+              <span class="report-compact-value">${esc(messageText)}</span>
+            </div>` : ''}
+            <div class="report-compact-actions">
+              <button class="report-toggle" type="button" data-expand="${id}" aria-expanded="false">
+                <span>Visa</span>
+              </button>
+            </div>
           </div>
-          <div class="report-grid">
-            <div class="report-block">
-              <div class="report-label">Reporter</div>
-              <div class="report-value">${esc(rep)}</div>
+          <div class="kk-report-card" hidden>
+            <div class="report-header">
+              <div>
+                <div class="report-title">Rapport #${id}</div>
+                <div class="report-time">${fmtWhen(ts)}</div>
+              </div>
+              ${reasonLabel ? `<div class="report-chip">${esc(reasonLabel)}</div>` : ''}
             </div>
-            <div class="report-block">
-              <div class="report-label">Rapporterad</div>
-              <div class="report-value">${esc(tgt)}</div>
+            <div class="report-grid">
+              <div class="report-block">
+                <div class="report-label">Reporter</div>
+                <div class="report-value">${esc(rep)}</div>
+              </div>
+              <div class="report-block">
+                <div class="report-label">Rapporterad</div>
+                <div class="report-value">${esc(tgt)}</div>
+              </div>
+              ${reason ? `<div class="report-block report-block--full">
+                <div class="report-label">Anledning</div>
+                <div class="report-value">${esc(reason)}</div>
+              </div>` : ''}
+              ${contextLabel ? `<div class="report-block">
+                <div class="report-label">Källa</div>
+                <div class="report-value">${esc(contextLabel)}</div>
+              </div>` : ''}
+              ${(messageText || messageId) ? `<div class="report-block report-block--full">
+                <div class="report-label">Meddelande #${messageId || '—'}</div>
+                <div class="report-value">${esc(messageText || '—')}</div>
+              </div>` : ''}
             </div>
-            ${reason ? `<div class="report-block report-block--full">
-              <div class="report-label">Anledning</div>
-              <div class="report-value">${esc(reason)}</div>
-            </div>` : ''}
-            ${contextLabel ? `<div class="report-block">
-              <div class="report-label">Källa</div>
-              <div class="report-value">${esc(contextLabel)}</div>
-            </div>` : ''}
-            ${(messageText || messageId) ? `<div class="report-block report-block--full">
-              <div class="report-label">Meddelande #${messageId || '—'}</div>
-              <div class="report-value">${esc(messageText || '—')}</div>
-            </div>` : ''}
-          </div>
-          <div class="report-actions">
-            ${reportedId ? `<button class="report-action" data-log="${reportedId}" title="Visa logg" aria-label="Visa logg för användaren">${iconMarkup('history')}<span>Visa logg</span></button>` : ''}
-            <button class="report-action" data-resolve="${id}" title="Markera som löst" aria-label="Markera som löst">${iconMarkup('task_alt')}<span>Lös</span></button>
-            <button class="report-action" data-delete="${id}" title="Ta bort rapport" aria-label="Ta bort rapport">${iconMarkup('delete')}<span>Ta bort</span></button>
+            <div class="report-actions">
+              ${reportedId ? `<button class="report-action" data-log="${reportedId}" title="Visa logg" aria-label="Visa logg för användaren">${iconMarkup('history')}<span>Visa logg</span></button>` : ''}
+              <button class="report-action" data-resolve="${id}" title="Markera som löst" aria-label="Markera som löst">${iconMarkup('task_alt')}<span>Lös</span></button>
+              <button class="report-action" data-delete="${id}" title="Ta bort rapport" aria-label="Ta bort rapport">${iconMarkup('delete')}<span>Ta bort</span></button>
+            </div>
           </div>
         </div>`;
     }).join('');
@@ -6667,6 +6693,19 @@ jumpBtn.addEventListener('click', ()=>{
   reportRefreshBtn?.addEventListener('click', ()=>{ loadReports().catch(()=>{}); });
 
   reportListEl?.addEventListener('click', async (e)=>{
+    const toggleBtn = e.target.closest('[data-expand]');
+    if (toggleBtn) {
+      const item = toggleBtn.closest('.kk-report-item');
+      const card = item?.querySelector('.kk-report-card');
+      if (card) {
+        const isOpen = !card.hasAttribute('hidden');
+        card.toggleAttribute('hidden', isOpen);
+        toggleBtn.setAttribute('aria-expanded', String(!isOpen));
+        const label = toggleBtn.querySelector('span');
+        if (label) label.textContent = isOpen ? 'Visa' : 'Dölj';
+      }
+      return;
+    }
     const logBtn = e.target.closest('[data-log]');
     if (logBtn && IS_ADMIN) {
       openLogs(+logBtn.dataset.log);
