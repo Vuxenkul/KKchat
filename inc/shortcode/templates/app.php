@@ -6697,6 +6697,20 @@ jumpBtn.addEventListener('click', ()=>{
     return { key: `room-${m.room || 'public'}`, label: `Lobby: ${roomLabel}` };
   }
 
+  function shouldCollapseLogGroup(meta){
+    if (!meta || !meta.key) return false;
+    return meta.key.startsWith('dm-') || meta.key.startsWith('room-');
+  }
+
+  function setLogGroupCollapsed(groupData, collapsed){
+    if (!groupData) return;
+    groupData.collapsed = !!collapsed;
+    groupData.el.classList.toggle('loggroup--collapsed', groupData.collapsed);
+    if (groupData.toggleBtn) {
+      groupData.toggleBtn.setAttribute('aria-expanded', groupData.collapsed ? 'false' : 'true');
+    }
+  }
+
   function ensureLogGroup(meta){
     if (LOG_GROUPS.has(meta.key)) {
       return LOG_GROUPS.get(meta.key);
@@ -6709,8 +6723,11 @@ jumpBtn.addEventListener('click', ()=>{
     const head = document.createElement('div');
     head.className = 'loggroup-head';
     head.innerHTML = `
-      <span class="loggroup-title">${esc(meta.label)}</span>
-      <span class="loggroup-badges"></span>
+      <button class="loggroup-toggle" type="button" aria-expanded="false">
+        <span class="loggroup-title">${esc(meta.label)}</span>
+        <span class="loggroup-badges"></span>
+        <span class="material-symbols-rounded" aria-hidden="true">expand_more</span>
+      </button>
     `;
 
     const list = document.createElement('ul');
@@ -6720,8 +6737,14 @@ jumpBtn.addEventListener('click', ()=>{
     groupEl.appendChild(list);
     logList.appendChild(groupEl);
 
-    const groupData = { el: groupEl, head, list, hasWatch: false };
+    const toggleBtn = head.querySelector('.loggroup-toggle');
+    const groupData = { el: groupEl, head, list, hasWatch: false, toggleBtn, collapsed: false };
     LOG_GROUPS.set(meta.key, groupData);
+    const collapsedByDefault = shouldCollapseLogGroup(meta);
+    setLogGroupCollapsed(groupData, collapsedByDefault);
+    toggleBtn?.addEventListener('click', () => {
+      setLogGroupCollapsed(groupData, !groupData.collapsed);
+    });
     return groupData;
   }
 

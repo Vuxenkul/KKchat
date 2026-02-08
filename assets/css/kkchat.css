@@ -1915,6 +1915,24 @@ html, body { margin: 0; height: 100%; }
   background: rgba(18, 22, 34, 0.65);
   border-bottom: 1px solid rgba(122, 136, 196, 0.2);
 }
+#kkchat-root .loggroup-toggle {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
+#kkchat-root .loggroup-toggle .material-symbols-rounded {
+  font-size: 20px;
+  color: var(--ink-muted);
+  transition: transform 160ms ease, color 160ms ease;
+}
+#kkchat-root .loggroup--collapsed .loggroup-toggle .material-symbols-rounded {
+  transform: rotate(-90deg);
+  color: var(--ink);
+}
 #kkchat-root .loggroup-title {
   font-weight: 600;
   color: var(--ink);
@@ -1931,6 +1949,9 @@ html, body { margin: 0; height: 100%; }
   list-style: none;
   margin: 0;
   padding: 0;
+}
+#kkchat-root .loggroup--collapsed .loggroup-list {
+  display: none;
 }
 #kkchat-root .logitem {
   display: grid;
