@@ -55,7 +55,42 @@ register_rest_route($ns, '/admin/user-messages', [
       return isset($rule['kind']) && $rule['kind'] === 'watch';
     }));
 
-    $out = array_map(function($m) use ($watch_rules){
+    $reporter_ids = [];
+    $message_sources = [];
+    if ($uid > 0) {
+      $report_rows = $wpdb->get_results(
+        $wpdb->prepare(
+          "SELECT reporter_id, reporter_name, context_label, message_id
+             FROM {$t['reports']}
+            WHERE reported_id = %d",
+          $uid
+        ),
+        ARRAY_A
+      ) ?: [];
+
+      foreach ($report_rows as $report) {
+        $reporter_id = (int) ($report['reporter_id'] ?? 0);
+        if ($reporter_id > 0) {
+          $reporter_ids[$reporter_id] = (string) ($report['reporter_name'] ?? '');
+        }
+
+        $message_id = (int) ($report['message_id'] ?? 0);
+        $context_label = trim((string) ($report['context_label'] ?? ''));
+        if ($message_id > 0 && $context_label !== '') {
+          if (!isset($message_sources[$message_id])) {
+            $message_sources[$message_id] = [];
+          }
+          $message_sources[$message_id][] = $context_label;
+        }
+      }
+
+      foreach ($message_sources as $message_id => $labels) {
+        $unique_labels = array_unique(array_filter($labels));
+        $message_sources[$message_id] = $unique_labels ? implode(', ', $unique_labels) : '';
+      }
+    }
+
+    $out = array_map(function($m) use ($watch_rules, $uid, $reporter_ids, $message_sources){
       $watch_words = [];
       $kind = $m['kind'] ?: 'chat';
       if ($watch_rules && $kind === 'chat') {
@@ -74,6 +109,22 @@ register_rest_route($ns, '/admin/user-messages', [
               break;
             }
           }
+        }
+      }
+
+      $report_source = '';
+      $reported_by_peer = false;
+      $message_id = (int) ($m['id'] ?? 0);
+      if ($message_id > 0 && isset($message_sources[$message_id])) {
+        $report_source = (string) $message_sources[$message_id];
+      }
+
+      if ($uid > 0 && !empty($m['recipient_id'])) {
+        $sender_id = (int) ($m['sender_id'] ?? 0);
+        $recipient_id = (int) ($m['recipient_id'] ?? 0);
+        $other_id = ($sender_id === $uid) ? $recipient_id : $sender_id;
+        if ($other_id > 0 && isset($reporter_ids[$other_id])) {
+          $reported_by_peer = true;
         }
       }
 
@@ -96,6 +147,8 @@ register_rest_route($ns, '/admin/user-messages', [
         'reply_to_excerpt'     => $m['reply_to_excerpt'] ?: null,
         'watch_hit'      => !empty($watch_words),
         'watch_words'    => $watch_words,
+        'report_source'  => $report_source,
+        'reported_by_peer' => $reported_by_peer,
       ];
     }, $rows);
 

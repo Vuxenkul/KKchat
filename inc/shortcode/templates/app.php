@@ -6767,7 +6767,7 @@ jumpBtn.addEventListener('click', ()=>{
     logList.appendChild(groupEl);
 
     const toggleBtn = head.querySelector('.loggroup-toggle');
-    const groupData = { el: groupEl, head, list, hasWatch: false, toggleBtn, collapsed: false };
+    const groupData = { el: groupEl, head, list, hasWatch: false, hasReporter: false, toggleBtn, collapsed: false };
     LOG_GROUPS.set(meta.key, groupData);
     const collapsedByDefault = shouldCollapseLogGroup(meta);
     setLogGroupCollapsed(groupData, collapsedByDefault);
@@ -6777,14 +6777,20 @@ jumpBtn.addEventListener('click', ()=>{
     return groupData;
   }
 
-  function updateGroupWatchBadge(groupData){
+  function updateGroupBadges(groupData){
     if (!groupData || !groupData.head) return;
     const badgeWrap = groupData.head.querySelector('.loggroup-badges');
     if (!badgeWrap) return;
-    badgeWrap.innerHTML = groupData.hasWatch
-      ? `<span class="badge badge-watch">Bevakning</span>`
-      : '';
+    const badges = [];
+    if (groupData.hasWatch) {
+      badges.push('<span class="badge badge-watch">Flaggat ord</span>');
+    }
+    if (groupData.hasReporter) {
+      badges.push('<span class="badge badge-watch">Anmäld av</span>');
+    }
+    badgeWrap.innerHTML = badges.join('');
     groupData.el.classList.toggle('loggroup--watch', groupData.hasWatch);
+    groupData.el.classList.toggle('loggroup--reported', groupData.hasReporter);
   }
 
  function renderLogRows(rows){
@@ -6794,6 +6800,8 @@ jumpBtn.addEventListener('click', ()=>{
 
     const li = document.createElement('li');
     const watchHit = !!m.watch_hit;
+    const reportSource = m.report_source ? String(m.report_source) : '';
+    const reportedByPeer = !!m.reported_by_peer;
     const isWatchedSender = LOG_USER_ID && Number(m.sender_id) === Number(LOG_USER_ID);
     const isWatchedRecipient = LOG_USER_ID && Number(m.recipient_id) === Number(LOG_USER_ID);
     li.className = 'logitem' + (m.hidden ? ' hidden' : '') + (watchHit ? ' logitem--watch' : '') +
@@ -6820,7 +6828,10 @@ jumpBtn.addEventListener('click', ()=>{
       : `<div class="logitem-message"><div class="${bubbleClass}"><div class="log-bubble-text">${esc(String(m.content || ''))}</div></div></div>`;
 
     const watchLabel = (Array.isArray(m.watch_words) && m.watch_words.length)
-      ? `<span class="badge badge-watch" title="Bevakningsord: ${escAttr(m.watch_words.join(', '))}">Bevakning</span>`
+      ? `<span class="badge badge-watch" title="Flaggade ord: ${escAttr(m.watch_words.join(', '))}">Flaggat ord</span>`
+      : '';
+    const sourceLabel = reportSource
+      ? `<span class="badge badge-watch" title="Källa: ${escAttr(reportSource)}">Källa</span>`
       : '';
 
     const headMeta =
@@ -6832,6 +6843,7 @@ jumpBtn.addEventListener('click', ()=>{
             ? `<b>${esc(m.recipient_name||('#'+m.recipient_id))}</b> <small>(${esc(m.recipient_ip||'')})</small>`
             : `<code>${esc(m.room||'public')}</code>`}
          ${watchLabel}
+         ${sourceLabel}
        </div>`;
 
     const isAdmin = (typeof IS_ADMIN !== 'undefined' && IS_ADMIN);
@@ -6865,7 +6877,11 @@ jumpBtn.addEventListener('click', ()=>{
 
     if (watchHit && !groupData.hasWatch) {
       groupData.hasWatch = true;
-      updateGroupWatchBadge(groupData);
+      updateGroupBadges(groupData);
+    }
+    if (reportedByPeer && !groupData.hasReporter) {
+      groupData.hasReporter = true;
+      updateGroupBadges(groupData);
     }
   });
 }
