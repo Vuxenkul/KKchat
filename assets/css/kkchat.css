@@ -792,6 +792,22 @@ html, body { margin: 0; height: 100%; }
   outline: none;
   transform: translateY(-1px);
 }
+#kkchat-root .tab-settings-item.kk-font-size-control {
+  cursor: default;
+  padding: 10px 12px 12px;
+}
+#kkchat-root .kk-font-size-control label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+#kkchat-root .kk-font-size-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
 #kkchat-root .tabs {
      position: relative;
   z-index: 5;
@@ -2317,3 +2333,12 @@ body.kkchat-no-scroll { overflow: hidden; }
 }
 #kkchat-root .kk-agree { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
 #kkchat-root .kk-agree input { width: auto; min-width: 30px; }
+
+#kkchat-root {
+  --kk-font-scale: 1;
+}
+
+#kkchat-root.kk-font-scale-ready,
+#kkchat-root.kk-font-scale-ready * {
+  font-size: calc(var(--kk-font-size, 1em) * var(--kk-font-scale));
+}

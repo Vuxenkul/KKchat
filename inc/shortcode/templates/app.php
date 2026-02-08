@@ -1829,6 +1829,18 @@ function playNotifOnce() {
   let AUTO_SCROLL = (localStorage.getItem(AUTO_KEY) ?? '1') === '1';
 
     const root = document.getElementById('kkchat-root');
+    const FONT_SCALE_KEY = 'kk_font_scale';
+    const FONT_SCALE_MIN = 0.85;
+    const FONT_SCALE_MAX = 1.4;
+    const FONT_SCALE_STEP = 0.05;
+    let FONT_SCALE = Number(localStorage.getItem(FONT_SCALE_KEY) || '1');
+
+    function clampFontScale(value){
+      if (!Number.isFinite(value)) return 1;
+      return Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, value));
+    }
+
+    FONT_SCALE = clampFontScale(FONT_SCALE);
 
     const BLUR_KEY = 'kk_blur_images';
     const BLUR_PROMPT_NO_KEY = 'kk_blur_prompt_no_at';
@@ -1869,6 +1881,59 @@ function playNotifOnce() {
     }
     if (IMG_BLUR) resetInlineImageBlur();
     applyBlurClass();
+
+    function ensureFontBase(el){
+      if (!(el instanceof Element)) return;
+      if (el.style.getPropertyValue('--kk-font-size')) return;
+      const computed = window.getComputedStyle(el).fontSize;
+      const size = Number.parseFloat(computed);
+      if (!Number.isFinite(size)) return;
+      const scaled = root?.classList.contains('kk-font-scale-ready') && FONT_SCALE ? size / FONT_SCALE : size;
+      el.style.setProperty('--kk-font-size', `${scaled}px`);
+    }
+
+    function captureFontBases(container){
+      if (!(container instanceof Element)) return;
+      ensureFontBase(container);
+      container.querySelectorAll('*').forEach(ensureFontBase);
+    }
+
+    function updateFontScaleUi(){
+      const percent = Math.round(FONT_SCALE * 100);
+      const label = document.querySelector('[data-font-scale-label]');
+      if (label) label.textContent = `${percent}%`;
+      const range = document.querySelector('[data-settings-font-size]');
+      if (range) range.value = String(percent);
+    }
+
+    function applyFontScale(value, persist = true){
+      FONT_SCALE = clampFontScale(value);
+      if (root) {
+        root.style.setProperty('--kk-font-scale', FONT_SCALE.toString());
+      }
+      if (persist) {
+        localStorage.setItem(FONT_SCALE_KEY, FONT_SCALE.toString());
+      }
+      updateFontScaleUi();
+    }
+
+    function initFontScale(){
+      if (!root) return;
+      captureFontBases(root);
+      root.classList.add('kk-font-scale-ready');
+      applyFontScale(FONT_SCALE, false);
+      const observer = new MutationObserver(mutations => {
+        mutations.forEach(mutation => {
+          mutation.addedNodes.forEach(node => {
+            if (node.nodeType !== 1) return;
+            captureFontBases(node);
+          });
+        });
+      });
+      observer.observe(root, { childList: true, subtree: true });
+    }
+
+    initFontScale();
 
   const ROOM_CACHE = new Map();          
   const AUTO_OPEN_DM_ON_NEW = false; 
@@ -4712,6 +4777,7 @@ function renderRoomTabs(){
   const muteNewChatsLabel = MUTE_NEW_CHATS
     ? `${iconMarkup('notifications')} Slå på ljud för nya chattar`
     : `${iconMarkup('notifications_off')} Tysta nya chattar`;
+  const fontScalePercent = Math.round(FONT_SCALE * 100);
 
   const adminMenu = !HAS_ADMIN_TOOLS ? '' : `
     <div class="tab-settings tab-settings-admin${ADMIN_MENU_OPEN ? ' is-open' : ''}" data-admin-root>
@@ -4746,6 +4812,17 @@ function renderRoomTabs(){
         <button type="button" class="tab-settings-item" data-settings-mute-active="1" role="menuitem">${activeMuteLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-new="1" role="menuitem">${muteNewChatsLabel}</button>
         <button type="button" class="tab-settings-item" data-settings-mute-all="1" role="menuitem">${allMuteLabel}</button>
+        <div class="tab-settings-item kk-font-size-control" role="menuitem">
+          <label for="kk-font-scale-input">Textstorlek <span data-font-scale-label>${fontScalePercent}%</span></label>
+          <input id="kk-font-scale-input"
+                 type="range"
+                 min="${Math.round(FONT_SCALE_MIN * 100)}"
+                 max="${Math.round(FONT_SCALE_MAX * 100)}"
+                 step="${Math.round(FONT_SCALE_STEP * 100)}"
+                 value="${fontScalePercent}"
+                 data-settings-font-size="1"
+                 aria-label="Textstorlek">
+        </div>
         <button type="button" class="tab-settings-item" data-settings-logout="1" role="menuitem">${iconMarkup('logout')} Logga ut</button>
       </div>
     </div>
@@ -4955,6 +5032,14 @@ roomTabs.addEventListener('click', async e => {
     await snapshotPromise.catch(()=>{});
   }
   await syncPromise;
+});
+
+roomTabs.addEventListener('input', e => {
+  const fontRange = e.target.closest('[data-settings-font-size]');
+  if (!fontRange) return;
+  const raw = Number(fontRange.value);
+  if (!Number.isFinite(raw)) return;
+  applyFontScale(raw / 100);
 });
 
 document.addEventListener('click', e => {
