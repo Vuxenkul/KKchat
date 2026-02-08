@@ -1924,8 +1924,16 @@ html, body { margin: 0; height: 100%; }
   gap: 6px;
   align-items: center;
 }
+#kkchat-root .loggroup-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 #kkchat-root .loggroup--watch .loggroup-title {
   color: #f7c55a;
+}
+#kkchat-root .loggroup--collapsed .loggroup-list {
+  display: none;
 }
 #kkchat-root .loggroup-list {
   list-style: none;

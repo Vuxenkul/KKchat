@@ -6697,6 +6697,15 @@ jumpBtn.addEventListener('click', ()=>{
     return { key: `room-${m.room || 'public'}`, label: `Lobby: ${roomLabel}` };
   }
 
+  function updateLogGroupToggle(groupData){
+    const isCollapsed = groupData.el.classList.contains('loggroup--collapsed');
+    const btn = groupData.head.querySelector('.loggroup-toggle');
+    if (btn) {
+      btn.setAttribute('aria-expanded', String(!isCollapsed));
+      btn.innerHTML = isCollapsed ? `${iconMarkup('expand_more')} Visa` : `${iconMarkup('expand_less')} Dölj`;
+    }
+  }
+
   function ensureLogGroup(meta){
     if (LOG_GROUPS.has(meta.key)) {
       return LOG_GROUPS.get(meta.key);
@@ -6711,6 +6720,7 @@ jumpBtn.addEventListener('click', ()=>{
     head.innerHTML = `
       <span class="loggroup-title">${esc(meta.label)}</span>
       <span class="loggroup-badges"></span>
+      <button class="modbtn loggroup-toggle" type="button" aria-expanded="false">${iconMarkup('expand_more')} Visa</button>
     `;
 
     const list = document.createElement('ul');
@@ -6720,8 +6730,11 @@ jumpBtn.addEventListener('click', ()=>{
     groupEl.appendChild(list);
     logList.appendChild(groupEl);
 
+    groupEl.classList.add('loggroup--collapsed');
+
     const groupData = { el: groupEl, head, list, hasWatch: false };
     LOG_GROUPS.set(meta.key, groupData);
+    updateLogGroupToggle(groupData);
     return groupData;
   }
 
@@ -6811,6 +6824,18 @@ jumpBtn.addEventListener('click', ()=>{
 }
 
 logList?.addEventListener('click', async (e) => {
+  const toggleBtn = e.target.closest('.loggroup-toggle');
+  const toggleHead = e.target.closest('.loggroup-head');
+  if (toggleBtn || (toggleHead && !e.target.closest('[data-hide],[data-unhide]'))) {
+    const groupEl = (toggleBtn || toggleHead).closest('.loggroup');
+    const groupKey = groupEl?.dataset.groupKey;
+    if (groupKey && LOG_GROUPS.has(groupKey)) {
+      groupEl.classList.toggle('loggroup--collapsed');
+      updateLogGroupToggle(LOG_GROUPS.get(groupKey));
+    }
+    return;
+  }
+
   const hideBtn   = e.target.closest('[data-hide]');
   const unhideBtn = e.target.closest('[data-unhide]');
   if (!hideBtn && !unhideBtn) return;
