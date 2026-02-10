@@ -6624,7 +6624,8 @@ jumpBtn.addEventListener('click', ()=>{
 
   function ensurePollFallback(){
     if (pollFallbackTimer) return;
-    pollFallbackTimer = setInterval(maybePollActiveFallback, 12000);
+    const fallbackMs = Math.max(5000, Number(POLL_SETTINGS?.fallbackIntervalMs) || 12000);
+    pollFallbackTimer = setInterval(maybePollActiveFallback, fallbackMs);
     setTimeout(maybePollActiveFallback, 1000);
   }
 

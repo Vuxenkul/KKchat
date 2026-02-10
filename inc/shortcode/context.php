@@ -46,6 +46,7 @@ function kkchat_shortcode_context() {
   $poll_slow_after       = max($poll_medium_after, (int) get_option('kkchat_poll_slow_after', 5));
   $poll_extra_2g         = max(0, (int) get_option('kkchat_poll_extra_2g', 20));
   $poll_extra_3g         = max(0, (int) get_option('kkchat_poll_extra_3g', 10));
+  $poll_fallback_interval = max(5, (int) get_option('kkchat_poll_fallback_interval', 12));
   $first_load_limit_raw  = (int) get_option('kkchat_first_load_limit', 20);
   $first_load_limit      = max(1, min(200, $first_load_limit_raw));
   $first_load_exclude_banners = !empty(get_option('kkchat_first_load_exclude_banners', 0));
@@ -60,6 +61,7 @@ function kkchat_shortcode_context() {
     'slowAfterMs'       => $poll_slow_after * 60 * 1000,
     'extra2gMs'         => $poll_extra_2g * 1000,
     'extra3gMs'         => $poll_extra_3g * 1000,
+    'fallbackIntervalMs'=> $poll_fallback_interval * 1000,
   ];
 
   $rest_nonce = esc_js( wp_create_nonce('wp_rest') );

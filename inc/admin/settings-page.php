@@ -45,6 +45,7 @@ function kkchat_admin_settings_page() {
     $poll_slow_after       = max($poll_medium_after, (int)($_POST['poll_slow_after'] ?? 5));
     $poll_extra_2g         = max(0, (int)($_POST['poll_extra_2g'] ?? 20));
     $poll_extra_3g         = max(0, (int)($_POST['poll_extra_3g'] ?? 10));
+    $poll_fallback_interval = max(5, (int)($_POST['poll_fallback_interval'] ?? 12));
     $admin_auto_incognito  = !empty($_POST['admin_auto_incognito']) ? 1 : 0;
     $first_load_limit      = max(1, min(200, (int)($_POST['first_load_limit'] ?? 20)));
     $first_load_exclude_banners = !empty($_POST['first_load_exclude_banners']) ? 1 : 0;
@@ -97,6 +98,7 @@ function kkchat_admin_settings_page() {
     update_option('kkchat_poll_slow_after',       $poll_slow_after);
     update_option('kkchat_poll_extra_2g',         $poll_extra_2g);
     update_option('kkchat_poll_extra_3g',         $poll_extra_3g);
+    update_option('kkchat_poll_fallback_interval',  $poll_fallback_interval);
     update_option('kkchat_admin_auto_incognito',  $admin_auto_incognito);
     update_option('kkchat_first_load_limit',      $first_load_limit);
     update_option('kkchat_first_load_exclude_banners', $first_load_exclude_banners);
@@ -137,6 +139,7 @@ function kkchat_admin_settings_page() {
   $v_poll_slow_after       = (int)get_option('kkchat_poll_slow_after', 5);
   $v_poll_extra_2g         = (int)get_option('kkchat_poll_extra_2g', 20);
   $v_poll_extra_3g         = (int)get_option('kkchat_poll_extra_3g', 10);
+  $v_poll_fallback_interval = (int)get_option('kkchat_poll_fallback_interval', 12);
   $v_admin_auto_incognito  = (int)get_option('kkchat_admin_auto_incognito', 0);
   $v_first_load_limit      = max(1, min(200, (int) get_option('kkchat_first_load_limit', 20)));
   $v_first_load_exclude_banners = (int) get_option('kkchat_first_load_exclude_banners', 0);
@@ -409,6 +412,13 @@ function kkchat_admin_settings_page() {
           <td>
             <input id="poll_extra_3g" name="poll_extra_3g" type="number" class="small-text" min="0" step="1" value="<?php echo (int)$v_poll_extra_3g; ?>"> sekunder
             <p class="description">Addera så här många sekunder om anslutningen är 3G.</p>
+          </td>
+        </tr>
+        <tr>
+          <th><label for="poll_fallback_interval">Safety fallback – intervall</label></th>
+          <td>
+            <input id="poll_fallback_interval" name="poll_fallback_interval" type="number" class="small-text" min="5" step="1" value="<?php echo (int)$v_poll_fallback_interval; ?>"> sekunder
+            <p class="description">Reservpolling när ordinarie sync inte levererar (lägre värde = snabbare återhämtning men fler requests).</p>
           </td>
         </tr>
       </table>
