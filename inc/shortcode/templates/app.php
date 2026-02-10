@@ -3573,6 +3573,7 @@ function normalizeUnreadMap(map) {
 
 function userRow(u){
   const isMe   = u.id === ME_ID;
+  const isGuest = /-guest$/i.test(String(u.name || '').trim());
   const adminIcon = u.is_admin ? `${iconMarkup('shield_person')} ` : '';
   const blocked = isBlocked(u.id);
   const unread = blocked ? 0 : (UNREAD_PER[u.id]||0);
@@ -3582,6 +3583,12 @@ function userRow(u){
 
   const dmBtn  = isMe ? '' : `<button class="openbtn" data-dm="${u.id}" ${blocked?'disabled':''}
                         aria-label="${blocked?'Avblockera för att skriva':'Öppna privat med '+esc(u.name)}">${iconMarkup('forward_to_inbox')}</button>`;
+
+  const profileBtn = !isGuest
+    ? `<a class="openbtn" href="https://kkompis.se/din-profil/${encodeURIComponent(String(u.name || '').trim())}/"
+          target="_blank" rel="noopener noreferrer"
+          title="Öppna profil för ${esc(u.name)}" aria-label="Öppna profil för ${esc(u.name)}">${iconMarkup('person')}</a>`
+    : '';
 
   let blockBtn = '';
   if (!isMe) {
@@ -3636,7 +3643,7 @@ function userRow(u){
           <div class="small">${esc(u.gender || '')}</div>
         </div>
       </div>
-      <div class="user-actions">${badge}${dmBtn}${blockBtn}${reportBtn}${modBtns}${incogBtn}${logoutSelfBtn}</div>
+      <div class="user-actions">${badge}${profileBtn}${dmBtn}${blockBtn}${reportBtn}${modBtns}${incogBtn}${logoutSelfBtn}</div>
       ${lastMessageLine(u)}
     </div>`;
 
