@@ -866,6 +866,7 @@ let POLL_LAST_INTERACTIVE = null;
 let POLL_INFLIGHT_PROMISE = null;
 let POLL_ABORT_CONTROLLER = null;
 let POLL_REQUEST_SERIAL = 0;
+let POLL_LAST_SUCCESS_AT = Date.now();
 
 function isInteractive(){
   return document.visibilityState === 'visible' && WINDOW_FOCUSED;
@@ -1707,6 +1708,7 @@ async function performPoll(forceCold = false, options = {}){
       }
 
       if (resp.status === 204 || resp.status === 304) {
+        POLL_LAST_SUCCESS_AT = Date.now();
         if (retryHeader != null) {
           POLL_RETRY_HINT.set(key, retryHeader * 1000);
         }
@@ -1731,6 +1733,7 @@ async function performPoll(forceCold = false, options = {}){
       }
 
       const payload = await resp.json();
+      POLL_LAST_SUCCESS_AT = Date.now();
       if (requestSerial !== POLL_REQUEST_SERIAL) {
         return;
       }
@@ -6612,13 +6615,16 @@ jumpBtn.addEventListener('click', ()=>{
     if (pollFallbackBusy) return;
     if (!isInteractive()) return;
 
+    const lastSuccessAge = Date.now() - (Number(POLL_LAST_SUCCESS_AT) || 0);
+    const forceCold = !Number.isFinite(lastSuccessAge) || lastSuccessAge > 25000;
+
     pollFallbackBusy = true;
-    pollActive().catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
+    pollActive(forceCold).catch(()=>{}).finally(()=>{ pollFallbackBusy = false; });
   }
 
   function ensurePollFallback(){
     if (pollFallbackTimer) return;
-    pollFallbackTimer = setInterval(maybePollActiveFallback, 45000);
+    pollFallbackTimer = setInterval(maybePollActiveFallback, 12000);
     setTimeout(maybePollActiveFallback, 1000);
   }
 
