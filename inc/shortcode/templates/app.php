@@ -1614,6 +1614,7 @@ function requestLeaderSync(forceCold = false){
 function handlePollMessage(msg){
   if (!msg || typeof msg !== 'object') return;
   if (msg.from === POLL_CLIENT_ID) return;
+  if (MULTITAB_LOCKED) return;
 
   if (msg.type === 'sync') {
     const state = desiredStreamState();
@@ -1648,6 +1649,7 @@ function handlePollMessage(msg){
 
 async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
+  if (MULTITAB_LOCKED) return;
   const previousPromise = POLL_INFLIGHT_PROMISE;
   if (previousPromise) {
     abortActivePoll();
@@ -5481,7 +5483,11 @@ window.addEventListener('blur', () => {
   WINDOW_FOCUSED = false;
   handlePresenceChange();
 });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('online', () => {
+  if (MULTITAB_LOCKED) return;
+  pollActive().catch(()=>{});
+  restartStream();
+});
 window.addEventListener('offline', () => {
   abortActivePoll();
   stopStream();
