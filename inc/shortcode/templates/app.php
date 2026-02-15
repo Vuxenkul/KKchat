@@ -339,10 +339,9 @@
   aria-hidden="true"
   hidden
 >
-  <div class="kk-multitab__box">
+  <div class="kk-multitab__box" tabindex="-1">
     <h2 id="kk-multiTabTitle">Chatten är redan öppen</h2>
-    <p id="kk-multiTabDesc">Chatten är redan öppen i en annan flik. Tryck på ”Använd chatten här” om du vill fortsätta i den här fliken.</p>
-    <button type="button" id="kk-multiTabUseHere" class="kk-multitab__btn">Använd chatten här</button>
+    <p id="kk-multiTabDesc">Chatten är redan öppen i en annan flik. Den här fliken låses tills den aktiva fliken stängs eller blir inaktiv.</p>
   </div>
 </div>
 
@@ -396,8 +395,8 @@
   const roomTabs   = document.getElementById('kk-roomTabs');
   const chatRoot   = document.getElementById('kkchat-root');
   const multiTabModal = document.getElementById('kk-multiTabModal');
+  const multiTabBox = multiTabModal ? multiTabModal.querySelector('.kk-multitab__box') : null;
   const multiTabDesc  = document.getElementById('kk-multiTabDesc');
-  const multiTabUseHere = document.getElementById('kk-multiTabUseHere');
 
   const MATERIAL_ICON_CLASS = 'material-symbols-rounded';
   function iconMarkup(name, { filled = false } = {}) {
@@ -424,11 +423,6 @@
   const MESSAGE_INDEX = new Map();
   const MESSAGE_INDEX_LIMIT = 800;
   let COMPOSER_REPLY = null;
-
-  multiTabUseHere?.addEventListener('click', (ev)=>{
-    ev.preventDefault();
-    claimActiveTab({ forceCold: true });
-  });
 
   const handleActivityEvent = () => noteUserActivity();
   function addActivityListener(target, type, opts){
@@ -1060,7 +1054,7 @@ function showMultiTabModal(message){
   if (typeof message === 'string' && message) {
     setMultiTabModalMessage(message);
   }
-  requestAnimationFrame(() => { multiTabUseHere?.focus(); });
+  requestAnimationFrame(() => { multiTabBox?.focus(); });
 }
 
 function hideMultiTabModal(){
@@ -1140,7 +1134,7 @@ function handleActiveTabChange(rec){
     return;
   }
 
-  const message = 'Chatten används nu i en annan flik. Tryck på ”Använd chatten här” för att fortsätta här.';
+  const message = 'Chatten används nu i en annan flik. Den här fliken låses tills den aktiva fliken stängs eller blir inaktiv.';
   lockMultiTab(message);
 }
 
@@ -1154,7 +1148,7 @@ function initMultiTabLock(){
     claimActiveTab();
   } else {
     handleActiveTabChange(current);
-    const message = 'Chatten är redan öppen i en annan flik. Tryck på ”Använd chatten här” om du vill fortsätta i den här fliken.';
+    const message = 'Chatten är redan öppen i en annan flik. Den här fliken låses tills den aktiva fliken stängs eller blir inaktiv.';
     lockMultiTab(message);
   }
 }
@@ -1620,6 +1614,7 @@ function requestLeaderSync(forceCold = false){
 function handlePollMessage(msg){
   if (!msg || typeof msg !== 'object') return;
   if (msg.from === POLL_CLIENT_ID) return;
+  if (MULTITAB_LOCKED) return;
 
   if (msg.type === 'sync') {
     const state = desiredStreamState();
@@ -1654,6 +1649,7 @@ function handlePollMessage(msg){
 
 async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
+  if (MULTITAB_LOCKED) return;
   const previousPromise = POLL_INFLIGHT_PROMISE;
   if (previousPromise) {
     abortActivePoll();
@@ -5487,7 +5483,11 @@ window.addEventListener('blur', () => {
   WINDOW_FOCUSED = false;
   handlePresenceChange();
 });
-window.addEventListener('online', () => { pollActive().catch(()=>{}); restartStream(); });
+window.addEventListener('online', () => {
+  if (MULTITAB_LOCKED) return;
+  pollActive().catch(()=>{});
+  restartStream();
+});
 window.addEventListener('offline', () => {
   abortActivePoll();
   stopStream();
