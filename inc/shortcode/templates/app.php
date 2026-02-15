@@ -1656,7 +1656,11 @@ async function performPoll(forceCold = false, options = {}){
   const { allowSuspended = false } = options || {};
   const previousPromise = POLL_INFLIGHT_PROMISE;
   if (previousPromise) {
-    abortActivePoll();
+    if (!forceCold) {
+      // Reuse the in-flight request to avoid churn/abort loops that can
+      // trigger server-side rate limits.
+      return previousPromise;
+    }
     try { await previousPromise; } catch (_) {}
   }
 
@@ -2535,8 +2539,9 @@ function applyCache(key){
         location.reload();
         return [];
       }
-
-      throw new Error('fetch '+url);
+      const status = Number(r.status) || 0;
+      const errCode = String(js?.err || js?.error || '').trim();
+      throw new Error(`fetch ${url} (status ${status}${errCode ? `, err=${errCode}` : ''})`);
     }
     return r.json();
   }
