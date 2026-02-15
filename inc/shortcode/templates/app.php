@@ -1652,7 +1652,9 @@ async function performPoll(forceCold = false, options = {}){
   if (MULTITAB_LOCKED) return;
   const previousPromise = POLL_INFLIGHT_PROMISE;
   if (previousPromise) {
-    abortActivePoll();
+    if (!forceCold) {
+      return previousPromise;
+    }
     try { await previousPromise; } catch (_) {}
   }
 
@@ -1688,7 +1690,6 @@ async function performPoll(forceCold = false, options = {}){
   const url = `${API}/sync?${params.toString()}`;
   logDbActivity(`starting sync poll${forceCold ? ' (force cold start)' : ''} for key ${key}`);
 
-  abortActivePoll();
   const controller = new AbortController();
   POLL_ABORT_CONTROLLER = controller;
   const requestSerial = ++POLL_REQUEST_SERIAL;
