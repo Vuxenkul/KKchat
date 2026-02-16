@@ -34,7 +34,10 @@ if (!defined('ABSPATH')) exit;
 
       $select = implode(',', $cols);
 
-      $cacheTtl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', 2));
+      $cacheTtl = max(0, (int) apply_filters(
+        'kkchat_public_presence_cache_ttl',
+        (int) get_option('kkchat_public_presence_cache_ttl', 2)
+      ));
       $cacheKey = null;
       if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
         $bucket   = max(1, $cacheTtl);
@@ -106,7 +109,10 @@ if (!defined('ABSPATH')) exit;
     function kkchat_public_presence_cache_flush(): void {
       if (!function_exists('wp_cache_delete')) { return; }
 
-      $ttl = max(0, (int) apply_filters('kkchat_public_presence_cache_ttl', 2));
+      $ttl = max(0, (int) apply_filters(
+        'kkchat_public_presence_cache_ttl',
+        (int) get_option('kkchat_public_presence_cache_ttl', 2)
+      ));
       if ($ttl <= 0) { return; }
 
       $bucketSize = max(1, $ttl);
@@ -173,7 +179,10 @@ if (!defined('ABSPATH')) exit;
     function kkchat_admin_presence_cache_flush(?array $opts = null): void {
       if (!function_exists('wp_cache_delete')) { return; }
 
-      $ttl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+      $ttl = max(0, (int) apply_filters(
+        'kkchat_admin_presence_cache_ttl',
+        (int) get_option('kkchat_admin_presence_cache_ttl', 2)
+      ));
       if ($ttl <= 0) { return; }
 
       $bucketSize = max(1, $ttl);
@@ -212,7 +221,7 @@ if (!defined('ABSPATH')) exit;
      * Results are cached briefly to smooth repeated sync polls.
      *
      * Filters:
-     *   - kkchat_admin_presence_cache_ttl: seconds to retain the cached snapshot (default 2s).
+     *   - kkchat_admin_presence_cache_ttl: seconds to retain the cached snapshot (default from setting, 2s fallback).
      *   - kkchat_admin_presence_cache_flush_variants: adjust cache-flush variants when busting.
      */
     function kkchat_admin_presence_snapshot(int $now, array $admin_names, array $opts = []): array {
@@ -221,7 +230,10 @@ if (!defined('ABSPATH')) exit;
 
       $cfg = kkchat_admin_presence_normalize_opts($opts);
 
-      $cacheTtl = max(0, (int) apply_filters('kkchat_admin_presence_cache_ttl', 2));
+      $cacheTtl = max(0, (int) apply_filters(
+        'kkchat_admin_presence_cache_ttl',
+        (int) get_option('kkchat_admin_presence_cache_ttl', 2)
+      ));
       $cacheKey = null;
       if ($cacheTtl > 0 && function_exists('wp_cache_get')) {
         $bucketSize = max(1, $cacheTtl);
@@ -1051,4 +1063,3 @@ if (!defined('ABSPATH')) exit;
       return 0;
     }
   }
-
