@@ -14,8 +14,6 @@ register_rest_route($ns, '/users', [
     // Cache control: presence should not be cached.
     nocache_headers();
 
-    global $wpdb;
-    $t   = kkchat_tables();
     $now = time();
 
     // Read any session-driven bits BEFORE closing session.
@@ -30,27 +28,8 @@ register_rest_route($ns, '/users', [
     // without blocking other requests (especially long-pollers).
     kkchat_close_session_if_open();
 
-    // Housekeeping: purge stale presences
-    $deleted = (int) $wpdb->query(
-      $wpdb->prepare(
-        "DELETE FROM {$t['users']} WHERE %d - last_seen > %d",
-        $now,
-        kkchat_user_ttl()
-      )
-    );
-
-    // Auto-clear watchlist highlights after N seconds
-    $cleared = (int) $wpdb->query(
-      $wpdb->prepare(
-        "UPDATE {$t['users']}\n            SET watch_flag = 0, watch_flag_at = NULL\n          WHERE watch_flag = 1\n            AND watch_flag_at IS NOT NULL\n            AND %d - watch_flag_at > %d",
-        $now,
-        kkchat_watch_reset_after()
-      )
-    );
-
-    if ($deleted > 0 || $cleared > 0) {
-      kkchat_admin_presence_cache_flush();
-    }
+    // Housekeeping runs via scheduled worker; queue it opportunistically.
+    kkchat_sync_queue_housekeeping();
 
     if ($is_admin_viewer) {
       $rows = kkchat_admin_presence_snapshot($now, $admin_names, [

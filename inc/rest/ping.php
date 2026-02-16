@@ -18,30 +18,28 @@ register_rest_route($ns, '/ping', [
     // Release the PHP session lock ASAP — ping is frequent
     kkchat_close_session_if_open();
 
+    kkchat_sync_queue_housekeeping();
+
     kkchat_wpdb_reconnect_if_needed();
     global $wpdb;
     $t   = kkchat_tables();
     $now = time();
 
-    // Clear expired watch flags
-    $cleared = (int) $wpdb->query(
-      $wpdb->prepare(
-        "UPDATE {$t['users']}
-            SET watch_flag = 0, watch_flag_at = NULL
-          WHERE watch_flag = 1
-            AND watch_flag_at IS NOT NULL
-            AND %d - watch_flag_at > %d",
-        $now,
-        kkchat_watch_reset_after()
-      )
-    );
+    // Housekeeping lives in kkchat_sync_run_housekeeping(); keep only a very
+    // low-probability fallback in case wp-cron is delayed/disabled.
+    if (mt_rand(1, 500) === 1) {
+      $cleared = (int) $wpdb->query(
+        $wpdb->prepare(
+          "UPDATE {$t['users']}
+              SET watch_flag = 0, watch_flag_at = NULL
+            WHERE watch_flag = 1
+              AND watch_flag_at IS NOT NULL
+              AND %d - watch_flag_at > %d",
+          $now,
+          kkchat_watch_reset_after()
+        )
+      );
 
-    if ($cleared > 0) {
-      kkchat_admin_presence_cache_flush();
-    }
-
-    // (Optional) light, probabilistic purge of very stale presences
-    if (mt_rand(1, 20) === 1) {
       $deleted = (int) $wpdb->query(
         $wpdb->prepare(
           "DELETE FROM {$t['users']}
@@ -50,7 +48,7 @@ register_rest_route($ns, '/ping', [
           kkchat_user_ttl()
         )
       );
-      if ($deleted > 0) {
+      if ($deleted > 0 || $cleared > 0) {
         kkchat_admin_presence_cache_flush();
       }
     }
@@ -74,4 +72,3 @@ register_rest_route($ns, '/ping', [
   },
   'permission_callback' => '__return_true',
 ]);
-
