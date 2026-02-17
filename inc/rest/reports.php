@@ -319,6 +319,11 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
 
       $now = time();
       $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
+      $ban_cause_raw = (string) $req->get_param('cause');
+      $ban_cause = trim(wp_strip_all_tags($ban_cause_raw));
+      if ($ban_cause === '') {
+        $ban_cause = 'Bannad via rapporthantering.';
+      }
       $ban_created = 0;
 
       if (!$existing_ban) {
@@ -328,7 +333,7 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
           'target_name'        => (string)($report['reported_name'] ?? ''),
           'target_wp_username' => null,
           'target_ip'          => $reported_ip_key,
-          'cause'              => 'Bannad via rapporthantering.',
+          'cause'              => $ban_cause,
           'created_by'         => $admin ?: null,
           'created_at'         => $now,
           'expires_at'         => null,
