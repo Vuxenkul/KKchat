@@ -113,6 +113,41 @@ function kkchat_admin_moderation_page(){
     echo '<div class="updated"><p>Blockering inaktiverad.</p></div>';
   }
 
+  // Exportera alla aktiva blockeringar som CSV
+  if (isset($_GET['export_active_csv']) && check_admin_referer($nonce_key)) {
+    $rows = $wpdb->get_results("SELECT * FROM {$t['blocks']} WHERE active=1 ORDER BY created_at DESC");
+
+    nocache_headers();
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename=kkchat-active-blocks-'.gmdate('Ymd-His').'.csv');
+
+    $out = fopen('php://output', 'w');
+    if ($out) {
+      fwrite($out, "\xEF\xBB\xBF");
+      fputcsv($out, ['ID', 'Typ', 'Mål', 'IP', 'Orsak', 'Av', 'Skapad', 'Löper ut', 'Aktiv']);
+
+      foreach ((array)$rows as $b) {
+        $target = $b->target_wp_username ?: $b->target_name ?: ('#'.$b->target_user_id);
+        $created = date_i18n('Y-m-d H:i:s', (int)$b->created_at);
+        $expires = $b->expires_at ? date_i18n('Y-m-d H:i:s', (int)$b->expires_at) : '∞';
+        $is_active = $b->active ? 'Ja' : 'Nej';
+        fputcsv($out, [
+          (int)$b->id,
+          (string)$b->type,
+          (string)$target,
+          (string)$b->target_ip,
+          (string)$b->cause,
+          (string)$b->created_by,
+          (string)$created,
+          (string)$expires,
+          (string)$is_active,
+        ]);
+      }
+      fclose($out);
+    }
+    exit;
+  }
+
   $admins_txt = (string)get_option('kkchat_admin_users','');
 
   $show_all_active = isset($_GET['show_all_active']) && (string)$_GET['show_all_active'] === '1';
@@ -169,6 +204,11 @@ function kkchat_admin_moderation_page(){
     'active_page' => 1,
     'recent_page' => $recent_page,
   ], menu_page_url('kkchat_moderation', false));
+  $export_active_csv_url = wp_nonce_url(add_query_arg([
+    'active_page'       => $active_page,
+    'recent_page'       => $recent_page,
+    'export_active_csv' => 1,
+  ], menu_page_url('kkchat_moderation', false)), $nonce_key);
   ?>
   <div class="wrap">
     <h1>KKchat – Moderering</h1>
@@ -233,6 +273,7 @@ function kkchat_admin_moderation_page(){
       <?php else: ?>
         <a class="button button-secondary" href="<?php echo esc_url($show_paginated_url); ?>">Visa sidindelat igen</a>
       <?php endif; ?>
+      <a class="button" href="<?php echo esc_url($export_active_csv_url); ?>">Exportera alla som CSV</a>
     </p>
     <?php
       $active_count = is_array($active) || $active instanceof Countable ? count($active) : 0;
