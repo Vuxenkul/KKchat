@@ -104,7 +104,7 @@ function kkchat_admin_logs_page() {
   $kind       = in_array(($_GET['kind'] ?? ''), ['chat','banner','any'], true) ? $_GET['kind'] : 'any';
   $from       = sanitize_text_field($_GET['from'] ?? '');
   $to         = sanitize_text_field($_GET['to'] ?? '');
-  $per        = max(10, min(500, (int)($_GET['per'] ?? 100)));
+  $per        = max(10, min(500, (int)($_GET['per'] ?? 10)));
   $page       = max(1, (int)($_GET['paged'] ?? 1));
   $offset     = ($page - 1) * $per;
 
