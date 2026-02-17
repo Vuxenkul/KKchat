@@ -1,6 +1,57 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+function kkchat_admin_moderation_export_active_csv(){
+  if (!is_admin()) return;
+  if (!current_user_can('manage_options')) return;
+
+  $page = sanitize_key($_GET['page'] ?? '');
+  if ($page !== 'kkchat_moderation') return;
+  if (!isset($_GET['export_active_csv'])) return;
+
+  $nonce_key = 'kkchat_moderation';
+  $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? ''));
+  if (!wp_verify_nonce($nonce, $nonce_key)) {
+    wp_die('Ogiltig nonce för CSV-export.');
+  }
+
+  global $wpdb;
+  $t = kkchat_tables();
+  $rows = $wpdb->get_results("SELECT * FROM {$t['blocks']} WHERE active=1 ORDER BY created_at DESC");
+
+  nocache_headers();
+  header('Content-Type: text/csv; charset=utf-8');
+  header('Content-Disposition: attachment; filename=kkchat-active-blocks-'.gmdate('Ymd-His').'.csv');
+
+  $out = fopen('php://output', 'w');
+  if ($out) {
+    fwrite($out, "\xEF\xBB\xBF");
+    fputcsv($out, ['ID', 'Typ', 'Mål', 'IP', 'Orsak', 'Av', 'Skapad', 'Löper ut', 'Aktiv']);
+
+    foreach ((array)$rows as $b) {
+      $target = $b->target_wp_username ?: $b->target_name ?: ('#'.$b->target_user_id);
+      $created = date_i18n('Y-m-d H:i:s', (int)$b->created_at);
+      $expires = $b->expires_at ? date_i18n('Y-m-d H:i:s', (int)$b->expires_at) : '∞';
+      $is_active = $b->active ? 'Ja' : 'Nej';
+      fputcsv($out, [
+        (int)$b->id,
+        (string)$b->type,
+        (string)$target,
+        (string)$b->target_ip,
+        (string)$b->cause,
+        (string)$b->created_by,
+        (string)$created,
+        (string)$expires,
+        (string)$is_active,
+      ]);
+    }
+    fclose($out);
+  }
+
+  exit;
+}
+add_action('admin_init', 'kkchat_admin_moderation_export_active_csv');
+
 function kkchat_admin_moderation_page(){
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
@@ -112,47 +163,6 @@ function kkchat_admin_moderation_page(){
     $wpdb->update($t['blocks'], ['active'=>0], ['id'=>$id], ['%d'], ['%d']);
     echo '<div class="updated"><p>Blockering inaktiverad.</p></div>';
   }
-
-  // Exportera alla aktiva blockeringar som CSV
-  if (isset($_GET['export_active_csv'])) {
-    $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? ''));
-    if (!wp_verify_nonce($nonce, $nonce_key)) {
-      wp_die('Ogiltig nonce för CSV-export.');
-    }
-
-    $rows = $wpdb->get_results("SELECT * FROM {$t['blocks']} WHERE active=1 ORDER BY created_at DESC");
-
-    nocache_headers();
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename=kkchat-active-blocks-'.gmdate('Ymd-His').'.csv');
-
-    $out = fopen('php://output', 'w');
-    if ($out) {
-      fwrite($out, "\xEF\xBB\xBF");
-      fputcsv($out, ['ID', 'Typ', 'Mål', 'IP', 'Orsak', 'Av', 'Skapad', 'Löper ut', 'Aktiv']);
-
-      foreach ((array)$rows as $b) {
-        $target = $b->target_wp_username ?: $b->target_name ?: ('#'.$b->target_user_id);
-        $created = date_i18n('Y-m-d H:i:s', (int)$b->created_at);
-        $expires = $b->expires_at ? date_i18n('Y-m-d H:i:s', (int)$b->expires_at) : '∞';
-        $is_active = $b->active ? 'Ja' : 'Nej';
-        fputcsv($out, [
-          (int)$b->id,
-          (string)$b->type,
-          (string)$target,
-          (string)$b->target_ip,
-          (string)$b->cause,
-          (string)$b->created_by,
-          (string)$created,
-          (string)$expires,
-          (string)$is_active,
-        ]);
-      }
-      fclose($out);
-    }
-    exit;
-  }
-
 
   $admins_txt = (string)get_option('kkchat_admin_users','');
 
