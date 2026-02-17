@@ -6777,10 +6777,13 @@ jumpBtn.addEventListener('click', ()=>{
       const reportId = Number(banReportBtn.getAttribute('data-ban-report'));
       if (!reportId) return;
       if (!confirm('Banna rapporterad användare och markera rapporten som löst?')) return;
+      const customReason = prompt('Orsak för banningen (lämna tomt för standardtext):', '');
+      if (customReason === null) return;
 
       const fd = new FormData();
       fd.append('csrf_token', CSRF);
       fd.append('id', String(reportId));
+      fd.append('cause', String(customReason));
 
       try{
         const response = await fetch(`${API}/reports/ban-resolve`, { method:'POST', body:fd, credentials:'include', headers:h });
