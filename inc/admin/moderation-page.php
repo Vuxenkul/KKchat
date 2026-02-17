@@ -115,15 +115,24 @@ function kkchat_admin_moderation_page(){
 
   $admins_txt = (string)get_option('kkchat_admin_users','');
 
+  $show_all_active = isset($_GET['show_all_active']) && (string)$_GET['show_all_active'] === '1';
+
   $active_per  = 50;
   $recent_per  = 50;
   $active_page = max(1, (int)($_GET['active_page'] ?? 1));
   $recent_page = max(1, (int)($_GET['recent_page'] ?? 1));
 
   $active_total = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$t['blocks']} WHERE active=1");
-  $active_pages = max(1, (int)ceil($active_total / $active_per));
-  if ($active_page > $active_pages) $active_page = $active_pages;
-  $active_offset = ($active_page - 1) * $active_per;
+  if ($show_all_active) {
+    $active_per    = max(1, $active_total);
+    $active_pages  = 1;
+    $active_page   = 1;
+    $active_offset = 0;
+  } else {
+    $active_pages = max(1, (int)ceil($active_total / $active_per));
+    if ($active_page > $active_pages) $active_page = $active_pages;
+    $active_offset = ($active_page - 1) * $active_per;
+  }
   $active = [];
   if ($active_total > 0) {
     $active = $wpdb->get_results($wpdb->prepare(
@@ -144,8 +153,20 @@ function kkchat_admin_moderation_page(){
     ));
   }
 
-  $moderation_base = add_query_arg([
+  $moderation_base_args = [
     'active_page' => $active_page,
+    'recent_page' => $recent_page,
+  ];
+  if ($show_all_active) $moderation_base_args['show_all_active'] = 1;
+
+  $moderation_base = add_query_arg($moderation_base_args, menu_page_url('kkchat_moderation', false));
+  $show_all_url = add_query_arg([
+    'active_page'     => 1,
+    'recent_page'     => $recent_page,
+    'show_all_active' => 1,
+  ], menu_page_url('kkchat_moderation', false));
+  $show_paginated_url = add_query_arg([
+    'active_page' => 1,
     'recent_page' => $recent_page,
   ], menu_page_url('kkchat_moderation', false));
   ?>
@@ -206,9 +227,20 @@ function kkchat_admin_moderation_page(){
     <?php endif; ?>
 
     <h2>Aktiva blockeringar</h2>
+    <p>
+      <?php if (!$show_all_active): ?>
+        <a class="button button-secondary" href="<?php echo esc_url($show_all_url); ?>">Visa alla aktiva blockeringar</a>
+      <?php else: ?>
+        <a class="button button-secondary" href="<?php echo esc_url($show_paginated_url); ?>">Visa sidindelat igen</a>
+      <?php endif; ?>
+    </p>
     <?php
       $active_count = is_array($active) || $active instanceof Countable ? count($active) : 0;
-      if ($active_total > 0 && $active_count > 0):
+      if ($show_all_active && $active_total > 0):
+    ?>
+      <p class="description">Visar alla <?php echo (int)$active_total; ?> aktiva blockeringar.</p>
+    <?php
+      elseif ($active_total > 0 && $active_count > 0):
         $active_from = $active_offset + 1;
         $active_to   = $active_offset + $active_count;
     ?>
@@ -239,7 +271,7 @@ function kkchat_admin_moderation_page(){
       <?php endif; ?>
       </tbody>
     </table>
-    <?php if ($active_pages > 1):
+    <?php if (!$show_all_active && $active_pages > 1):
       $active_prev = $active_page > 1 ? add_query_arg(['active_page' => $active_page - 1, 'recent_page' => $recent_page], $moderation_base) : '';
       $active_next = $active_page < $active_pages ? add_query_arg(['active_page' => $active_page + 1, 'recent_page' => $recent_page], $moderation_base) : '';
     ?>
