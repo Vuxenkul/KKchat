@@ -273,12 +273,43 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
       if ($id <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
 
       $report = $wpdb->get_row($wpdb->prepare(
-        "SELECT id, status, reported_id, reported_name, reported_ip_key FROM {$t['reports']} WHERE id=%d LIMIT 1",
+        "SELECT id, status, reported_id, reported_name, reported_ip, reported_ip_key FROM {$t['reports']} WHERE id=%d LIMIT 1",
         $id
       ), ARRAY_A);
       if (!$report) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
 
       $reported_ip_key = (string)($report['reported_ip_key'] ?? '');
+      if ($reported_ip_key === '') {
+        $reported_ip_raw = (string)($report['reported_ip'] ?? '');
+        if ($reported_ip_raw !== '') {
+          $reported_ip_key = (string) kkchat_ip_ban_key($reported_ip_raw);
+        }
+      }
+
+      $reported_id = (int)($report['reported_id'] ?? 0);
+      if ($reported_ip_key === '' && $reported_id > 0) {
+        $fallback_report = $wpdb->get_row($wpdb->prepare(
+          "SELECT reported_ip, reported_ip_key FROM {$t['reports']} WHERE reported_id=%d AND (reported_ip_key IS NOT NULL OR reported_ip IS NOT NULL) ORDER BY id DESC LIMIT 1",
+          $reported_id
+        ), ARRAY_A);
+        if ($fallback_report) {
+          $reported_ip_key = (string)($fallback_report['reported_ip_key'] ?? '');
+          if ($reported_ip_key === '') {
+            $fallback_ip_raw = (string)($fallback_report['reported_ip'] ?? '');
+            if ($fallback_ip_raw !== '') {
+              $reported_ip_key = (string) kkchat_ip_ban_key($fallback_ip_raw);
+            }
+          }
+        }
+      }
+
+      if ($reported_ip_key === '' && $reported_id > 0) {
+        $live_ip = (string) $wpdb->get_var($wpdb->prepare("SELECT ip FROM {$t['users']} WHERE id=%d LIMIT 1", $reported_id));
+        if ($live_ip !== '') {
+          $reported_ip_key = (string) kkchat_ip_ban_key($live_ip);
+        }
+      }
+
       if ($reported_ip_key === '') kkchat_json(['ok'=>false,'err'=>'no_ip'], 400);
 
       $existing_ban = (bool) $wpdb->get_var($wpdb->prepare(
@@ -322,7 +353,6 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
       );
       if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
 
-      $reported_id = (int)($report['reported_id'] ?? 0);
       if ($reported_id > 0) {
         $wpdb->delete($t['users'], ['id' => $reported_id], ['%d']);
       }
