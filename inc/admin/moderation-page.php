@@ -114,7 +114,12 @@ function kkchat_admin_moderation_page(){
   }
 
   // Exportera alla aktiva blockeringar som CSV
-  if (isset($_GET['export_active_csv']) && check_admin_referer($nonce_key)) {
+  if (isset($_GET['export_active_csv'])) {
+    $nonce = sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? ''));
+    if (!wp_verify_nonce($nonce, $nonce_key)) {
+      wp_die('Ogiltig nonce för CSV-export.');
+    }
+
     $rows = $wpdb->get_results("SELECT * FROM {$t['blocks']} WHERE active=1 ORDER BY created_at DESC");
 
     nocache_headers();
@@ -147,6 +152,7 @@ function kkchat_admin_moderation_page(){
     }
     exit;
   }
+
 
   $admins_txt = (string)get_option('kkchat_admin_users','');
 
@@ -204,11 +210,12 @@ function kkchat_admin_moderation_page(){
     'active_page' => 1,
     'recent_page' => $recent_page,
   ], menu_page_url('kkchat_moderation', false));
-  $export_active_csv_url = wp_nonce_url(add_query_arg([
+  $export_active_csv_url = add_query_arg([
     'active_page'       => $active_page,
     'recent_page'       => $recent_page,
     'export_active_csv' => 1,
-  ], menu_page_url('kkchat_moderation', false)), $nonce_key);
+    '_wpnonce'          => wp_create_nonce($nonce_key),
+  ], menu_page_url('kkchat_moderation', false));
   ?>
   <div class="wrap">
     <h1>KKchat – Moderering</h1>
