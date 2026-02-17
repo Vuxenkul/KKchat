@@ -6,12 +6,28 @@ if (!defined('ABSPATH')) {
 /**
  * Moderation helpers (kicks, bans, and word rules).
  */
+function kkchat_cleanup_expired_blocks(bool $force = false): void {
+    global $wpdb;
+    $t = kkchat_tables();
+
+    $lock_key = 'kkchat_blocks_cleanup_last';
+    $now      = time();
+    $last     = (int) get_option($lock_key, 0);
+
+    // Throttle repeated requests (e.g. chat polling). Cron runs with $force=true.
+    if (!$force && $last > 0 && ($now - $last) < 300) {
+        return;
+    }
+
+    update_option($lock_key, $now, false);
+    $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET active=0 WHERE active=1 AND expires_at IS NOT NULL AND expires_at <= %d", $now));
+}
+
 function kkchat_moderation_block_for($uid, $name, $wp_username, $ip) {
     global $wpdb;
-    $t   = kkchat_tables();
-    $now = time();
+    $t = kkchat_tables();
 
-    $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET active=0 WHERE active=1 AND expires_at IS NOT NULL AND expires_at <= %d", $now));
+    kkchat_cleanup_expired_blocks();
 
     if ($ip) {
         $key = kkchat_ip_ban_key($ip);

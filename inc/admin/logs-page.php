@@ -1,6 +1,37 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+
+function kkchat_logs_fetch_usernames(string $ulike = ''): array {
+  global $wpdb;
+  $t = kkchat_tables();
+
+  if ($ulike !== '') {
+    $like = '%' . $wpdb->esc_like($ulike) . '%';
+    $senders = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT sender_name FROM {$t['messages']} WHERE sender_name LIKE %s ORDER BY sender_name ASC LIMIT 300", $like));
+    $recips  = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT recipient_name FROM {$t['messages']} WHERE recipient_name IS NOT NULL AND recipient_name LIKE %s ORDER BY recipient_name ASC LIMIT 300", $like));
+  } else {
+    $senders = $wpdb->get_col("SELECT DISTINCT sender_name FROM {$t['messages']} WHERE sender_name <> '' ORDER BY sender_name ASC LIMIT 300");
+    $recips  = $wpdb->get_col("SELECT DISTINCT recipient_name FROM {$t['messages']} WHERE recipient_name IS NOT NULL AND recipient_name <> '' ORDER BY recipient_name ASC LIMIT 300");
+  }
+
+  $usernames = array_values(array_unique(array_merge($senders ?: [], $recips ?: [])));
+  natcasesort($usernames);
+  return array_slice(array_values($usernames), 0, 300);
+}
+
+function kkchat_logs_ajax_usernames() {
+  if (!current_user_can('manage_options')) {
+    wp_send_json_error(['message' => 'forbidden'], 403);
+  }
+
+  check_ajax_referer('kkchat_logs_usernames', 'nonce');
+  $ulike = sanitize_text_field($_POST['ulike'] ?? '');
+  $names = kkchat_logs_fetch_usernames($ulike);
+  wp_send_json_success(['usernames' => $names]);
+}
+add_action('wp_ajax_kkchat_logs_usernames', 'kkchat_logs_ajax_usernames');
+
 function kkchat_admin_logs_page() {
   if (!current_user_can('manage_options')) return;
   global $wpdb; $t = kkchat_tables();
@@ -104,6 +135,7 @@ function kkchat_admin_logs_page() {
   $kind       = in_array(($_GET['kind'] ?? ''), ['chat','banner','any'], true) ? $_GET['kind'] : 'any';
   $from       = sanitize_text_field($_GET['from'] ?? '');
   $to         = sanitize_text_field($_GET['to'] ?? '');
+  $ulike      = sanitize_text_field($_GET['ulike'] ?? '');
   $per        = max(10, min(500, (int)($_GET['per'] ?? 10)));
   $page       = max(1, (int)($_GET['paged'] ?? 1));
   $offset     = ($page - 1) * $per;
@@ -131,7 +163,9 @@ function kkchat_admin_logs_page() {
   if ($to   !== '')    { $ts = strtotime($to.' 23:59:59'); if ($ts) { $where[] = "created_at <= %d"; $params[] = $ts; } }
   $whereSql = $where ? ('WHERE '.implode(' AND ', $where)) : '';
 
-  $total = (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} $whereSql", ...$params));
+  $hasActiveFilters = !empty($where);
+  $shouldCountTotal = $hasActiveFilters || $page > 1;
+  $total = $shouldCountTotal ? (int)$wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$t['messages']} $whereSql", ...$params)) : -1;
 
   $sql = "SELECT id,created_at,kind,room,
                  sender_id,sender_name,sender_ip,
@@ -145,10 +179,6 @@ function kkchat_admin_logs_page() {
   // Markera IP-adresser som redan är blockerade
   $blockedMap = [];
   if ($rows) {
-    // Städa bort utgångna blockeringar innan vi slår upp
-    $now = time();
-    $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET active=0 WHERE active=1 AND expires_at IS NOT NULL AND expires_at <= %d", $now));
-
     $lookupKeys = [];
     $keyToIps   = [];
     foreach ($rows as $row) {
@@ -225,21 +255,7 @@ function kkchat_admin_logs_page() {
     }
   }
 
-  // Sidopanel: användarnamn
-  $ulike = sanitize_text_field($_GET['ulike'] ?? '');
-  if ($ulike !== '') {
-    $like = '%'.$wpdb->esc_like($ulike).'%';
-    $senders = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT sender_name FROM {$t['messages']} WHERE sender_name LIKE %s ORDER BY sender_name ASC LIMIT 300", $like));
-    $recips  = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT recipient_name FROM {$t['messages']} WHERE recipient_name IS NOT NULL AND recipient_name LIKE %s ORDER BY recipient_name ASC LIMIT 300", $like));
-  } else {
-    $senders = $wpdb->get_col("SELECT DISTINCT sender_name FROM {$t['messages']} WHERE sender_name <> '' ORDER BY sender_name ASC LIMIT 300");
-    $recips  = $wpdb->get_col("SELECT DISTINCT recipient_name FROM {$t['messages']} WHERE recipient_name IS NOT NULL AND recipient_name <> '' ORDER BY recipient_name ASC LIMIT 300");
-  }
-  $usernames = array_values(array_unique(array_merge($senders ?: [], $recips ?: [])));
-  natcasesort($usernames);
-  $usernames = array_slice(array_values($usernames), 0, 300);
-
-  $pages = max(1, (int)ceil($total / $per));
+  $pages = $total >= 0 ? max(1, (int)ceil($total / $per)) : 1;
   $logs_base = menu_page_url('kkchat_admin_logs', false);
 
   // Hjälpare: bild-URL?
@@ -287,23 +303,15 @@ function kkchat_admin_logs_page() {
     <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start">
       <aside style="background:#fff;border:1px solid #eee;padding:10px;border-radius:8px">
         <h2>Användarnamn</h2>
-        <form method="get" action="<?php echo esc_url( admin_url('admin.php') ); ?>" style="margin-bottom:8px">
-          <input type="hidden" name="page" value="kkchat_admin_logs">
-          <input type="text" name="ulike" value="<?php echo esc_attr($ulike); ?>" class="regular-text" placeholder="Sök användare…">
-          <p><button class="button">Filtrera</button>
-            <a class="button" href="<?php echo esc_url($logs_base); ?>">Rensa</a>
+        <form id="kkLogsUsersForm" style="margin-bottom:8px">
+          <input type="text" id="kkLogsUsersQuery" value="<?php echo esc_attr($ulike); ?>" class="regular-text" placeholder="Sök användare…">
+          <p>
+            <button class="button" type="submit">Ladda användare</button>
+            <button class="button" type="button" id="kkLogsUsersClear">Rensa</button>
           </p>
         </form>
-        <div style="max-height:420px;overflow:auto;border-top:1px solid #eee;padding-top:6px">
-          <?php if ($usernames): ?>
-            <ul>
-              <?php foreach ($usernames as $name): ?>
-                <li><a href="<?php echo esc_url(add_query_arg('u', rawurlencode($name), $logs_base)); ?>"><?php echo esc_html($name); ?></a></li>
-              <?php endforeach; ?>
-            </ul>
-          <?php else: ?>
-            <p>Inga användare hittades.</p>
-          <?php endif; ?>
+        <div id="kkLogsUsersWrap" style="max-height:420px;overflow:auto;border-top:1px solid #eee;padding-top:6px">
+          <p class="description">Laddas vid behov för snabbare första sidvisning.</p>
         </div>
       </aside>
 
@@ -352,7 +360,11 @@ function kkchat_admin_logs_page() {
           </table>
         </form>
 
-        <p><?php echo esc_html(number_format_i18n($total)); ?> resultat. Sida <?php echo (int)$page; ?> / <?php echo (int)$pages; ?></p>
+        <?php if ($total >= 0): ?>
+          <p><?php echo esc_html(number_format_i18n($total)); ?> resultat. Sida <?php echo (int)$page; ?> / <?php echo (int)$pages; ?></p>
+        <?php else: ?>
+          <p>Snabbläge: visar senaste <?php echo (int)$per; ?> meddelanden utan totalräkning. Lägg till filter för exakt totalt antal.</p>
+        <?php endif; ?>
 
         <!-- Dold IP-block-form (postar till admin-post.php) -->
         <form id="kkbanip_form" method="post" action="<?php echo esc_url( admin_url('admin-post.php') ); ?>" style="display:none">
@@ -629,14 +641,21 @@ function kkchat_admin_logs_page() {
           </tbody>
         </table>
 
-        <?php if ($pages > 1):
+        <?php
           $common = [
             'q'=>$q, 'u'=>$u, 'sender'=>$sender, 'recipient'=>$recipient,
             'room'=>$room, 'kind'=>$kind, 'from'=>$from, 'to'=>$to, 'per'=>$per
           ];
           $prev = $page > 1 ? add_query_arg(array_merge($common, ['paged'=>$page-1]), $logs_base) : '';
-          $next = $page < $pages ? add_query_arg(array_merge($common, ['paged'=>$page+1]), $logs_base) : '';
+          $next = '';
+          if ($total >= 0) {
+            $next = $page < $pages ? add_query_arg(array_merge($common, ['paged'=>$page+1]), $logs_base) : '';
+          } elseif (count($rows) === $per) {
+            $next = add_query_arg(array_merge($common, ['paged'=>$page+1]), $logs_base);
+          }
         ?>
+
+        <?php if ($prev || $next): ?>
           <p>
             <?php if ($prev): ?><a class="button" href="<?php echo esc_url($prev); ?>">&laquo; Föregående</a><?php endif; ?>
             <?php if ($next): ?><a class="button" href="<?php echo esc_url($next); ?>">Nästa &raquo;</a><?php endif; ?>
@@ -686,6 +705,70 @@ function kkchat_admin_logs_page() {
               setVal('user_wp_username', data.wpUsername);
               f.submit();
             };
+
+
+            var usersForm = document.getElementById('kkLogsUsersForm');
+            var usersWrap = document.getElementById('kkLogsUsersWrap');
+            var usersQuery = document.getElementById('kkLogsUsersQuery');
+            var usersClear = document.getElementById('kkLogsUsersClear');
+            var ajaxUrl = <?php echo wp_json_encode(admin_url('admin-ajax.php')); ?>;
+            var usersNonce = <?php echo wp_json_encode(wp_create_nonce('kkchat_logs_usernames')); ?>;
+
+            function renderUsers(items) {
+              if (!usersWrap) return;
+              if (!items || !items.length) {
+                usersWrap.innerHTML = '<p>Inga användare hittades.</p>';
+                return;
+              }
+              var html = '<ul>';
+              items.forEach(function(name){
+                var encoded = encodeURIComponent(name);
+                var safe = String(name).replace(/[&<>"]/g, function(ch){
+                  return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[ch] || ch;
+                });
+                html += '<li><a href="<?php echo esc_url($logs_base); ?>&u=' + encoded + '">' + safe + '</a></li>';
+              });
+              html += '</ul>';
+              usersWrap.innerHTML = html;
+            }
+
+            function loadUsers(query) {
+              if (!usersWrap) return;
+              usersWrap.innerHTML = '<p class="description">Laddar användare…</p>';
+
+              var body = new URLSearchParams();
+              body.set('action', 'kkchat_logs_usernames');
+              body.set('nonce', usersNonce);
+              body.set('ulike', query || '');
+
+              fetch(ajaxUrl, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                body: body.toString()
+              })
+              .then(function(res){ return res.json(); })
+              .then(function(payload){
+                var names = payload && payload.success && payload.data ? payload.data.usernames : [];
+                renderUsers(names || []);
+              })
+              .catch(function(){
+                usersWrap.innerHTML = '<p>Kunde inte ladda användarlista just nu.</p>';
+              });
+            }
+
+            if (usersForm) {
+              usersForm.addEventListener('submit', function(e){
+                e.preventDefault();
+                loadUsers(usersQuery ? usersQuery.value : '');
+              });
+            }
+            if (usersClear) {
+              usersClear.addEventListener('click', function(){
+                if (usersQuery) usersQuery.value = '';
+                if (usersWrap) usersWrap.innerHTML = '<p class="description">Laddas vid behov för snabbare första sidvisning.</p>';
+              });
+            }
 
             // Lightbox för bilder
             var lb = document.getElementById('kkchatLightbox');
