@@ -259,6 +259,84 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
   ]);
 
   // =========================================================
+  // Admin: ban reported user (by reported_ip_key) and resolve report
+  // Works even if reported user is no longer present in active users.
+  // =========================================================
+  register_rest_route($ns, '/reports/ban-resolve', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login(); kkchat_check_csrf_or_fail($req);
+      if (!kkchat_is_admin()) kkchat_json(['ok'=>false,'err'=>'forbidden'], 403);
+
+      global $wpdb; $t = kkchat_tables();
+      $id = max(0, (int)$req->get_param('id'));
+      if ($id <= 0) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
+
+      $report = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, status, reported_id, reported_name, reported_ip_key FROM {$t['reports']} WHERE id=%d LIMIT 1",
+        $id
+      ), ARRAY_A);
+      if (!$report) kkchat_json(['ok'=>false,'err'=>'bad_id'], 400);
+
+      $reported_ip_key = (string)($report['reported_ip_key'] ?? '');
+      if ($reported_ip_key === '') kkchat_json(['ok'=>false,'err'=>'no_ip'], 400);
+
+      $existing_ban = (bool) $wpdb->get_var($wpdb->prepare(
+        "SELECT 1 FROM {$t['blocks']} WHERE type='ipban' AND active=1 AND target_ip=%s LIMIT 1",
+        $reported_ip_key
+      ));
+
+      $now = time();
+      $admin = (string)($_SESSION['kkchat_wp_username'] ?? '');
+      $ban_created = 0;
+
+      if (!$existing_ban) {
+        $wpdb->insert($t['blocks'], [
+          'type'               => 'ipban',
+          'target_user_id'     => (int)($report['reported_id'] ?? 0),
+          'target_name'        => (string)($report['reported_name'] ?? ''),
+          'target_wp_username' => null,
+          'target_ip'          => $reported_ip_key,
+          'cause'              => 'Bannad via rapporthantering.',
+          'created_by'         => $admin ?: null,
+          'created_at'         => $now,
+          'expires_at'         => null,
+          'active'             => 1
+        ], ['%s','%d','%s','%s','%s','%s','%s','%d','%d','%d']);
+
+        if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+
+        $ban_id = (int)$wpdb->insert_id;
+        if ($ban_id > 0) {
+          $ban_created = 1;
+          $wpdb->query($wpdb->prepare("UPDATE {$t['blocks']} SET expires_at = NULL WHERE id=%d", $ban_id));
+        }
+      }
+
+      $updated = $wpdb->update(
+        $t['reports'],
+        ['status' => 'resolved', 'resolved_at' => $now],
+        ['id' => $id, 'status' => 'open'],
+        ['%s','%d'],
+        ['%d','%s']
+      );
+      if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+
+      $reported_id = (int)($report['reported_id'] ?? 0);
+      if ($reported_id > 0) {
+        $wpdb->delete($t['users'], ['id' => $reported_id], ['%d']);
+      }
+
+      kkchat_json([
+        'ok' => true,
+        'ban_created' => (int)$ban_created,
+        'resolved_updated' => (int)$updated,
+      ]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
+  // =========================================================
   // Admin: delete report permanently
   // =========================================================
   register_rest_route($ns, '/reports/delete', [

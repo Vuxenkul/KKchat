@@ -6747,7 +6747,7 @@ jumpBtn.addEventListener('click', ()=>{
           </div>
           <div class="report-actions">
             ${reportedId ? `<button class="report-action" data-log="${reportedId}" title="Visa logg" aria-label="Visa logg för användaren">${iconMarkup('history')}<span>Visa logg</span></button>` : ''}
-            ${reportedId ? `<button class="report-action" data-ban-report="${reportedId}" data-report-id="${id}" title="Banna rapporterad och markera som löst" aria-label="Banna rapporterad och markera som löst">${iconMarkup('gpp_bad')}<span>Banna rapporterad</span></button>` : ''}
+            <button class="report-action" data-ban-report="${id}" title="Banna rapporterad och markera som löst" aria-label="Banna rapporterad och markera som löst">${iconMarkup('gpp_bad')}<span>Banna rapporterad</span></button>
             <button class="report-action" data-delete="${id}" title="Ta bort rapport" aria-label="Ta bort rapport">${iconMarkup('delete')}<span>Ta bort</span></button>
           </div>
         </div>`;
@@ -6774,36 +6774,23 @@ jumpBtn.addEventListener('click', ()=>{
 
     const banReportBtn = e.target.closest('[data-ban-report]');
     if (banReportBtn){
-      const reportedId = Number(banReportBtn.getAttribute('data-ban-report'));
-      const reportId = Number(banReportBtn.getAttribute('data-report-id'));
-      if (!reportedId || !reportId) return;
+      const reportId = Number(banReportBtn.getAttribute('data-ban-report'));
+      if (!reportId) return;
       if (!confirm('Banna rapporterad användare och markera rapporten som löst?')) return;
 
-      const banFd = new FormData();
-      banFd.append('csrf_token', CSRF);
-      banFd.append('user_id', String(reportedId));
-      banFd.append('minutes', '0');
-      banFd.append('cause', 'Bannad via rapporthantering.');
+      const fd = new FormData();
+      fd.append('csrf_token', CSRF);
+      fd.append('id', String(reportId));
 
       try{
-        const banResponse = await fetch(`${API}/moderate/ipban`, { method:'POST', body:banFd, credentials:'include', headers:h });
-        const banJson = await banResponse.json().catch(()=>({}));
-        if (!(banResponse.ok && banJson.ok)) {
-          alert('Kunde inte banna användaren: ' + (banJson.err || 'okänt fel'));
-          return;
-        }
-
-        const resolveFd = new FormData();
-        resolveFd.append('csrf_token', CSRF);
-        resolveFd.append('id', String(reportId));
-        const resolveResponse = await fetch(`${API}/reports/resolve`, { method:'POST', body:resolveFd, credentials:'include', headers:h });
-        const resolveJson = await resolveResponse.json().catch(()=>({}));
-        if (resolveResponse.ok && resolveJson.ok){
+        const response = await fetch(`${API}/reports/ban-resolve`, { method:'POST', body:fd, credentials:'include', headers:h });
+        const js = await response.json().catch(()=>({}));
+        if (response.ok && js.ok){
           reportListEl.querySelector(`.report[data-id="${reportId}"]`)?.remove();
           if (OPEN_REPORTS_COUNT > 0) { OPEN_REPORTS_COUNT--; updateLeftCounts(); }
           showToast('Användaren bannades och rapporten markerades som löst');
         } else {
-          alert(resolveJson.err || 'Användaren bannades, men rapporten kunde inte markeras som löst');
+          alert('Kunde inte banna användaren: ' + (js.err || 'okänt fel'));
         }
       }catch(_){ alert('Tekniskt fel'); }
       return;
