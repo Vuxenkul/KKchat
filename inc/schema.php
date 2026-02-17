@@ -57,6 +57,8 @@ function kkchat_activate() {
     KEY `idx_created` (`created_at`),
     KEY `idx_recipient` (`recipient_id`),
     KEY `idx_sender` (`sender_id`),
+    KEY `idx_sender_name` (`sender_name`),
+    KEY `idx_recipient_name` (`recipient_name`),
     KEY `idx_room` (`room`),
     KEY `idx_sender_hash` (`sender_id`,`content_hash`,`created_at`),
     KEY `idx_room_id` (`room`,`id`),
@@ -601,6 +603,11 @@ function kkchat_banner_next_run_window(array $row, int $after, int $interval): ?
 }
 
   add_action('kkchat_cron_tick', 'kkchat_run_scheduled_banners');
+  add_action('kkchat_cron_tick', function () {
+    if (function_exists('kkchat_cleanup_expired_blocks')) {
+      kkchat_cleanup_expired_blocks(true);
+    }
+  });
 
   function kkchat_banner_message_payload(array $row): array {
     $html = (string)($row['content'] ?? '');
@@ -768,6 +775,8 @@ function kkchat_maybe_upgrade_schema() {
       KEY `idx_created` (`created_at`),
       KEY `idx_recipient` (`recipient_id`),
       KEY `idx_sender` (`sender_id`),
+      KEY `idx_sender_name` (`sender_name`),
+      KEY `idx_recipient_name` (`recipient_name`),
       KEY `idx_room` (`room`),
       KEY `idx_sender_hash` (`sender_id`,`content_hash`,`created_at`),
       KEY `idx_room_id` (`room`,`id`),
@@ -1117,6 +1126,12 @@ function kkchat_maybe_upgrade_schema() {
   }
   if (!$has_index($t['messages'], 'idx_recipient')) {
     @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_recipient` (`recipient_id`)");
+  }
+  if (!$has_index($t['messages'], 'idx_sender_name')) {
+    @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_sender_name` (`sender_name`)");
+  }
+  if (!$has_index($t['messages'], 'idx_recipient_name')) {
+    @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_recipient_name` (`recipient_name`)");
   }
   if (!$has_index($t['messages'], 'idx_room')) {
     @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_room` (`room`)");
