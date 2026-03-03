@@ -69,17 +69,19 @@ register_rest_route($ns, '/fetch', [
     } else {
       // DMs
       if ($peer) {
+        $dmLow  = min($me, $peer);
+        $dmHigh = max($me, $peer);
         if ($since < 0) {
           // Last N in thread with specific peer
           $rows = $wpdb->get_results(
             $wpdb->prepare(
               "SELECT $msgColumns FROM {$t['messages']}
                WHERE hidden_at IS NULL
-                 AND ((sender_id = %d AND recipient_id = %d) OR
-                      (sender_id = %d AND recipient_id = %d))
+                 AND dm_user_low = %d
+                 AND dm_user_high = %d
                ORDER BY id DESC
                LIMIT %d",
-              $me, $peer, $peer, $me, $limit
+              $dmLow, $dmHigh, $limit
             ),
             ARRAY_A
           ) ?: [];
@@ -90,11 +92,11 @@ register_rest_route($ns, '/fetch', [
               "SELECT $msgColumns FROM {$t['messages']}
                WHERE id > %d
                  AND hidden_at IS NULL
-                 AND ((sender_id = %d AND recipient_id = %d)
-                   OR  (sender_id = %d AND recipient_id = %d))
+                 AND dm_user_low = %d
+                 AND dm_user_high = %d
                ORDER BY id ASC
                LIMIT %d",
-              $since, $me, $peer, $peer, $me, $limit
+              $since, $dmLow, $dmHigh, $limit
             ),
             ARRAY_A
           ) ?: [];

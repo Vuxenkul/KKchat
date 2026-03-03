@@ -41,6 +41,8 @@ function kkchat_activate() {
     `recipient_id` INT UNSIGNED NULL,
     `recipient_name` VARCHAR(64) NULL,
     `recipient_ip` VARCHAR(45) NULL,
+    `dm_user_low` INT UNSIGNED NULL,
+    `dm_user_high` INT UNSIGNED NULL,
     `room` VARCHAR(64) NULL,
     `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
     `content_hash` CHAR(40) NULL,
@@ -67,6 +69,8 @@ function kkchat_activate() {
     KEY `idx_hidden_at` (`hidden_at`),
     KEY `idx_room_hidden_id` (`room`,`hidden_at`,`id`),
     KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`),
+    KEY `idx_dm_thread` (`dm_user_low`,`dm_user_high`,`hidden_at`,`id`),
+    KEY `idx_recipient_hidden_sender_id` (`recipient_id`,`hidden_at`,`sender_id`,`id`),
     KEY `idx_reply_to` (`reply_to_id`)
   ) $charset;";
 
@@ -306,6 +310,12 @@ function kkchat_maybe_migrate(){
     if (!kkchat_column_exists($t['messages'], 'reply_to_excerpt')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `reply_to_excerpt` VARCHAR(255) NULL AFTER `reply_to_sender_name`");
     }
+    if (!kkchat_column_exists($t['messages'], 'dm_user_low')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `dm_user_low` INT UNSIGNED NULL AFTER `recipient_ip`");
+    }
+    if (!kkchat_column_exists($t['messages'], 'dm_user_high')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD COLUMN `dm_user_high` INT UNSIGNED NULL AFTER `dm_user_low`");
+    }
 
     // Index helpers
     $has_index = function($name) use ($wpdb, $t){
@@ -339,6 +349,18 @@ function kkchat_maybe_migrate(){
     if (!$has_index('idx_reply_to')) {
       $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_reply_to` (`reply_to_id`)");
     }
+    if (!$has_index('idx_dm_thread')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_dm_thread` (`dm_user_low`,`dm_user_high`,`hidden_at`,`id`)");
+    }
+    if (!$has_index('idx_recipient_hidden_sender_id')) {
+      $wpdb->query("ALTER TABLE `{$t['messages']}` ADD INDEX `idx_recipient_hidden_sender_id` (`recipient_id`,`hidden_at`,`sender_id`,`id`)");
+    }
+
+    $wpdb->query("UPDATE `{$t['messages']}`
+                     SET dm_user_low = LEAST(sender_id, recipient_id),
+                         dm_user_high = GREATEST(sender_id, recipient_id)
+                   WHERE recipient_id IS NOT NULL
+                     AND (dm_user_low IS NULL OR dm_user_high IS NULL)");
   }
 
     if (kkchat_table_exists($t['banners'])) {
@@ -764,6 +786,8 @@ function kkchat_maybe_upgrade_schema() {
       `recipient_id` INT UNSIGNED NULL,
       `recipient_name` VARCHAR(64) NULL,
       `recipient_ip` VARCHAR(45) NULL,
+      `dm_user_low` INT UNSIGNED NULL,
+      `dm_user_high` INT UNSIGNED NULL,
       `room` VARCHAR(64) NULL,
       `kind` VARCHAR(16) NOT NULL DEFAULT 'chat',
       `content_hash` CHAR(40) NULL,
@@ -784,7 +808,9 @@ function kkchat_maybe_upgrade_schema() {
       KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`),
       KEY `idx_hidden_at` (`hidden_at`),
       KEY `idx_room_hidden_id` (`room`,`hidden_at`,`id`),
-      KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`)
+      KEY `idx_recipient_hidden_id` (`recipient_id`,`hidden_at`,`id`),
+      KEY `idx_dm_thread` (`dm_user_low`,`dm_user_high`,`hidden_at`,`id`),
+      KEY `idx_recipient_hidden_sender_id` (`recipient_id`,`hidden_at`,`sender_id`,`id`)
     ) $charset;";
     dbDelta($sql1);
   }
@@ -1100,6 +1126,10 @@ function kkchat_maybe_upgrade_schema() {
   if (!$has_rip) { @ $wpdb->query("ALTER TABLE {$t['messages']} ADD `recipient_ip` VARCHAR(45) NULL"); }
   $has_rname = $wpdb->get_var("SHOW COLUMNS FROM {$t['messages']} LIKE 'recipient_name'");
   if (!$has_rname){ @ $wpdb->query("ALTER TABLE {$t['messages']} ADD `recipient_name` VARCHAR(64) NULL"); }
+  $has_dm_low = $wpdb->get_var("SHOW COLUMNS FROM {$t['messages']} LIKE 'dm_user_low'");
+  if (!$has_dm_low) { @ $wpdb->query("ALTER TABLE {$t['messages']} ADD `dm_user_low` INT UNSIGNED NULL"); }
+  $has_dm_high = $wpdb->get_var("SHOW COLUMNS FROM {$t['messages']} LIKE 'dm_user_high'");
+  if (!$has_dm_high) { @ $wpdb->query("ALTER TABLE {$t['messages']} ADD `dm_user_high` INT UNSIGNED NULL"); }
   $has_ch    = $wpdb->get_var("SHOW COLUMNS FROM {$t['messages']} LIKE 'content_hash'");
   if (!$has_ch) { @ $wpdb->query("ALTER TABLE {$t['messages']} ADD `content_hash` CHAR(40) NULL"); }
 
@@ -1156,6 +1186,18 @@ function kkchat_maybe_upgrade_schema() {
   if (!$has_index($t['messages'], 'idx_recipient_sender_id')) {
     @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_recipient_sender_id` (`recipient_id`,`sender_id`,`id`)");
   }
+  if (!$has_index($t['messages'], 'idx_dm_thread')) {
+    @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_dm_thread` (`dm_user_low`,`dm_user_high`,`hidden_at`,`id`)");
+  }
+  if (!$has_index($t['messages'], 'idx_recipient_hidden_sender_id')) {
+    @ $wpdb->query("ALTER TABLE {$t['messages']} ADD KEY `idx_recipient_hidden_sender_id` (`recipient_id`,`hidden_at`,`sender_id`,`id`)");
+  }
+
+  @ $wpdb->query("UPDATE {$t['messages']}
+                     SET dm_user_low = LEAST(sender_id, recipient_id),
+                         dm_user_high = GREATEST(sender_id, recipient_id)
+                   WHERE recipient_id IS NOT NULL
+                     AND (dm_user_low IS NULL OR dm_user_high IS NULL)");
 
   // users: add modern columns if missing
   $has_ip = $wpdb->get_var("SHOW COLUMNS FROM {$t['users']} LIKE 'ip'");

@@ -364,10 +364,14 @@ if (!function_exists('kkchat_reply_excerpt_from_message')) {
       }
 
       if ($recipient !== null) {
+        $dmLow  = min($me_id, (int) $recipient);
+        $dmHigh = max($me_id, (int) $recipient);
         $data['recipient_id']   = $recipient;
         $data['recipient_name'] = $recipient_name;
         $data['recipient_ip']   = $recipient_ip;
-        $format[] = '%d'; $format[] = '%s'; $format[] = '%s';
+        $data['dm_user_low']    = $dmLow;
+        $data['dm_user_high']   = $dmHigh;
+        $format[] = '%d'; $format[] = '%s'; $format[] = '%s'; $format[] = '%d'; $format[] = '%d';
       } else {
         $data['room'] = $room;
         $format[] = '%s';

@@ -55,14 +55,18 @@ register_rest_route($ns, '/moderate/hide-message', [
       ]);
     } else {
       // Direct message: insert into the same sender/recipient channel so both sides wake up
+      $senderId = (int) $msg['sender_id'];
+      $recipientId = (int) $msg['recipient_id'];
       $wpdb->insert($t['messages'], [
         'created_at'     => time(),
         'kind'           => 'mod_hide',
         'room'           => null,
-        'sender_id'      => (int)$msg['sender_id'],
+        'sender_id'      => $senderId,
         'sender_name'    => '',
-        'recipient_id'   => (int)$msg['recipient_id'],
+        'recipient_id'   => $recipientId,
         'recipient_name' => null,
+        'dm_user_low'    => min($senderId, $recipientId),
+        'dm_user_high'   => max($senderId, $recipientId),
         'content'        => wp_json_encode(['id' => (int)$mid, 'action' => 'hide']),
       ]);
     }
