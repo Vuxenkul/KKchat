@@ -83,6 +83,7 @@
   <div class="leftview" id="kk-lvReports">
     <div id="kk-reportList" class="users"></div>
     <div class="people" style="padding:8px">
+      <button id="kk-reportResolveBlocked" type="button" class="button" aria-label="Markera blockerade som avklarade">Markera blockerade som avklarade</button>
       <button id="kk-reportRefresh" type="button" class="iconbtn" aria-label="Uppdatera rapporter"><span class="material-symbols-rounded" aria-hidden="true">refresh</span></button>
     </div>
   </div>
@@ -567,6 +568,7 @@
   const lvReports       = document.getElementById('kk-lvReports');
   const reportListEl    = document.getElementById('kk-reportList');
   const reportRefreshBtn= document.getElementById('kk-reportRefresh');
+  const reportResolveBlockedBtn = document.getElementById('kk-reportResolveBlocked');
   const countReportsEl  = document.getElementById('kk-countReports');
 
   // State for reports
@@ -6760,10 +6762,32 @@ jumpBtn.addEventListener('click', ()=>{
     const js = await fetchJSON(`${API}/reports?status=open`);
     if (js && js.ok && Array.isArray(js.rows)) {
       renderReports(js.rows);
+      OPEN_REPORTS_COUNT = js.rows.length;
+      updateLeftCounts();
     }
   }
 
   reportRefreshBtn?.addEventListener('click', ()=>{ loadReports().catch(()=>{}); });
+  reportResolveBlockedBtn?.addEventListener('click', async ()=>{
+    if (!IS_ADMIN) return;
+    if (!confirm('Markera alla rapporter för redan blockerade användare som avklarade?')) return;
+
+    const fd = new FormData();
+    fd.append('csrf_token', CSRF);
+    try {
+      const response = await fetch(`${API}/reports/resolve-blocked`, { method:'POST', body:fd, credentials:'include', headers:h });
+      const js = await response.json().catch(()=>({}));
+      if (response.ok && js.ok) {
+        await loadReports();
+        const resolvedCount = Number(js.resolved || 0);
+        showToast(`${resolvedCount} blockerade rapporter markerades som avklarade`);
+      } else {
+        alert('Kunde inte markera blockerade rapporter: ' + (js.err || 'okänt fel'));
+      }
+    } catch(_) {
+      alert('Tekniskt fel');
+    }
+  });
 
   reportListEl?.addEventListener('click', async (e)=>{
     const logBtn = e.target.closest('[data-log]');
@@ -6789,9 +6813,10 @@ jumpBtn.addEventListener('click', ()=>{
         const response = await fetch(`${API}/reports/ban-resolve`, { method:'POST', body:fd, credentials:'include', headers:h });
         const js = await response.json().catch(()=>({}));
         if (response.ok && js.ok){
-          reportListEl.querySelector(`.report[data-id="${reportId}"]`)?.remove();
-          if (OPEN_REPORTS_COUNT > 0) { OPEN_REPORTS_COUNT--; updateLeftCounts(); }
-          showToast('Användaren bannades och rapporten markerades som löst');
+          await loadReports();
+          const resolvedCount = Number(js.resolved_updated || 0);
+          const suffix = resolvedCount > 1 ? ` (${resolvedCount} rapporter stängdes)` : '';
+          showToast(`Användaren bannades och rapporten markerades som löst${suffix}`);
         } else {
           alert('Kunde inte banna användaren: ' + (js.err || 'okänt fel'));
         }
