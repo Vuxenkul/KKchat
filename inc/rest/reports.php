@@ -259,6 +259,38 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
   ]);
 
   // =========================================================
+  // Admin: resolve all open reports where reported user is already ip-banned
+  // =========================================================
+  register_rest_route($ns, '/reports/resolve-blocked', [
+    'methods'  => 'POST',
+    'callback' => function (WP_REST_Request $req) {
+      kkchat_require_login(); kkchat_check_csrf_or_fail($req);
+      if (!kkchat_is_admin()) kkchat_json(['ok'=>false,'err'=>'forbidden'], 403);
+
+      global $wpdb; $t = kkchat_tables();
+      $now = time();
+
+      $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['blocks']} SET active=0 WHERE active=1 AND expires_at IS NOT NULL AND expires_at <= %d",
+        $now
+      ));
+
+      $updated = $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['reports']} r
+           INNER JOIN {$t['blocks']} b
+             ON b.type='ipban' AND b.active=1 AND b.target_ip = r.reported_ip_key
+         SET r.status='resolved', r.resolved_at=%d
+       WHERE r.status='open'",
+        $now
+      ));
+
+      if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
+      kkchat_json(['ok'=>true, 'resolved' => max(0, (int)$updated)]);
+    },
+    'permission_callback' => '__return_true',
+  ]);
+
+  // =========================================================
   // Admin: ban reported user (by reported_ip_key) and resolve report
   // Works even if reported user is no longer present in active users.
   // =========================================================
@@ -349,13 +381,26 @@ function kkchat_report_excerpt(string $content, string $kind = 'chat'): string {
         }
       }
 
-      $updated = $wpdb->update(
-        $t['reports'],
-        ['status' => 'resolved', 'resolved_at' => $now],
-        ['id' => $id, 'status' => 'open'],
-        ['%s','%d'],
-        ['%d','%s']
-      );
+      $conditions = [];
+      $params = [$now];
+      if ($reported_ip_key !== '') {
+        $conditions[] = 'reported_ip_key=%s';
+        $params[] = $reported_ip_key;
+      }
+      if ($reported_id > 0) {
+        $conditions[] = 'reported_id=%d';
+        $params[] = $reported_id;
+      }
+      if (!$conditions) {
+        $conditions[] = 'id=%d';
+        $params[] = $id;
+      }
+
+      $whereSql = "status='open' AND (" . implode(' OR ', $conditions) . ')';
+      $updated = $wpdb->query($wpdb->prepare(
+        "UPDATE {$t['reports']} SET status='resolved', resolved_at=%d WHERE {$whereSql}",
+        ...$params
+      ));
       if ($wpdb->last_error) kkchat_json(['ok'=>false,'err'=>'db'], 500);
 
       if ($reported_id > 0) {
