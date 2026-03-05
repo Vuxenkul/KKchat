@@ -123,19 +123,22 @@ register_rest_route($ns, '/admin/dm-thread', [
 
     if ($user_id <= 0 || $peer_id <= 0) kkchat_json(['ok'=>false,'err'=>'need_users'], 400);
 
+    $dm_low  = min($user_id, $peer_id);
+    $dm_high = max($user_id, $peer_id);
+
     $sql = "SELECT id,created_at,kind,room,
                    sender_id,sender_name,
                    recipient_id,recipient_name,
                    content, is_explicit,
                    reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt
               FROM {$t['messages']}
-             WHERE ((sender_id = %d AND recipient_id = %d) OR
-                    (sender_id = %d AND recipient_id = %d))
+             WHERE dm_user_low = %d
+               AND dm_user_high = %d
           ORDER BY id DESC
              LIMIT %d";
 
     $rows = $wpdb->get_results(
-      $wpdb->prepare($sql, $user_id, $peer_id, $peer_id, $user_id, $limit),
+      $wpdb->prepare($sql, $dm_low, $dm_high, $limit),
       ARRAY_A
     ) ?: [];
 

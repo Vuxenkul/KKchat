@@ -801,16 +801,18 @@ if (!defined('ABSPATH')) exit;
         }
       } else {
         if ($peer) {
+          $dmLow  = min($me, $peer);
+          $dmHigh = max($me, $peer);
           if ($since < 0) {
             $rows = $wpdb->get_results(
               $wpdb->prepare(
                 "SELECT $msgColumns FROM {$t['messages']}
                  WHERE hidden_at IS NULL
-                   AND ((sender_id = %d AND recipient_id = %d) OR
-                        (sender_id = %d AND recipient_id = %d))
+                   AND dm_user_low = %d
+                   AND dm_user_high = %d
                  ORDER BY id DESC
                  LIMIT %d",
-                $me, $peer, $peer, $me, $limit
+                $dmLow, $dmHigh, $limit
               ),
               ARRAY_A
             ) ?: [];
@@ -821,11 +823,11 @@ if (!defined('ABSPATH')) exit;
                 "SELECT $msgColumns FROM {$t['messages']}
                  WHERE id > %d
                    AND hidden_at IS NULL
-                   AND ((sender_id = %d AND recipient_id = %d) OR
-                        (sender_id = %d AND recipient_id = %d))
+                   AND dm_user_low = %d
+                   AND dm_user_high = %d
                  ORDER BY id ASC
                  LIMIT %d",
-                $since, $me, $peer, $peer, $me, $limit
+                $since, $dmLow, $dmHigh, $limit
               ),
               ARRAY_A
             ) ?: [];
