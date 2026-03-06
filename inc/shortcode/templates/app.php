@@ -24,9 +24,6 @@
   <button type="button" data-view="users" aria-selected="true">
     <span class="material-symbols-rounded" aria-hidden="true">person</span> <span class="badge" id="kk-countUsers">0</span>
   </button>
-  <button type="button" data-view="rooms" aria-selected="false">
-    <span class="material-symbols-rounded" aria-hidden="true">chat</span> <span class="badge" id="kk-countRooms">0</span>
-  </button>
   <button type="button" data-view="dms" aria-selected="false">
     <span class="material-symbols-rounded" aria-hidden="true">mail</span> <span class="badge" id="kk-countDMs">0</span>
   </button>
@@ -35,6 +32,9 @@
     <span class="material-symbols-rounded" aria-hidden="true">flag</span> <span class="badge" id="kk-countReports">0</span>
   </button>
   <?php endif; ?>
+  <button type="button" data-view="rooms" aria-selected="false">
+    <span class="material-symbols-rounded" aria-hidden="true">chat</span> <span class="badge" id="kk-countRooms">0</span>
+  </button>
 </div>
 
             <div class="leftview" id="kk-lvUsers" active>
