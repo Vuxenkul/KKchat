@@ -282,6 +282,48 @@ function kkchat_admin_logs_page() {
       $convA, $convB, $convB, $convA, 1000
     ));
   }
+
+  $ctxMid = max(0, (int)($_GET['ctx_mid'] ?? 0));
+  $ctxTarget = null;
+  $ctxRows = [];
+  if ($ctxMid > 0) {
+    $ctxTarget = $wpdb->get_row($wpdb->prepare(
+      "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content,is_explicit
+         FROM {$t['messages']}
+        WHERE id=%d",
+      $ctxMid
+    ));
+
+    if ($ctxTarget && empty($ctxTarget->recipient_id)) {
+      $ctxRoom = (string)($ctxTarget->room ?? '');
+
+      $ctxBefore = $wpdb->get_results($wpdb->prepare(
+        "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content,is_explicit
+           FROM {$t['messages']}
+          WHERE recipient_id IS NULL
+            AND room = %s
+            AND id < %d
+          ORDER BY id DESC
+          LIMIT 25",
+        $ctxRoom,
+        $ctxMid
+      ));
+
+      $ctxAfter = $wpdb->get_results($wpdb->prepare(
+        "SELECT id,created_at,kind,room,sender_id,sender_name,recipient_id,recipient_name,content,is_explicit
+           FROM {$t['messages']}
+          WHERE recipient_id IS NULL
+            AND room = %s
+            AND id > %d
+          ORDER BY id ASC
+          LIMIT 25",
+        $ctxRoom,
+        $ctxMid
+      ));
+
+      $ctxRows = array_merge(array_reverse($ctxBefore ?: []), [$ctxTarget], $ctxAfter ?: []);
+    }
+  }
   ?>
   <div class="wrap">
     <h1>KKchat Loggar</h1>
@@ -490,6 +532,62 @@ function kkchat_admin_logs_page() {
           </div>
         </div>
 
+        <?php if ($ctxMid): ?>
+        <div id="kkctx" class="kkconv-overlay" role="dialog" aria-modal="true" aria-label="Chattlogg" style="display:flex">
+          <div class="kkconv-panel" style="max-width:1000px">
+            <div class="kkconv-header">
+              <div class="kkconv-title">
+                <?php if ($ctxTarget && empty($ctxTarget->recipient_id)): ?>
+                  Chattlogg: <code><?php echo esc_html((string)($ctxTarget->room ?: 'okänt')); ?></code> runt #<?php echo (int)$ctxMid; ?>
+                <?php else: ?>
+                  Chattlogg
+                <?php endif; ?>
+              </div>
+              <div>
+                <button type="button" class="button kkconv-close" onclick="kkCloseConv()">Stäng</button>
+              </div>
+            </div>
+            <div class="kkconv-body" id="kkctxBody">
+              <?php if (!$ctxTarget): ?>
+                <p>Meddelandet hittades inte.</p>
+              <?php elseif (!empty($ctxTarget->recipient_id)): ?>
+                <p>Detta meddelande är ett DM. Använd knappen <strong>Samtal</strong> för DM-kontext.</p>
+              <?php elseif (!$ctxRows): ?>
+                <p>Ingen offentlig chattlogg hittades för detta meddelande.</p>
+              <?php else: ?>
+                <?php foreach ($ctxRows as $r): ?>
+                  <?php $isTarget = ((int)$r->id === (int)$ctxMid); ?>
+                  <div class="kkconv-row them"<?php echo $isTarget ? ' style="border-left:4px solid #2271b1;padding-left:8px;background:#f0f6fc"' : ''; ?>>
+                    <div class="kkconv-msg">
+                      <div class="kkconv-meta">
+                        <strong><?php echo esc_html($r->sender_name ?: ('#'.$r->sender_id)); ?></strong>
+                        • #<?php echo (int)$r->id; ?>
+                        • <?php echo esc_html(date_i18n('Y-m-d H:i:s', (int)$r->created_at)); ?>
+                        • Rum: <code><?php echo esc_html((string)$r->room); ?></code>
+                      </div>
+                      <?php if ($r->kind === 'image'): ?>
+                        <div class="kkconv-meta">
+                          <span class="kk-explicit-badge<?php echo !empty($r->is_explicit) ? '' : ' is-muted'; ?>"><?php echo !empty($r->is_explicit) ? 'XXX' : 'SFW'; ?></span>
+                        </div>
+                      <?php endif; ?>
+                      <div class="kkchat-msg">
+                        <?php if ($r->kind === 'image' && $is_image_url($r->content)): ?>
+                          <?php $full = esc_url($r->content); ?>
+                          <img src="<?php echo $full; ?>" alt="Bild #<?php echo (int)$r->id; ?>" class="kkchat-thumb" data-full="<?php echo $full; ?>" loading="lazy">
+                        <?php else: ?>
+                          <?php echo $r->content; /* redan escapat vid skrivning */ ?>
+                        <?php endif; ?>
+                      </div>
+                    </div>
+                  </div>
+                <?php endforeach; ?>
+                <script>(function(){var b=document.getElementById('kkctxBody'); if(b){var t=b.querySelector('[style*="border-left:4px solid"]'); if(t){t.scrollIntoView({block:'center'});} }})();</script>
+              <?php endif; ?>
+            </div>
+          </div>
+        </div>
+        <?php endif; ?>
+
         <table class="widefat striped">
           <thead>
             <tr>
@@ -516,6 +614,9 @@ function kkchat_admin_logs_page() {
                 <?php if ($m->sender_id && $m->recipient_id): ?>
                   <button type="button" class="button button-secondary"
                           onclick="kkOpenConversation(<?php echo (int)$m->sender_id; ?>,<?php echo (int)$m->recipient_id; ?>)">Samtal</button>
+                <?php elseif (empty($m->recipient_id)): ?>
+                  <button type="button" class="button button-secondary"
+                          onclick="kkOpenPublicContext(<?php echo (int)$m->id; ?>)">Chattlogg</button>
                 <?php else: ?>
                   —
                 <?php endif; ?>
@@ -792,16 +893,28 @@ function kkchat_admin_logs_page() {
             window.kkOpenConversation = function(a, b) {
               if (!a || !b) return;
               var url = new URL(window.location.href);
+              url.searchParams.delete('ctx_mid');
               url.searchParams.set('conv_a', String(a));
               url.searchParams.set('conv_b', String(b));
               window.location.href = url.toString(); // servern renderar modal med data
             };
-            window.kkCloseConv = function() {
-              var el = document.getElementById('kkconv');
-              if (el) el.style.display = 'none';
+            window.kkOpenPublicContext = function(mid) {
+              if (!mid) return;
               var url = new URL(window.location.href);
               url.searchParams.delete('conv_a');
               url.searchParams.delete('conv_b');
+              url.searchParams.set('ctx_mid', String(mid));
+              window.location.href = url.toString();
+            };
+            window.kkCloseConv = function() {
+              var el = document.getElementById('kkconv');
+              if (el) el.style.display = 'none';
+              var ctx = document.getElementById('kkctx');
+              if (ctx) ctx.style.display = 'none';
+              var url = new URL(window.location.href);
+              url.searchParams.delete('conv_a');
+              url.searchParams.delete('conv_b');
+              url.searchParams.delete('ctx_mid');
               window.history.replaceState({}, '', url.toString());
             };
           })();
