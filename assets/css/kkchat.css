@@ -1971,16 +1971,11 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .kk-floater {
   position: absolute;
   border-radius: 999px;
-  opacity: 0.58;
+  opacity: 0.5;
   filter: blur(2px);
-  --kk-float-x: 120px;
-  --kk-float-y: 90px;
-  --kk-float-rotate: 16deg;
-  --kk-float-duration: 8s;
-  animation:
-    kk-login-float var(--kk-float-duration) cubic-bezier(.52,.05,.48,.96) infinite alternate,
-    kk-login-glow calc(var(--kk-float-duration) * 0.4) ease-in-out infinite;
-  will-change: transform, opacity;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
 }
 #kkchat-root .kk-floater--one {
   width: clamp(160px, 28vw, 340px);
@@ -1988,10 +1983,9 @@ html, body { margin: 0; height: 100%; }
   top: 8%;
   left: -6%;
   background: radial-gradient(circle at 35% 35%, rgba(227, 87, 84, 0.5) 0%, rgba(227, 87, 84, 0) 70%);
-  --kk-float-x: 170px;
-  --kk-float-y: 120px;
-  --kk-float-rotate: 22deg;
-  --kk-float-duration: 6s;
+  animation-name: kk-firefly-one;
+  animation-duration: 34s;
+  animation-delay: -6s;
 }
 #kkchat-root .kk-floater--two {
   width: clamp(130px, 22vw, 260px);
@@ -1999,11 +1993,9 @@ html, body { margin: 0; height: 100%; }
   right: -4%;
   top: 14%;
   background: radial-gradient(circle at 50% 50%, rgba(118, 122, 144, 0.46) 0%, rgba(118, 122, 144, 0) 72%);
-  --kk-float-x: 145px;
-  --kk-float-y: 150px;
-  --kk-float-rotate: -20deg;
-  --kk-float-duration: 7.2s;
-  animation-delay: -2.4s, -0.8s;
+  animation-name: kk-firefly-two;
+  animation-duration: 28s;
+  animation-delay: -14s;
 }
 #kkchat-root .kk-floater--three {
   width: clamp(170px, 30vw, 360px);
@@ -2011,11 +2003,9 @@ html, body { margin: 0; height: 100%; }
   bottom: -8%;
   right: 28%;
   background: radial-gradient(circle at 45% 45%, rgba(122, 136, 196, 0.35) 0%, rgba(122, 136, 196, 0) 74%);
-  --kk-float-x: 190px;
-  --kk-float-y: 110px;
-  --kk-float-rotate: 26deg;
-  --kk-float-duration: 7.8s;
-  animation-delay: -3.1s, -0.2s;
+  animation-name: kk-firefly-three;
+  animation-duration: 38s;
+  animation-delay: -22s;
 }
 #kkchat-root .kk-floater--four {
   width: clamp(110px, 18vw, 200px);
@@ -2023,11 +2013,9 @@ html, body { margin: 0; height: 100%; }
   bottom: 6%;
   left: 24%;
   background: radial-gradient(circle at 50% 50%, rgba(220, 227, 255, 0.2) 0%, rgba(220, 227, 255, 0) 74%);
-  --kk-float-x: 120px;
-  --kk-float-y: 170px;
-  --kk-float-rotate: -28deg;
-  --kk-float-duration: 9s;
-  animation-delay: -5.3s, -1.6s;
+  animation-name: kk-firefly-four;
+  animation-duration: 31s;
+  animation-delay: -10s;
 }
 #kkchat-root .kk-login-shell {
   display: grid;
@@ -2458,15 +2446,37 @@ body.kkchat-no-scroll { overflow: hidden; }
 }
 
 @keyframes kkspin { to { transform: rotate(360deg); } }
-@keyframes kk-login-float {
-  0% { transform: translate3d(calc(var(--kk-float-x) * -1), calc(var(--kk-float-y) * -1), 0) rotate(calc(var(--kk-float-rotate) * -1)) scale(0.84); }
-  30% { transform: translate3d(var(--kk-float-x), calc(var(--kk-float-y) * -0.7), 0) rotate(calc(var(--kk-float-rotate) * 0.35)) scale(1.08); }
-  60% { transform: translate3d(calc(var(--kk-float-x) * -0.55), var(--kk-float-y), 0) rotate(calc(var(--kk-float-rotate) * -0.3)) scale(0.92); }
-  100% { transform: translate3d(calc(var(--kk-float-x) * 0.75), calc(var(--kk-float-y) * 0.55), 0) rotate(var(--kk-float-rotate)) scale(1.12); }
+@keyframes kk-firefly-one {
+  0% { transform: translate3d(-20px, -8px, 0) scale(0.92); }
+  18% { transform: translate3d(58px, -34px, 0) scale(1.03); }
+  37% { transform: translate3d(24px, 44px, 0) scale(0.96); }
+  58% { transform: translate3d(-66px, 20px, 0) scale(1.04); }
+  79% { transform: translate3d(-10px, -52px, 0) scale(0.94); }
+  100% { transform: translate3d(42px, 10px, 0) scale(1.02); }
 }
-@keyframes kk-login-glow {
-  0%, 100% { opacity: 0.28; }
-  50% { opacity: 0.84; }
+@keyframes kk-firefly-two {
+  0% { transform: translate3d(32px, -16px, 0) scale(1); }
+  21% { transform: translate3d(-48px, 34px, 0) scale(0.95); }
+  40% { transform: translate3d(18px, 66px, 0) scale(1.05); }
+  63% { transform: translate3d(72px, -4px, 0) scale(0.94); }
+  84% { transform: translate3d(-36px, -58px, 0) scale(1.02); }
+  100% { transform: translate3d(26px, 18px, 0) scale(0.97); }
+}
+@keyframes kk-firefly-three {
+  0% { transform: translate3d(-28px, 10px, 0) scale(0.93); }
+  17% { transform: translate3d(46px, -62px, 0) scale(1.06); }
+  33% { transform: translate3d(80px, 18px, 0) scale(0.94); }
+  52% { transform: translate3d(-22px, 78px, 0) scale(1.03); }
+  76% { transform: translate3d(-74px, -10px, 0) scale(0.95); }
+  100% { transform: translate3d(14px, -34px, 0) scale(1.01); }
+}
+@keyframes kk-firefly-four {
+  0% { transform: translate3d(16px, 22px, 0) scale(0.98); }
+  14% { transform: translate3d(-58px, -24px, 0) scale(1.04); }
+  36% { transform: translate3d(30px, -72px, 0) scale(0.93); }
+  57% { transform: translate3d(82px, 30px, 0) scale(1.06); }
+  81% { transform: translate3d(-42px, 64px, 0) scale(0.94); }
+  100% { transform: translate3d(-10px, -12px, 0) scale(1); }
 }
 
 /* Terms text + checkbox */
