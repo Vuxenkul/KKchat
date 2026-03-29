@@ -1970,11 +1970,12 @@ html, body { margin: 0; height: 100%; }
   padding: clamp(18px, 4vw, 28px);
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  gap: 8px;
   min-height: 370px;
 }
 #kkchat-root .kk-login-logo-slot {
-  margin-bottom: 28px;
+  margin-bottom: 12px;
   min-height: 88px;
   display: flex;
   align-items: center;
