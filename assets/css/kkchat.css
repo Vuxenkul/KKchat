@@ -1945,25 +1945,83 @@ html, body { margin: 0; height: 100%; }
 }
 
 #kkchat-root .login {
-  max-width: 600px;
-  margin: 0px auto;
-  padding: 32px;
-  background: linear-gradient(160deg, rgba(15, 18, 28, 0.92) 0%, rgba(8, 10, 17, 0.95) 100%);
-  border: 1px solid rgba(122, 136, 196, 0.28);
-  border-radius: var(--radius-lg);
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 22px;
+  background: linear-gradient(145deg, rgba(16, 19, 30, 0.9) 0%, rgba(9, 11, 17, 0.96) 100%);
+  border: 1px solid rgba(122, 136, 196, 0.24);
+  border-radius: calc(var(--radius-lg) + 4px);
   box-shadow: 0 32px 68px rgba(5, 7, 12, 0.6);
   backdrop-filter: var(--frost);
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
-
-#kkchat-root .login h1 {
-  margin-top: 0;
-  margin-bottom: 0px;
-  font-size: 3rem;
-  line-height: 3rem;
+#kkchat-root .kk-login-shell {
+  display: grid;
+  grid-template-columns: minmax(240px, 1.1fr) minmax(360px, 1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+#kkchat-root .kk-login-branding {
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(122, 136, 196, 0.22);
+  background: linear-gradient(140deg, rgba(20, 23, 36, 0.92) 0%, rgba(11, 13, 21, 0.93) 100%);
+  padding: clamp(18px, 4vw, 28px);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 370px;
+}
+#kkchat-root .kk-login-logo-slot {
+  margin-bottom: 12px;
+  min-height: 88px;
+  display: flex;
+  align-items: center;
+}
+#kkchat-root .kk-login-logo-img {
+  max-width: min(350px, 100%);
+  max-height: 100px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+}
+#kkchat-root .kk-login-logo-fallback {
   font-family: 'Bebas Neue', system-ui, sans-serif;
-  color: var(--brand);
+  font-size: clamp(3.2rem, 10vw, 4.8rem);
+  line-height: 1;
+  color: #fff;
+  letter-spacing: .04em;
 }
-
+#kkchat-root .kk-login-branding h1 {
+  margin: 0 0 8px;
+  font-size: clamp(2.3rem, 6vw, 3.3rem);
+  line-height: .95;
+  font-family: 'Bebas Neue', system-ui, sans-serif;
+  color: #fff;
+}
+#kkchat-root .kk-login-branding p {
+  margin: 0;
+  color: rgba(228, 231, 241, 0.84);
+  font-size: 1rem;
+}
+#kkchat-root .kk-login-form-card {
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(122, 136, 196, 0.22);
+  background: linear-gradient(160deg, rgba(15, 18, 28, 0.92) 0%, rgba(8, 10, 17, 0.95) 100%);
+  padding: clamp(20px, 3.5vw, 30px);
+}
+#kkchat-root .kk-login-form-card h2 {
+  margin: 0 0 6px;
+  font-size: clamp(1.45rem, 4vw, 2rem);
+  color: #fff;
+}
+#kkchat-root .kk-login-lead {
+  margin-top: 0;
+  margin-bottom: 12px;
+  color: rgba(228, 231, 241, 0.84);
+}
 #kkchat-root .login label { display: block; font-weight: 700; margin: 10px 0 6px; }
 #kkchat-root .login input,
 #kkchat-root .login select {
@@ -2336,6 +2394,28 @@ body.kkchat-no-scroll { overflow: hidden; }
 }
 #kkchat-root .kk-agree { display: flex !important; align-items: center; gap: 8px; font-weight: 600; }
 #kkchat-root .kk-agree input { width: auto; min-width: 30px; }
+
+@media (max-width: 900px) {
+  #kkchat-root .kk-wrap {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: calc(32px + env(safe-area-inset-bottom, 0px));
+  }
+  #kkchat-root .login {
+    padding: 16px;
+    margin-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  #kkchat-root .kk-login-shell {
+    grid-template-columns: 1fr;
+  }
+  #kkchat-root .kk-login-branding {
+    min-height: 0;
+  }
+  #kkchat-root .kk-login-logo-slot {
+    margin-bottom: 14px;
+    min-height: 56px;
+  }
+}
 
 #kkchat-root {
   --kk-font-scale: 1;
