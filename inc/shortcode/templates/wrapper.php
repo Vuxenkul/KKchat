@@ -9,7 +9,7 @@
     </div>
   <?php endif; ?>
 
-  <div class="kk-wrap">
+  <div class="kk-wrap <?= $me_logged ? 'kk-wrap--app' : 'kk-wrap--login' ?>">
     <?php if (!$me_logged): ?>
       <?php include __DIR__ . '/login.php'; ?>
     <?php else: ?>

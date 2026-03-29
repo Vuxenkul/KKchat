@@ -686,9 +686,9 @@ html, body { margin: 0; height: 100%; }
 
 #kkchat-root .kk-wrap {
   width: 100%;
-  max-width: min(100%, 980px);
+  max-width: 100%;
   margin: 0 auto;
-  padding: 28px clamp(16px, 4vw, 36px) 32px;
+  padding: 20px clamp(14px, 2.2vw, 28px) 24px;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -696,6 +696,13 @@ html, body { margin: 0; height: 100%; }
   gap: 18px;
   position: relative;
   z-index: 1;
+}
+#kkchat-root .kk-wrap--login {
+  max-width: min(100%, 980px);
+  padding: 28px clamp(16px, 4vw, 36px) 32px;
+}
+#kkchat-root .kk-wrap--app {
+  max-width: 100%;
 }
 
 #kkchat-root .name-offline { opacity: .5; }
