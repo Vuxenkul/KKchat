@@ -1,11 +1,35 @@
 <?php if (!defined('ABSPATH')) exit; ?>
-    <div class="login">
+<?php
+$custom_logo_url = '';
+if (function_exists('has_custom_logo') && has_custom_logo()) {
+  $logo_id = (int) get_theme_mod('custom_logo');
+  if ($logo_id > 0) {
+    $custom_logo_url = wp_get_attachment_image_url($logo_id, 'full') ?: '';
+  }
+}
+?>
+<div class="login">
   <div class="kk-login-overlay" aria-hidden="true" style="display:none">
     <div class="kk-login-spinner" role="status" aria-label="Laddar"></div>
   </div>
+
+  <div class="kk-login-shell">
+    <aside class="kk-login-branding" aria-label="Varumärke">
+      <div class="kk-login-logo-slot">
+        <?php if (!empty($custom_logo_url)): ?>
+          <img src="<?= esc_url($custom_logo_url) ?>" alt="KKompis logotyp" class="kk-login-logo-img">
+        <?php else: ?>
+          <span class="kk-login-logo-fallback" aria-hidden="true">KK</span>
+        <?php endif; ?>
+      </div>
+      <h1>Välkommen till KKchatten</h1>
+      <p>Snabb, enkel och trygg inloggning. Välj uppgifter nedan för att komma in i chatten.</p>
+    </aside>
+
+    <section class="kk-login-form-card" aria-label="Inloggning">
       <?php if ($wp_logged): ?>
-        <h1>Välkommen till KKchatten</h1>
-        <p>Du är inloggad som <b><?= kkchat_html_esc($wp_username) ?></b>. Kön hämtas inte automatiskt. Vänligen fyll i ditt kön.</p>
+        <h2>Fortsätt som <?= kkchat_html_esc($wp_username) ?></h2>
+        <p class="kk-login-lead">Du är inloggad i WordPress. Välj kön för att slutföra inloggningen till chatten.</p>
         <form id="kk-loginForm" method="post">
           <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($session_csrf) ?>">
           <input type="hidden" name="via_wp" value="1">
@@ -15,8 +39,8 @@
             <option>Man</option><option>Woman</option><option>Couple</option>
             <option>Trans (MTF)</option><option>Trans (FTM)</option><option>Non-binary/other</option>
           </select>
-                    <p class="kk-terms">
-            <a href="<?= esc_url( home_url('/anvandarvillkor-kkchatt/') ) ?>" target="_blank" rel="noopener">Klicka här för att läsa våra användarvillkor</a>.
+          <p class="kk-terms">
+            <a href="<?= esc_url(home_url('/anvandarvillkor-kkchatt/')) ?>" target="_blank" rel="noopener">Klicka här för att läsa våra användarvillkor</a>.
           </p>
           <label class="kk-agree">
             <input type="checkbox" id="login_agree" name="login_agree" required>
@@ -27,8 +51,8 @@
           <div id="kk-loginErr" class="err" style="display:none"></div>
         </form>
       <?php else: ?>
-        <h1>Välj ett smeknamn</h1>
-        <p>Du kommer att visas som <b>namn-guest</b>. Namnet blir ledigt igen när du loggar ut eller blir inaktiv.</p>
+        <h2>Välj ett smeknamn</h2>
+        <p class="kk-login-lead">Du visas som <b>namn-guest</b>. Namnet blir ledigt när du loggar ut eller blir inaktiv.</p>
         <form id="kk-loginForm" method="post">
           <input type="hidden" name="csrf_token" value="<?= kkchat_html_esc($session_csrf) ?>">
           <label for="login_nick">Smeknamn</label>
@@ -39,8 +63,9 @@
             <option>Man</option><option>Woman</option><option>Couple</option>
             <option>Trans (MTF)</option><option>Trans (FTM)</option><option>Non-binary/other</option>
           </select>
-                    <p class="kk-terms">
-            <a href="<?= esc_url( home_url('/anvandarvillkor-kkchatt/') ) ?>" target="_blank" rel="noopener">Klicka här för att läsa våra användarvillkor</a>.          </p>
+          <p class="kk-terms">
+            <a href="<?= esc_url(home_url('/anvandarvillkor-kkchatt/')) ?>" target="_blank" rel="noopener">Klicka här för att läsa våra användarvillkor</a>.
+          </p>
           <label class="kk-agree">
             <input type="checkbox" id="login_agree" name="login_agree" required>
             Jag är 18+ och godkänner användarvillkoren
@@ -50,7 +75,9 @@
           <div id="kk-loginErr" class="err" style="display:none"></div>
         </form>
       <?php endif; ?>
-    </div>
+    </section>
+  </div>
+</div>
     <script>
     (function(){
       const API = "<?= $ns ?>";
