@@ -674,6 +674,8 @@ html, body { margin: 0; height: 100%; }
   backdrop-filter: var(--frost);
   border: 1px solid rgba(122, 136, 196, 0.14);
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
 }
 
 @media (max-width: 900px) {
@@ -693,7 +695,7 @@ html, body { margin: 0; height: 100%; }
   min-height: 0;
   gap: 18px;
   position: relative;
-  isolation: isolate;
+  z-index: 1;
 }
 
 #kkchat-root .name-offline { opacity: .5; }

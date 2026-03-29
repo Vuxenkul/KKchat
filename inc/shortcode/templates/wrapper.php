@@ -1,5 +1,5 @@
 <?php if (!defined('ABSPATH')) exit; ?>
-<div class="kk-wrap" id="kkchat-root">
+<div id="kkchat-root">
   <?php if (!$me_logged): ?>
     <div class="kk-login-bg-floaters" aria-hidden="true">
       <span class="kk-floater kk-floater--one"></span>
@@ -7,8 +7,13 @@
       <span class="kk-floater kk-floater--three"></span>
       <span class="kk-floater kk-floater--four"></span>
     </div>
-    <?php include __DIR__ . '/login.php'; ?>
-  <?php else: ?>
-    <?php include __DIR__ . '/app.php'; ?>
   <?php endif; ?>
+
+  <div class="kk-wrap">
+    <?php if (!$me_logged): ?>
+      <?php include __DIR__ . '/login.php'; ?>
+    <?php else: ?>
+      <?php include __DIR__ . '/app.php'; ?>
+    <?php endif; ?>
+  </div>
 </div>
