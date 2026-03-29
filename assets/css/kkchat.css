@@ -1971,9 +1971,15 @@ html, body { margin: 0; height: 100%; }
 #kkchat-root .kk-floater {
   position: absolute;
   border-radius: 999px;
-  opacity: 0.46;
+  opacity: 0.52;
   filter: blur(1px);
-  animation: kk-login-float 16s ease-in-out infinite;
+  --kk-float-x: 34px;
+  --kk-float-y: 22px;
+  --kk-float-duration: 14s;
+  animation:
+    kk-login-float var(--kk-float-duration) ease-in-out infinite alternate,
+    kk-login-glow calc(var(--kk-float-duration) * 0.72) ease-in-out infinite;
+  will-change: transform, opacity;
 }
 #kkchat-root .kk-floater--one {
   width: clamp(160px, 28vw, 340px);
@@ -1981,7 +1987,9 @@ html, body { margin: 0; height: 100%; }
   top: 8%;
   left: -6%;
   background: radial-gradient(circle at 35% 35%, rgba(227, 87, 84, 0.5) 0%, rgba(227, 87, 84, 0) 70%);
-  animation-delay: 0s;
+  --kk-float-x: 42px;
+  --kk-float-y: 30px;
+  --kk-float-duration: 12s;
 }
 #kkchat-root .kk-floater--two {
   width: clamp(130px, 22vw, 260px);
@@ -1989,8 +1997,10 @@ html, body { margin: 0; height: 100%; }
   right: -4%;
   top: 14%;
   background: radial-gradient(circle at 50% 50%, rgba(118, 122, 144, 0.46) 0%, rgba(118, 122, 144, 0) 72%);
-  animation-delay: -5s;
-  animation-duration: 19s;
+  --kk-float-x: 36px;
+  --kk-float-y: 42px;
+  --kk-float-duration: 16s;
+  animation-delay: -3s, -1.2s;
 }
 #kkchat-root .kk-floater--three {
   width: clamp(170px, 30vw, 360px);
@@ -1998,8 +2008,10 @@ html, body { margin: 0; height: 100%; }
   bottom: -8%;
   right: 28%;
   background: radial-gradient(circle at 45% 45%, rgba(122, 136, 196, 0.35) 0%, rgba(122, 136, 196, 0) 74%);
-  animation-delay: -2.8s;
-  animation-duration: 18s;
+  --kk-float-x: 48px;
+  --kk-float-y: 26px;
+  --kk-float-duration: 15s;
+  animation-delay: -4.2s, -0.8s;
 }
 #kkchat-root .kk-floater--four {
   width: clamp(110px, 18vw, 200px);
@@ -2007,8 +2019,10 @@ html, body { margin: 0; height: 100%; }
   bottom: 6%;
   left: 24%;
   background: radial-gradient(circle at 50% 50%, rgba(220, 227, 255, 0.2) 0%, rgba(220, 227, 255, 0) 74%);
-  animation-delay: -9s;
-  animation-duration: 22s;
+  --kk-float-x: 28px;
+  --kk-float-y: 38px;
+  --kk-float-duration: 18s;
+  animation-delay: -7s, -2.4s;
 }
 #kkchat-root .kk-login-shell {
   display: grid;
@@ -2440,9 +2454,13 @@ body.kkchat-no-scroll { overflow: hidden; }
 
 @keyframes kkspin { to { transform: rotate(360deg); } }
 @keyframes kk-login-float {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  35% { transform: translate3d(18px, -24px, 0) scale(1.05); }
-  70% { transform: translate3d(-14px, 20px, 0) scale(0.95); }
+  0% { transform: translate3d(calc(var(--kk-float-x) * -1), calc(var(--kk-float-y) * -1), 0) scale(0.94); }
+  50% { transform: translate3d(var(--kk-float-x), calc(var(--kk-float-y) * -0.35), 0) scale(1.05); }
+  100% { transform: translate3d(calc(var(--kk-float-x) * -0.65), var(--kk-float-y), 0) scale(0.98); }
+}
+@keyframes kk-login-glow {
+  0%, 100% { opacity: 0.36; }
+  50% { opacity: 0.64; }
 }
 
 /* Terms text + checkbox */
