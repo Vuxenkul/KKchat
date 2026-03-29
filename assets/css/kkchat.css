@@ -688,10 +688,36 @@ html, body { margin: 0; height: 100%; }
   margin: 0 auto;
   padding: 28px clamp(16px, 4vw, 36px) 32px;
   flex: 1 1 auto;
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   min-height: 0;
   gap: 18px;
+  overflow: hidden;
+}
+#kkchat-root .kk-wrap:has(.login)::before,
+#kkchat-root .kk-wrap:has(.login)::after {
+  content: "";
+  position: absolute;
+  width: clamp(150px, 26vw, 260px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(1px);
+  z-index: -1;
+}
+#kkchat-root .kk-wrap:has(.login)::before {
+  top: 4%;
+  left: -7%;
+  background: radial-gradient(circle at 30% 30%, rgba(227, 87, 84, 0.35) 0%, rgba(227, 87, 84, 0.04) 72%);
+  animation: kk-login-float-a 16s ease-in-out infinite;
+}
+#kkchat-root .kk-wrap:has(.login)::after {
+  right: -8%;
+  bottom: 2%;
+  background: radial-gradient(circle at 40% 35%, rgba(124, 136, 196, 0.28) 0%, rgba(124, 136, 196, 0.04) 72%);
+  animation: kk-login-float-b 20s ease-in-out infinite;
 }
 
 #kkchat-root .name-offline { opacity: .5; }
@@ -1956,42 +1982,15 @@ html, body { margin: 0; height: 100%; }
   backdrop-filter: var(--frost);
   max-height: 100%;
   overflow-y: auto;
-  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
 }
-#kkchat-root .login::before,
-#kkchat-root .login::after {
-  content: "";
-  position: absolute;
-  width: clamp(130px, 24vw, 220px);
-  aspect-ratio: 1 / 1;
-  border-radius: 50%;
-  pointer-events: none;
-  filter: blur(1px);
-  z-index: 0;
-}
-#kkchat-root .login::before {
-  top: -62px;
-  left: -48px;
-  background: radial-gradient(circle at 30% 30%, rgba(227, 87, 84, 0.45) 0%, rgba(227, 87, 84, 0.06) 70%);
-  animation: kk-login-float-a 16s ease-in-out infinite;
-}
-#kkchat-root .login::after {
-  right: -60px;
-  bottom: -56px;
-  background: radial-gradient(circle at 40% 35%, rgba(124, 136, 196, 0.32) 0%, rgba(124, 136, 196, 0.05) 70%);
-  animation: kk-login-float-b 20s ease-in-out infinite;
-}
 #kkchat-root .kk-login-shell {
-  position: relative;
-  z-index: 1;
   display: grid;
   grid-template-columns: minmax(240px, 1.1fr) minmax(360px, 1fr);
   gap: 18px;
   align-items: stretch;
 }
 #kkchat-root .kk-login-branding {
-  position: relative;
   border-radius: var(--radius-md);
   border: 1px solid rgba(122, 136, 196, 0.22);
   background: linear-gradient(140deg, rgba(20, 23, 36, 0.92) 0%, rgba(11, 13, 21, 0.93) 100%);
@@ -2001,33 +2000,6 @@ html, body { margin: 0; height: 100%; }
   justify-content: flex-start;
   gap: 8px;
   min-height: 370px;
-  overflow: hidden;
-}
-#kkchat-root .kk-login-branding::before,
-#kkchat-root .kk-login-branding::after {
-  content: "";
-  position: absolute;
-  border-radius: 999px;
-  pointer-events: none;
-  opacity: 0.55;
-}
-#kkchat-root .kk-login-branding::before {
-  width: 170px;
-  height: 38px;
-  top: 26px;
-  right: -60px;
-  transform: rotate(-24deg);
-  background: linear-gradient(90deg, rgba(227, 87, 84, 0) 0%, rgba(227, 87, 84, 0.45) 50%, rgba(227, 87, 84, 0) 100%);
-  animation: kk-login-drift 12s ease-in-out infinite;
-}
-#kkchat-root .kk-login-branding::after {
-  width: 130px;
-  height: 28px;
-  bottom: 30px;
-  left: -52px;
-  transform: rotate(20deg);
-  background: linear-gradient(90deg, rgba(121, 132, 188, 0) 0%, rgba(121, 132, 188, 0.45) 50%, rgba(121, 132, 188, 0) 100%);
-  animation: kk-login-drift 15s ease-in-out -2s infinite reverse;
 }
 #kkchat-root .kk-login-logo-slot {
   margin-bottom: 12px;
@@ -2062,12 +2034,10 @@ html, body { margin: 0; height: 100%; }
   font-size: 1rem;
 }
 #kkchat-root .kk-login-form-card {
-  position: relative;
   border-radius: var(--radius-md);
   border: 1px solid rgba(122, 136, 196, 0.22);
   background: linear-gradient(160deg, rgba(15, 18, 28, 0.92) 0%, rgba(8, 10, 17, 0.95) 100%);
   padding: clamp(20px, 3.5vw, 30px);
-  animation: kk-login-card-float 9s ease-in-out infinite;
 }
 #kkchat-root .kk-login-form-card h2 {
   margin: 0 0 6px;
@@ -2111,11 +2081,8 @@ html, body { margin: 0; height: 100%; }
 @media (prefers-reduced-motion: reduce) {
   #kkchat-root .fab,
   #kkchat-root .toast { transition: none; }
-  #kkchat-root .login::before,
-  #kkchat-root .login::after,
-  #kkchat-root .kk-login-branding::before,
-  #kkchat-root .kk-login-branding::after,
-  #kkchat-root .kk-login-form-card { animation: none; }
+  #kkchat-root .kk-wrap:has(.login)::before,
+  #kkchat-root .kk-wrap:has(.login)::after { animation: none; }
 }
 
 @keyframes kk-login-float-a {
@@ -2125,14 +2092,6 @@ html, body { margin: 0; height: 100%; }
 @keyframes kk-login-float-b {
   0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
   50% { transform: translate3d(-14px, -12px, 0) scale(1.06); }
-}
-@keyframes kk-login-drift {
-  0%, 100% { margin-inline-start: 0; opacity: 0.45; }
-  50% { margin-inline-start: -16px; opacity: 0.8; }
-}
-@keyframes kk-login-card-float {
-  0%, 100% { transform: translateY(0); box-shadow: 0 12px 30px rgba(5, 7, 12, 0.28); }
-  50% { transform: translateY(-4px); box-shadow: 0 18px 38px rgba(5, 7, 12, 0.36); }
 }
 
 
