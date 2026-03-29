@@ -692,6 +692,8 @@ html, body { margin: 0; height: 100%; }
   flex-direction: column;
   min-height: 0;
   gap: 18px;
+  position: relative;
+  isolation: isolate;
 }
 
 #kkchat-root .name-offline { opacity: .5; }
@@ -1953,14 +1955,13 @@ html, body { margin: 0; height: 100%; }
   border-radius: calc(var(--radius-lg) + 4px);
   box-shadow: 0 32px 68px rgba(5, 7, 12, 0.6);
   backdrop-filter: var(--frost);
-  max-height: 100%;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  isolation: isolate;
+  width: 100%;
+  position: relative;
+  z-index: 1;
 }
 #kkchat-root .kk-login-bg-floaters {
   position: absolute;
-  inset: -12%;
+  inset: 0;
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
@@ -2008,8 +2009,6 @@ html, body { margin: 0; height: 100%; }
   animation-duration: 22s;
 }
 #kkchat-root .kk-login-shell {
-  position: relative;
-  z-index: 1;
   display: grid;
   grid-template-columns: minmax(240px, 1.1fr) minmax(360px, 1fr);
   gap: 18px;
@@ -2465,9 +2464,7 @@ body.kkchat-no-scroll { overflow: hidden; }
   #kkchat-root .kk-login-shell {
     grid-template-columns: 1fr;
   }
-  #kkchat-root .kk-login-bg-floaters {
-    inset: -16% -8%;
-  }
+  #kkchat-root .kk-login-bg-floaters { inset: 0; }
   #kkchat-root .kk-login-branding {
     min-height: 0;
   }
