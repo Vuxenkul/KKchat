@@ -1956,8 +1956,60 @@ html, body { margin: 0; height: 100%; }
   max-height: 100%;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  isolation: isolate;
+}
+#kkchat-root .kk-login-bg-floaters {
+  position: absolute;
+  inset: -12%;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+#kkchat-root .kk-floater {
+  position: absolute;
+  border-radius: 999px;
+  opacity: 0.46;
+  filter: blur(1px);
+  animation: kk-login-float 16s ease-in-out infinite;
+}
+#kkchat-root .kk-floater--one {
+  width: clamp(160px, 28vw, 340px);
+  height: clamp(160px, 28vw, 340px);
+  top: 8%;
+  left: -6%;
+  background: radial-gradient(circle at 35% 35%, rgba(227, 87, 84, 0.5) 0%, rgba(227, 87, 84, 0) 70%);
+  animation-delay: 0s;
+}
+#kkchat-root .kk-floater--two {
+  width: clamp(130px, 22vw, 260px);
+  height: clamp(130px, 22vw, 260px);
+  right: -4%;
+  top: 14%;
+  background: radial-gradient(circle at 50% 50%, rgba(118, 122, 144, 0.46) 0%, rgba(118, 122, 144, 0) 72%);
+  animation-delay: -5s;
+  animation-duration: 19s;
+}
+#kkchat-root .kk-floater--three {
+  width: clamp(170px, 30vw, 360px);
+  height: clamp(170px, 30vw, 360px);
+  bottom: -8%;
+  right: 28%;
+  background: radial-gradient(circle at 45% 45%, rgba(122, 136, 196, 0.35) 0%, rgba(122, 136, 196, 0) 74%);
+  animation-delay: -2.8s;
+  animation-duration: 18s;
+}
+#kkchat-root .kk-floater--four {
+  width: clamp(110px, 18vw, 200px);
+  height: clamp(110px, 18vw, 200px);
+  bottom: 6%;
+  left: 24%;
+  background: radial-gradient(circle at 50% 50%, rgba(220, 227, 255, 0.2) 0%, rgba(220, 227, 255, 0) 74%);
+  animation-delay: -9s;
+  animation-duration: 22s;
 }
 #kkchat-root .kk-login-shell {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(240px, 1.1fr) minmax(360px, 1fr);
   gap: 18px;
@@ -2386,6 +2438,11 @@ body.kkchat-no-scroll { overflow: hidden; }
 }
 
 @keyframes kkspin { to { transform: rotate(360deg); } }
+@keyframes kk-login-float {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  35% { transform: translate3d(18px, -24px, 0) scale(1.05); }
+  70% { transform: translate3d(-14px, 20px, 0) scale(0.95); }
+}
 
 /* Terms text + checkbox */
 #kkchat-root .kk-terms { font-size: .9rem; margin: 10px 0 6px; opacity: .85; }
@@ -2408,12 +2465,21 @@ body.kkchat-no-scroll { overflow: hidden; }
   #kkchat-root .kk-login-shell {
     grid-template-columns: 1fr;
   }
+  #kkchat-root .kk-login-bg-floaters {
+    inset: -16% -8%;
+  }
   #kkchat-root .kk-login-branding {
     min-height: 0;
   }
   #kkchat-root .kk-login-logo-slot {
     margin-bottom: 14px;
     min-height: 56px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #kkchat-root .kk-floater {
+    animation: none;
   }
 }
 

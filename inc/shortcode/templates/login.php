@@ -9,6 +9,13 @@ if (function_exists('has_custom_logo') && has_custom_logo()) {
 }
 ?>
 <div class="login">
+  <div class="kk-login-bg-floaters" aria-hidden="true">
+    <span class="kk-floater kk-floater--one"></span>
+    <span class="kk-floater kk-floater--two"></span>
+    <span class="kk-floater kk-floater--three"></span>
+    <span class="kk-floater kk-floater--four"></span>
+  </div>
+
   <div class="kk-login-overlay" aria-hidden="true" style="display:none">
     <div class="kk-login-spinner" role="status" aria-label="Laddar"></div>
   </div>
