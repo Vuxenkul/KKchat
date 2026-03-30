@@ -2345,3 +2345,207 @@ body.kkchat-no-scroll { overflow: hidden; }
 #kkchat-root.kk-font-scale-ready * {
   font-size: calc(var(--kk-font-size, 1em) * var(--kk-font-scale));
 }
+
+/* ===========================
+   Login Page Layout
+   =========================== */
+
+/* Scrollable full-height container */
+#kkchat-root .kk-login-page {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  position: relative;
+}
+
+/* Animated background layer */
+#kkchat-root .kk-login-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+/* Floating orbs */
+#kkchat-root .kk-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(72px);
+  opacity: 0;
+}
+#kkchat-root .kk-orb--1 {
+  width: 420px; height: 420px;
+  top: -15%; left: -8%;
+  background: radial-gradient(circle, rgba(227, 87, 84, 0.3) 0%, transparent 70%);
+  animation: kk-orb-in 1.8s ease forwards, kk-float-a 20s ease-in-out 1.8s infinite;
+}
+#kkchat-root .kk-orb--2 {
+  width: 380px; height: 380px;
+  bottom: -5%; right: -8%;
+  background: radial-gradient(circle, rgba(116, 127, 174, 0.32) 0%, transparent 70%);
+  animation: kk-orb-in 1.8s 0.4s ease forwards, kk-float-b 25s ease-in-out 2.2s infinite;
+}
+#kkchat-root .kk-orb--3 {
+  width: 300px; height: 300px;
+  top: 35%; left: 25%;
+  background: radial-gradient(circle, rgba(227, 87, 84, 0.14) 0%, transparent 70%);
+  animation: kk-orb-in 1.8s 0.8s ease forwards, kk-float-c 30s ease-in-out 2.6s infinite;
+}
+#kkchat-root .kk-orb--4 {
+  width: 200px; height: 200px;
+  top: 8%; right: 12%;
+  background: radial-gradient(circle, rgba(116, 127, 174, 0.22) 0%, transparent 70%);
+  animation: kk-orb-in 1.8s 1.2s ease forwards, kk-float-d 16s ease-in-out 3s infinite;
+}
+
+@keyframes kk-orb-in { to { opacity: 1; } }
+@keyframes kk-float-a {
+  0%, 100% { transform: translate(0, 0); }
+  25%  { transform: translate(45px, -35px); }
+  50%  { transform: translate(20px, 45px); }
+  75%  { transform: translate(-30px, 15px); }
+}
+@keyframes kk-float-b {
+  0%, 100% { transform: translate(0, 0); }
+  30%  { transform: translate(-50px, 25px); }
+  60%  { transform: translate(30px, -40px); }
+  80%  { transform: translate(-18px, 28px); }
+}
+@keyframes kk-float-c {
+  0%, 100% { transform: translate(0, 0); }
+  40%  { transform: translate(38px, -28px); }
+  70%  { transform: translate(-22px, 35px); }
+}
+@keyframes kk-float-d {
+  0%, 100% { transform: translate(0, 0); }
+  50%  { transform: translate(-28px, -22px); }
+}
+
+/* Inner centred column */
+#kkchat-root .kk-login-inner {
+  position: relative;
+  z-index: 1;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px 44px;
+  gap: 28px;
+  box-sizing: border-box;
+}
+
+/* Branding block */
+#kkchat-root .kk-login-brand {
+  text-align: center;
+  max-width: 480px;
+  width: 100%;
+  animation: kk-enter-up 0.65s ease both;
+}
+
+#kkchat-root .kk-login-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+#kkchat-root .kk-login-logo-icon {
+  width: 54px;
+  height: 54px;
+  background: linear-gradient(135deg, rgba(227, 87, 84, 0.18) 0%, rgba(227, 87, 84, 0.32) 100%);
+  border: 1px solid rgba(227, 87, 84, 0.38);
+  border-radius: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--brand);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 28px rgba(227, 87, 84, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+#kkchat-root .kk-login-logo-icon .material-symbols-rounded {
+  font-size: 1.7rem;
+  margin: 0;
+}
+
+#kkchat-root .kk-login-logo-text {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 3rem;
+  line-height: 1;
+  color: var(--ink);
+  letter-spacing: 0.03em;
+}
+
+#kkchat-root .kk-login-logo-text em {
+  font-style: normal;
+  color: var(--brand);
+}
+
+#kkchat-root .kk-login-tagline {
+  font-size: 1rem;
+  font-weight: 300;
+  color: var(--ink-soft);
+  margin: 0 0 18px;
+  letter-spacing: 0.015em;
+}
+
+#kkchat-root .kk-login-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+#kkchat-root .kk-login-feat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  background: rgba(122, 136, 196, 0.09);
+  border: 1px solid rgba(122, 136, 196, 0.2);
+  border-radius: 999px;
+  padding: 4px 11px;
+  letter-spacing: 0.01em;
+}
+
+#kkchat-root .kk-login-feat .material-symbols-rounded {
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+/* Form card — override margin/width inside new layout */
+#kkchat-root .kk-login-inner .login {
+  margin: 0;
+  max-width: 480px;
+  width: 100%;
+  animation: kk-enter-up 0.65s 0.18s ease both;
+}
+
+@keyframes kk-enter-up {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Reduce motion */
+@media (prefers-reduced-motion: reduce) {
+  #kkchat-root .kk-orb { animation: none !important; opacity: 0.5 !important; }
+  #kkchat-root .kk-login-brand,
+  #kkchat-root .kk-login-inner .login { animation: none !important; opacity: 1 !important; transform: none !important; }
+}
+
+/* Mobile tweaks */
+@media (max-width: 600px) {
+  #kkchat-root .kk-login-inner { padding: 32px 16px 28px; gap: 20px; }
+  #kkchat-root .kk-login-logo-text { font-size: 2.4rem; }
+  #kkchat-root .kk-login-logo-icon { width: 44px; height: 44px; }
+  #kkchat-root .kk-login-logo-icon .material-symbols-rounded { font-size: 1.4rem; }
+}
