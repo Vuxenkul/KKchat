@@ -2425,32 +2425,36 @@ body.kkchat-no-scroll { overflow: hidden; }
   50%  { transform: translate(-28px, -22px); }
 }
 
-/* Inner centred column */
+@keyframes kk-enter-up {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Two-column grid */
 #kkchat-root .kk-login-inner {
   position: relative;
   z-index: 1;
   min-height: 100%;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 48px;
   align-items: center;
-  justify-content: center;
-  padding: 48px 24px 44px;
-  gap: 28px;
+  padding: 48px 40px;
   box-sizing: border-box;
+  max-width: 980px;
+  margin: 0 auto;
+  width: 100%;
 }
 
-/* Branding block */
-#kkchat-root .kk-login-brand {
-  text-align: center;
-  max-width: 480px;
-  width: 100%;
+/* Left column */
+#kkchat-root .kk-login-left {
   animation: kk-enter-up 0.65s ease both;
 }
 
+/* Logo */
 #kkchat-root .kk-login-logo {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 14px;
   margin-bottom: 10px;
 }
@@ -2492,15 +2496,34 @@ body.kkchat-no-scroll { overflow: hidden; }
   font-size: 1rem;
   font-weight: 300;
   color: var(--ink-soft);
-  margin: 0 0 18px;
+  margin: 0 0 22px;
   letter-spacing: 0.015em;
 }
 
+/* SEO text block */
+#kkchat-root .kk-login-seo h2 {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 1.6rem;
+  line-height: 1.2;
+  color: var(--ink);
+  margin: 0 0 12px;
+  letter-spacing: 0.02em;
+}
+
+#kkchat-root .kk-login-seo p {
+  font-size: 0.88rem;
+  font-weight: 300;
+  color: var(--ink-muted);
+  line-height: 1.65;
+  margin: 0 0 10px;
+}
+
+/* Feature pills */
 #kkchat-root .kk-login-features {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: center;
+  margin-top: 18px;
 }
 
 #kkchat-root .kk-login-feat {
@@ -2522,29 +2545,30 @@ body.kkchat-no-scroll { overflow: hidden; }
   margin: 0;
 }
 
-/* Form card — override margin/width inside new layout */
-#kkchat-root .kk-login-inner .login {
-  margin: 0;
-  max-width: 480px;
-  width: 100%;
+/* Right column — form card */
+#kkchat-root .kk-login-right {
   animation: kk-enter-up 0.65s 0.18s ease both;
 }
 
-@keyframes kk-enter-up {
-  from { opacity: 0; transform: translateY(22px); }
-  to   { opacity: 1; transform: translateY(0); }
+#kkchat-root .kk-login-right .login {
+  margin: 0;
+  max-width: 100%;
 }
 
 /* Reduce motion */
 @media (prefers-reduced-motion: reduce) {
   #kkchat-root .kk-orb { animation: none !important; opacity: 0.5 !important; }
-  #kkchat-root .kk-login-brand,
-  #kkchat-root .kk-login-inner .login { animation: none !important; opacity: 1 !important; transform: none !important; }
+  #kkchat-root .kk-login-left,
+  #kkchat-root .kk-login-right { animation: none !important; opacity: 1 !important; transform: none !important; }
 }
 
-/* Mobile tweaks */
-@media (max-width: 600px) {
-  #kkchat-root .kk-login-inner { padding: 32px 16px 28px; gap: 20px; }
+/* Mobile: single column, scrollable */
+@media (max-width: 720px) {
+  #kkchat-root .kk-login-inner {
+    grid-template-columns: 1fr;
+    padding: 32px 16px 36px;
+    gap: 28px;
+  }
   #kkchat-root .kk-login-logo-text { font-size: 2.4rem; }
   #kkchat-root .kk-login-logo-icon { width: 44px; height: 44px; }
   #kkchat-root .kk-login-logo-icon .material-symbols-rounded { font-size: 1.4rem; }
