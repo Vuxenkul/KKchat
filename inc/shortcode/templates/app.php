@@ -4215,6 +4215,7 @@ let ROOMS = [];
 let currentRoom = 'lobby';
 let currentDM = null;
 let LAST_OPEN_DM = null;
+let INIT_COMPLETE = false;
 
   function defaultRoomSlug(){
 
@@ -4855,12 +4856,14 @@ function renderRoomTabs(){
 }
 
   function setComposerAccess(){
-    const ta = pubForm.querySelector('textarea');
-    const btn = pubForm.querySelector('button[type="submit"]');
+    const ta = pubForm ? pubForm.querySelector('textarea') : null;
+    const btn = pubForm ? pubForm.querySelector('button[type="submit"],button:not([type])') : null;
     const imgB = pubUpBtn;
     const camB = pubCamBtn;
     const mentionB = mentionBtn;
     const toggleB = attachToggle;
+
+    if (!ta || !btn) return;
 
     if (currentDM){
       ta.disabled = false; btn.disabled = false;
@@ -5050,11 +5053,11 @@ roomTabs.addEventListener('click', async e => {
   }
 
   const syncPromise = pollActive(true).catch(()=>{});
-  openStream();
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
   }
   await syncPromise;
+  openStream();
 });
 
 roomTabs.addEventListener('input', e => {
@@ -5201,11 +5204,11 @@ roomsListEl?.addEventListener('click', async (e) => {
         }
 
         const syncPromise = pollActive(true).catch(()=>{});
-        openStream();
         if (snapshotPromise) {
           await snapshotPromise.catch(()=>{});
         }
         await syncPromise;
+        openStream();
       }
     }
 
@@ -5606,13 +5609,13 @@ async function openDM(id) {
   }
 
   const syncPromise = pollActive(true).catch(()=>{});
-  openStream();
   if (snapshotPromise) {
     await snapshotPromise.catch(()=>{});
   }
   const verifyPromise = verifyRecentDM(currentDM).catch(()=>{});
   await syncPromise;
   await verifyPromise;
+  openStream();
 
   if (unreadBeforeOpen > 0) {
     const latestRenderedId = Array.from(pubList.querySelectorAll('li.item'))
@@ -6618,6 +6621,7 @@ jumpBtn.addEventListener('click', ()=>{
 
 (function(){
   async function touch(){
+    if (!INIT_COMPLETE) return;
     try {
       logDbActivity('sending activity ping');
       await fetch(API + '/ping', { credentials:'include', headers:h });
@@ -6625,8 +6629,6 @@ jumpBtn.addEventListener('click', ()=>{
       console.warn('KKchat: activity ping failed');
     }
   }
-
-  touch();
 
   document.addEventListener('visibilitychange', () => { if (!document.hidden) touch(); });
   window.addEventListener('focus',  touch);
@@ -7249,10 +7251,8 @@ async function refreshUsersAndUnread(){
 async function init(){
   await multiTabReady;
   try{
-    await Promise.all([
-      refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); }),
-      loadRooms().catch(e => { console.warn('loadRooms failed', e); })
-    ]);
+    await loadRooms().catch(e => { console.warn('loadRooms failed', e); });
+    await refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); });
     renderDMSidebar();
     renderRoomTabs();
     const unreadPromise = refreshUsersAndUnread()
@@ -7263,13 +7263,16 @@ async function init(){
     } else {
       const snapshotPromise = loadHistorySnapshot();
       const syncPromise = pollActive(true).catch(()=>{});          // single, awaited warm-up poll (force fresh)
-      openStream();
       await snapshotPromise.catch(()=>{});
       await syncPromise;
+      openStream();
     }
     await unreadPromise;
   } catch (e) {
     // optionally log e
+  } finally {
+    INIT_COMPLETE = true;
+    touch().catch(()=>{});
   }
 
   maybeToggleFab();
