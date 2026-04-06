@@ -868,6 +868,7 @@ let POLL_HIDDEN_SINCE = 0;
 let BACKGROUND_POLL_TIMER = null;
 let POLL_LAST_ACTIVITY_AT = Date.now();
 let POLL_LAST_SCHEDULED_MS = null;
+let POLL_THROTTLED_UNTIL = 0;
 let POLL_ACTIVITY_SIGNAL_AT = 0;
 let WINDOW_FOCUSED = typeof document.hasFocus === 'function' ? !!document.hasFocus() : true;
 let POLL_LAST_INTERACTIVE = null;
@@ -1728,11 +1729,13 @@ async function performPoll(forceCold = false, options = {}){
       }
 
       if (resp.status === 429) {
+        const retryMs = retryHeader != null ? (retryHeader * 1000) : 15000;
+        POLL_THROTTLED_UNTIL = Date.now() + retryMs;
         if (retryHeader != null) {
-          POLL_RETRY_HINT.set(key, retryHeader * 1000);
-          scheduleStreamReconnect(retryHeader * 1000);
+          POLL_RETRY_HINT.set(key, retryMs);
+          scheduleStreamReconnect(retryMs);
         } else {
-          scheduleStreamReconnect(15000);
+          scheduleStreamReconnect(retryMs);
         }
         logDbActivity('sync poll throttled (HTTP 429)');
         return;
@@ -6641,7 +6644,9 @@ jumpBtn.addEventListener('click', ()=>{
 
   function maybePollActiveFallback(){
     if (pollFallbackBusy) return;
+    if (POLL_BUSY || POLL_INFLIGHT_PROMISE) return;
     if (!isInteractive()) return;
+    if (Date.now() < Number(POLL_THROTTLED_UNTIL || 0)) return;
 
     const lastSuccessAge = Date.now() - (Number(POLL_LAST_SUCCESS_AT) || 0);
     const forceCold = !Number.isFinite(lastSuccessAge) || lastSuccessAge > 25000;
@@ -7255,8 +7260,6 @@ async function init(){
     await refreshBlocked().catch(e => { console.warn('refreshBlocked failed', e); });
     renderDMSidebar();
     renderRoomTabs();
-    const unreadPromise = refreshUsersAndUnread()
-      .catch(e => { console.warn('refreshUsersAndUnread failed', e); });
 
     if (OPEN_DM_USER) {
       await openDM(OPEN_DM_USER);     // <-- await to avoid racing
@@ -7267,12 +7270,11 @@ async function init(){
       await syncPromise;
       openStream();
     }
-    await unreadPromise;
+    await refreshUsersAndUnread().catch(e => { console.warn('refreshUsersAndUnread failed', e); });
   } catch (e) {
     // optionally log e
   } finally {
     INIT_COMPLETE = true;
-    touch().catch(()=>{});
   }
 
   maybeToggleFab();
