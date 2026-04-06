@@ -27,6 +27,7 @@ function kkchat_activate() {
     'kkchat_report_reason_rules' => [],
     'kkchat_first_load_limit' => 20,
     'kkchat_first_load_exclude_banners' => 0,
+    'kkchat_sync_concurrency' => 5,
   ] as $k => $def) {
     if (get_option($k) === false) add_option($k, $def);
   }

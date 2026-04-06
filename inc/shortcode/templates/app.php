@@ -1780,18 +1780,21 @@ async function performPoll(forceCold = false, options = {}){
         POLL_HOT_UNTIL = POLL_LAST_EVENT_AT + 120000;
       }
 
-      const msgCount = Array.isArray(payload?.messages) ? payload.messages.length : 0;
+      const topLevelCount = Array.isArray(payload?.messages) ? payload.messages.length : 0;
+      const eventCount = Array.isArray(payload?.events)
+        ? payload.events.reduce((sum, ev) => sum + (Array.isArray(ev?.messages) ? ev.messages.length : 0), 0)
+        : 0;
+      const msgCount = Math.max(topLevelCount, eventCount);
       logDbActivity(`sync poll completed with status ${resp.status}${msgCount ? ` and ${msgCount} messages` : ''}`);
       broadcastSync(state, payload, { retryAfterMs: retryMs ?? undefined });
-      
-      // If the server returned a full page of 50 messages, there may be more
-// waiting. Re-poll immediately with the updated cursor instead of
-// waiting for the next scheduled interval.
-if (msgCount >= 50) {
-  logDbActivity('full page returned, re-polling immediately for remaining messages');
-  setTimeout(() => performPoll().catch(() => {}), 0);
-  return;
-}
+
+      // If the server returned a full page, there may be more waiting.
+      // Re-poll immediately with the updated cursor instead of waiting.
+      if (msgCount >= 50) {
+        logDbActivity('full page returned, re-polling immediately for remaining messages');
+        setTimeout(() => performPoll().catch(() => {}), 0);
+        return;
+      }
 
     } catch (err) {
       if (err?.name === 'AbortError') {

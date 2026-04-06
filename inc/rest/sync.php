@@ -29,7 +29,7 @@ register_rest_route($ns, '/sync', [
 
     $ctx = kkchat_sync_build_context($req);
 
-    $penalty = kkchat_sync_rate_guard((int) ($ctx['me'] ?? 0));
+    $penalty = kkchat_sync_rate_guard((int) ($ctx['me'] ?? 0), $ctx);
     if ($penalty > 0) {
       $resp = new WP_REST_Response(['err' => 'rate_limited'], 429);
       $resp->header('Retry-After', (string) $penalty);
@@ -78,6 +78,12 @@ register_rest_route($ns, '/sync', [
     $cursor  = kkchat_sync_max_cursor($payload, $since);
     $hasChanges = ($since < 0) ? true : ($cursor > $since);
 
+    $syncStats = [];
+    if (!empty($payload['_sync_stats']) && is_array($payload['_sync_stats'])) {
+      $syncStats = $payload['_sync_stats'];
+      unset($payload['_sync_stats']);
+    }
+
     $retryAfter = kkchat_sync_retry_after_hint($payload, $ctx, $hasChanges);
     $etag       = kkchat_sync_build_etag($ctx, $cursor);
 
@@ -85,6 +91,9 @@ register_rest_route($ns, '/sync', [
       'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
       'Pragma'        => 'no-cache',
     ];
+    foreach (kkchat_sync_observability_headers($ctx, $syncStats, $cursor) as $hk => $hv) {
+      $headers[$hk] = $hv;
+    }
 
     if ($retryAfter > 0) {
       $headers['Retry-After'] = (string) $retryAfter;

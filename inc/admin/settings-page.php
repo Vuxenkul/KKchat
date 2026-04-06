@@ -10,7 +10,7 @@ function kkchat_admin_settings_page() {
     check_admin_referer($nonce_key);
 
     $sync_enabled            = !empty($_POST['sync_enabled']) ? 1 : 0;
-    $sync_concurrency        = max(1, (int) ($_POST['sync_concurrency'] ?? 1));
+    $sync_concurrency        = max(1, (int) ($_POST['sync_concurrency'] ?? 5));
     $sync_breaker_threshold  = max(1, (int) ($_POST['sync_breaker_threshold'] ?? 5));
     $sync_breaker_window     = max(5, (int) ($_POST['sync_breaker_window'] ?? 60));
     $sync_breaker_cooldown   = max(10, (int) ($_POST['sync_breaker_cooldown'] ?? 90));
@@ -110,7 +110,7 @@ function kkchat_admin_settings_page() {
 
   // Värden
   $v_sync_enabled            = (int) get_option('kkchat_sync_enabled', 1);
-  $v_sync_concurrency        = max(1, (int) get_option('kkchat_sync_concurrency', 1));
+  $v_sync_concurrency        = max(1, (int) get_option('kkchat_sync_concurrency', 5));
   $v_sync_breaker_threshold  = (int) get_option('kkchat_sync_breaker_threshold', 5);
   $v_sync_breaker_window     = (int) get_option('kkchat_sync_breaker_window', 60);
   $v_sync_breaker_cooldown   = (int) get_option('kkchat_sync_breaker_cooldown', 90);

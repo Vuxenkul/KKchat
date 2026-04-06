@@ -483,7 +483,7 @@ if (!defined('ABSPATH')) exit;
 
   if (!function_exists('kkchat_sync_concurrency_limit')) {
     function kkchat_sync_concurrency_limit(): int {
-      $limit = (int) apply_filters('kkchat_sync_concurrency_limit', (int) get_option('kkchat_sync_concurrency', 1));
+      $limit = (int) apply_filters('kkchat_sync_concurrency_limit', (int) get_option('kkchat_sync_concurrency', 5));
       return max(1, $limit);
     }
   }
@@ -768,6 +768,9 @@ if (!defined('ABSPATH')) exit;
         'latest'  => $unreadLatest,
       ];
       $msgs = [];
+      $rowsFetched = 0;
+      $droppedHidden = 0;
+      $droppedBlocked = 0;
       $msgColumns = 'id, room, sender_id, sender_name, recipient_id, recipient_name, content, is_explicit, created_at, kind, hidden_at, reply_to_id, reply_to_sender_id, reply_to_sender_name, reply_to_excerpt';
       if ($onlyPub) {
         if ($since < 0) {
@@ -776,7 +779,6 @@ if (!defined('ABSPATH')) exit;
               "SELECT $msgColumns FROM {$t['messages']}
                WHERE recipient_id IS NULL
                  AND room = %s
-                 AND hidden_at IS NULL
                ORDER BY id DESC
                LIMIT %d",
               $room, $limit
@@ -791,7 +793,6 @@ if (!defined('ABSPATH')) exit;
                WHERE id > %d
                  AND recipient_id IS NULL
                  AND room = %s
-                 AND hidden_at IS NULL
                ORDER BY id ASC
                LIMIT %d",
               $since, $room, $limit
@@ -807,8 +808,7 @@ if (!defined('ABSPATH')) exit;
             $rows = $wpdb->get_results(
               $wpdb->prepare(
                 "SELECT $msgColumns FROM {$t['messages']}
-                 WHERE hidden_at IS NULL
-                   AND dm_user_low = %d
+                 WHERE dm_user_low = %d
                    AND dm_user_high = %d
                  ORDER BY id DESC
                  LIMIT %d",
@@ -822,7 +822,6 @@ if (!defined('ABSPATH')) exit;
               $wpdb->prepare(
                 "SELECT $msgColumns FROM {$t['messages']}
                  WHERE id > %d
-                   AND hidden_at IS NULL
                    AND dm_user_low = %d
                    AND dm_user_high = %d
                  ORDER BY id ASC
@@ -838,7 +837,6 @@ if (!defined('ABSPATH')) exit;
               "SELECT $msgColumns FROM {$t['messages']}
                WHERE id > %d
                  AND (recipient_id = %d OR sender_id = %d)
-                 AND hidden_at IS NULL
                ORDER BY id ASC
                LIMIT %d",
               $since, $me, $me, $limit
@@ -848,14 +846,23 @@ if (!defined('ABSPATH')) exit;
         }
       }
 
+      $rowsFetched = count($rows);
       if (!empty($rows)) {
-        if ($blocked) {
-          $rows = array_values(array_filter($rows, function ($r) use ($blocked, $me, $onlyPub) {
-            $sid = (int) $r['sender_id'];
+        $rows = array_values(array_filter($rows, function ($r) use ($blocked, $me, $onlyPub, &$droppedHidden, &$droppedBlocked) {
+          if (!empty($r['hidden_at'])) {
+            $droppedHidden++;
+            return false;
+          }
+
+          $sid = (int) ($r['sender_id'] ?? 0);
+          if ($blocked && in_array($sid, $blocked, true)) {
             if (!$onlyPub && $sid === $me) { return true; }
-            return !in_array($sid, $blocked, true);
-          }));
-        }
+            $droppedBlocked++;
+            return false;
+          }
+
+          return true;
+        }));
 
         if (!empty($rows)) {
           $ids = array_map(fn($r) => (int) $r['id'], $rows);
@@ -963,6 +970,11 @@ if (!defined('ABSPATH')) exit;
         'presence'      => $presence,
         'messages'      => $msgs,
         'mention_bumps' => (object) $mention_bumps,
+        '_sync_stats'   => [
+          'rows_fetched'    => (int) $rowsFetched,
+          'dropped_hidden'  => (int) $droppedHidden,
+          'dropped_blocked' => (int) $droppedBlocked,
+        ],
       ];
     }
   }
@@ -1029,12 +1041,44 @@ if (!defined('ABSPATH')) exit;
     }
   }
 
+  if (!function_exists('kkchat_sync_observability_headers')) {
+    function kkchat_sync_observability_headers(array $ctx, array $stats, int $cursor): array {
+      $peer = isset($ctx['peer']) && $ctx['peer'] !== null ? (int) $ctx['peer'] : 0;
+      $room = (string) ($ctx['room'] ?? 'general');
+      if ($room === '') { $room = 'general'; }
+      $context = $peer > 0 ? ('dm:' . $peer) : ('room:' . $room);
+
+      return [
+        'X-KKchat-Sync-Context'         => $context,
+        'X-KKchat-Sync-Since'           => (string) ((int) ($ctx['since'] ?? -1)),
+        'X-KKchat-Sync-Rows'            => (string) max(0, (int) ($stats['rows_fetched'] ?? 0)),
+        'X-KKchat-Sync-Dropped-Hidden'  => (string) max(0, (int) ($stats['dropped_hidden'] ?? 0)),
+        'X-KKchat-Sync-Dropped-Blocked' => (string) max(0, (int) ($stats['dropped_blocked'] ?? 0)),
+        'X-KKchat-Sync-Cursor'          => (string) max(-1, $cursor),
+      ];
+    }
+  }
+
   if (!function_exists('kkchat_sync_rate_guard')) {
-    function kkchat_sync_rate_guard(int $userId): int {
+    function kkchat_sync_rate_guard(int $userId, array $ctx = []): int {
       if ($userId <= 0) { return 0; }
 
       $bucket = 'kkchat';
       $now    = microtime(true);
+
+      $since = isset($ctx['since']) ? (int) $ctx['since'] : 0;
+      $peer  = isset($ctx['peer']) && $ctx['peer'] !== null ? (int) $ctx['peer'] : 0;
+      $room  = (string) ($ctx['room'] ?? 'general');
+      if ($room === '') { $room = 'general'; }
+      $viewKey = $peer > 0 ? ('dm:' . $peer) : ('room:' . $room);
+
+      $baseMinInterval = (float) apply_filters('kkchat_sync_rate_min_interval', 0.9, $ctx, $userId);
+      $coldMinInterval = (float) apply_filters('kkchat_sync_rate_min_interval_cold', 0.35, $ctx, $userId);
+      $basePenalty     = max(1, (int) apply_filters('kkchat_sync_rate_penalty', 6, $ctx, $userId));
+      $coldPenalty     = max(1, (int) apply_filters('kkchat_sync_rate_penalty_cold', 2, $ctx, $userId));
+
+      $minInterval = $since < 0 ? $coldMinInterval : $baseMinInterval;
+      $penaltyBase = $since < 0 ? $coldPenalty : $basePenalty;
 
       if (function_exists('wp_cache_get') && function_exists('wp_cache_set')) {
         $banKey = 'sync:penalty:' . $userId;
@@ -1047,8 +1091,26 @@ if (!defined('ABSPATH')) exit;
         $last    = wp_cache_get($lastKey, $bucket);
         wp_cache_set($lastKey, $now, $bucket, 30);
 
-        if (is_numeric($last) && ($now - (float) $last) < 0.9) {
-          $penalty = max(2, (int) apply_filters('kkchat_sync_rate_penalty', 6));
+        // Multi-tab / leader handoff tolerance:
+        // allow one quick switch burst when the requested view changed.
+        $lastViewKey = 'sync:last_view:' . $userId;
+        $prevViewRaw = wp_cache_get($lastViewKey, $bucket);
+        $prevView = is_array($prevViewRaw) ? $prevViewRaw : [];
+        wp_cache_set($lastViewKey, ['key' => $viewKey, 'at' => $now], $bucket, 30);
+
+        $viewChanged = !empty($prevView['key']) && (string) $prevView['key'] !== $viewKey;
+        $switchGraceWindow = (float) apply_filters('kkchat_sync_rate_view_switch_grace_window', 2.0, $ctx, $userId);
+        $isSwitchBurst = $viewChanged
+          && !empty($prevView['at'])
+          && is_numeric($prevView['at'])
+          && ($now - (float) $prevView['at']) <= $switchGraceWindow;
+
+        if (is_numeric($last) && ($now - (float) $last) < $minInterval) {
+          if ($isSwitchBurst) {
+            return 0;
+          }
+
+          $penalty = max(1, (int) apply_filters('kkchat_sync_rate_penalty_effective', $penaltyBase, $ctx, $userId));
           $until   = $now + $penalty;
           wp_cache_set($banKey, ['until' => $until], $bucket, $penalty);
           return $penalty;
